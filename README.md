@@ -5,7 +5,7 @@ Depup Office is a 100% offline, privacy-first, lightweight Android mobile office
 <br>
 
 <div align="left">
-  <a href="https://github.com/MeledakCik/DepupOffice/releases/tag/v2.0.0">
+  <a href="https://github.com/MeledakCik/DepupOffice/releases/tag/v2.1.0">
     <img src="https://img.shields.io/badge/Download-APK%20v1.0.0-00E095?style=for-the-badge&logo=android&logoColor=white" alt="Download APK">
   </a>
   <img src="https://img.shields.io/badge/Status-Stable-1E60D5?style=for-the-badge" alt="Status">
