@@ -187,17 +187,19 @@ class ViewerActivity : AppCompatActivity() {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 pm.menu.add(0, 1, 0, "Bagikan")
-                pm.menu.add(0, 2, 1, "Cetak")
-                pm.menu.add(0, 3, 2, "Tanda Tangan & Edit PDF")
-                pm.menu.add(0, 4, 3, "Ubah Nama Berkas")
-                pm.menu.add(0, 5, 4, "Lompat Halaman")
-                pm.menu.add(0, 6, 5, "Pengaturan Reader PDF")
-                pm.menu.add(0, 7, 6, "Sedot Foto / Ekstrak Gambar")
+                pm.menu.add(0, 2, 1, "🖨️ Cetak Dokumen")
+                pm.menu.add(0, 8, 2, "🔊 Bacakan Suara (Voice Reader)")
+                pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF")
+                pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
+                pm.menu.add(0, 5, 5, "Lompat Halaman")
+                pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
+                pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar")
                 pm.setOnMenuItemClickListener { m ->
                     try {
                         when (m.itemId) {
                             1 -> Files.share(this@ViewerActivity, uri, mime, false)
-                            2 -> Files.print(this@ViewerActivity, uri, name)
+                            2 -> PrintHelper.printPdf(this@ViewerActivity, uri, name)
+                            8 -> startVoiceReaderForPdf(uri, name)
                             3 -> showPdfEditDialog(uri, name)
                             4 -> showRenameDialog(uri, name)
                             5 -> showJumpPageDialog()
@@ -766,5 +768,54 @@ class ViewerActivity : AppCompatActivity() {
             renderer = null
         }
         super.onDestroy()
+    }
+
+    private fun startVoiceReaderForPdf(docUri: android.net.Uri, docName: String) {
+        val r = renderer
+        if (r == null) {
+            val txt = try {
+                if (mimeStr.startsWith("text/") || docName.endsWith(".txt", ignoreCase = true)) {
+                    contentResolver.openInputStream(docUri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                } else {
+                    OfficeReader.readDocx(this, docUri).joinToString("\n") { it.text }
+                }
+            } catch (_: Exception) { "" }
+            if (txt.isNotBlank()) {
+                VoiceReaderManager.showVoiceReaderDialog(this, docName, txt)
+            } else {
+                toast("Tidak ada teks yang dapat dibacakan")
+            }
+            return
+        }
+        work("Membaca teks dari dokumen…", {
+            val sb = StringBuilder()
+            val maxPages = Math.min(total, 10)
+            for (p in 0 until maxPages) {
+                try {
+                    val page = r.openPage(p)
+                    if (page != null) {
+                        val bmp = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        page.close()
+                        val ocrRes = Ocr.run(bmp)
+                        if (ocrRes.text.isNotBlank()) {
+                            sb.append("Halaman ").append(p + 1).append(":\n")
+                            sb.append(ocrRes.text).append("\n\n")
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            sb.toString().trim()
+        }) { res ->
+            res.onSuccess { txt ->
+                if (txt.isNotBlank()) {
+                    VoiceReaderManager.showVoiceReaderDialog(this, docName, txt)
+                } else {
+                    toast("Tidak ditemukan teks untuk dibacakan")
+                }
+            }.onFailure {
+                toast("Gagal memproses teks dokumen")
+            }
+        }
     }
 }

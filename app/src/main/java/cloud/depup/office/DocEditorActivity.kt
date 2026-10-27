@@ -238,6 +238,25 @@ class DocEditorActivity : AppCompatActivity() {
             setOnClickListener { showWordSettingsSheet() }
         }, w = dp(40), h = dp(40))
 
+        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).apply {
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnClickListener { v ->
+                val pm = android.widget.PopupMenu(this@DocEditorActivity, v)
+                pm.menu.add(0, 1, 0, "🔊 Bacakan Dokumen (Voice Reader)")
+                pm.menu.add(0, 2, 1, "🖨️ Cetak Dokumen Word")
+                pm.setOnMenuItemClickListener { m ->
+                    val title = docTitleEt.text.toString().ifBlank { "Dokumen Word" }
+                    val fullText = (listOf(title, docSubEt.text.toString()) + sections.map { it.text }).filter { it.isNotBlank() }.joinToString("\n\n")
+                    when (m.itemId) {
+                        1 -> VoiceReaderManager.showVoiceReaderDialog(this@DocEditorActivity, title, fullText)
+                        2 -> PrintHelper.printText(this@DocEditorActivity, title, fullText)
+                    }
+                    true
+                }
+                pm.show()
+            }
+        }, w = dp(40), h = dp(40))
+
         val saveBtn = tv("Simpan", 13f, Color.WHITE, true).apply {
             background = shape(C.ACCENT, 8)
             setPadding(dp(12), dp(8), dp(12), dp(8))

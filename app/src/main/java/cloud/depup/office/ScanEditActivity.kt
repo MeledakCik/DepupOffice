@@ -364,6 +364,42 @@ class ScanEditActivity : AppCompatActivity() {
         sub = tv("Hal 1 dari ${pages.size}", 12f, C.MUTED)
         tc.add(sub)
         bar.add(tc, w = 0, weight = 1f, side = 8)
+
+        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).apply {
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnClickListener { v ->
+                val pm = android.widget.PopupMenu(this@ScanEditActivity, v)
+                pm.menu.add(0, 1, 0, "🔊 Bacakan Teks OCR (Voice Reader)")
+                pm.menu.add(0, 2, 1, "🖨️ Cetak Hasil Scan")
+                pm.setOnMenuItemClickListener { m ->
+                    when (m.itemId) {
+                        1 -> {
+                            work("Membaca teks dari gambar scan…", {
+                                val pg = pages.getOrNull(cur)
+                                if (pg != null) {
+                                    val bmp = try { Export.process(this@ScanEditActivity, pg, mode, 1800, 0, 0) } catch (_: Exception) { null }
+                                    if (bmp != null) Ocr.run(bmp).text else ""
+                                } else ""
+                            }) { res ->
+                                res.onSuccess { txt ->
+                                    if (txt.isNotBlank()) VoiceReaderManager.showVoiceReaderDialog(this@ScanEditActivity, "Hasil Scan", txt)
+                                    else toast("Tidak ada teks terdeteksi pada gambar scan")
+                                }
+                            }
+                        }
+                        2 -> {
+                            val pg = pages.getOrNull(cur)
+                            val bmp = if (pg != null) try { Export.process(this@ScanEditActivity, pg, mode, 1800, 0, 0) } catch (_: Exception) { null } else null
+                            if (bmp != null) PrintHelper.printBitmap(this@ScanEditActivity, bmp, "Hasil_Scan_${cur + 1}")
+                            else toast("Gagal memproses gambar untuk dicetak")
+                        }
+                    }
+                    true
+                }
+                pm.show()
+            }
+        }, w = dp(40), h = dp(40))
+
         bar.add(btn("Lanjut  →", true) { save() }, w = WRAP)
         root.add(bar)
 

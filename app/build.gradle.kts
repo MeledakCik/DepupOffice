@@ -11,11 +11,11 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.1.0"
+        versionCode = 3
+        versionName = "2.2.0"
     }
 
-    base.archivesName.set("DepupOffice_v2.1.0")
+    base.archivesName.set("DepupOffice_v2.2.0")
 
     signingConfigs {
         create("release") {

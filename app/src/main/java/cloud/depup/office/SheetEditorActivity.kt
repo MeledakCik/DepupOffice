@@ -234,6 +234,24 @@ class SheetEditorActivity : AppCompatActivity() {
             setOnClickListener { showExcelSettingsSheet() }
         }, w = dp(40), h = dp(40))
 
+        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).apply {
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnClickListener { v ->
+                val pm = android.widget.PopupMenu(this@SheetEditorActivity, v)
+                pm.menu.add(0, 1, 0, "🔊 Bacakan Isi Tabel (Voice Reader)")
+                pm.menu.add(0, 2, 1, "🖨️ Cetak Spreadsheet")
+                pm.setOnMenuItemClickListener { m ->
+                    val title = sheetTitleEt.text.toString().ifBlank { "Spreadsheet Excel" }
+                    when (m.itemId) {
+                        1 -> VoiceReaderManager.showVoiceReaderDialog(this@SheetEditorActivity, title, getReadableGridText())
+                        2 -> PrintHelper.printSpreadsheet(this@SheetEditorActivity, title, getGridData())
+                    }
+                    true
+                }
+                pm.show()
+            }
+        }, w = dp(40), h = dp(40))
+
         val saveBtn = tv("Ekspor", 13f, Color.WHITE, true).apply {
             background = shape(C.TEAL, 8)
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -842,5 +860,32 @@ class SheetEditorActivity : AppCompatActivity() {
                 SheetAction(R.drawable.ic_upload, "Bagikan ke Aplikasi Lain", C.INDIGO, C.INDIGO_BG) { Files.share(this, uri, mime, false) }
             )
         )
+    }
+
+    private fun getGridData(): List<List<String>> {
+        val list = ArrayList<List<String>>()
+        matrix.forEach { row ->
+            val rList = ArrayList<String>()
+            row.forEach { cell -> rList.add(cell.valStr) }
+            list.add(rList)
+        }
+        return list
+    }
+
+    private fun getReadableGridText(): String {
+        val sb = StringBuilder()
+        matrix.forEachIndexed { r, row ->
+            val rowParts = ArrayList<String>()
+            row.forEachIndexed { c, cell ->
+                if (cell.valStr.isNotBlank()) {
+                    val colName = colNames.getOrNull(c) ?: "$c"
+                    rowParts.add("Kolom $colName: ${cell.valStr}")
+                }
+            }
+            if (rowParts.isNotEmpty()) {
+                sb.append("Baris ").append(r + 1).append(": ").append(rowParts.joinToString(", ")).append("\n")
+            }
+        }
+        return sb.toString().trim()
     }
 }
