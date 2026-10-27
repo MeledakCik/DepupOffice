@@ -37,8 +37,8 @@ jobs:
       - name: Rename Release Binaries
         run: |
           mkdir -p build/outputs/release
-          cp app/build/outputs/apk/release/app-release.apk build/outputs/release/DepupOffice_v2.1.0.apk || true
-          cp app/build/outputs/bundle/release/app-release.aab build/outputs/release/DepupOffice_v2.1.0.aab || true
+          cp app/build/outputs/apk/release/*.apk build/outputs/release/DepupOffice_v2.1.0.apk || true
+          cp app/build/outputs/bundle/release/*.aab build/outputs/release/DepupOffice_v2.1.0.aab || true
 
       - name: Upload APK Artifact to Actions
         uses: actions/upload-artifact@v4

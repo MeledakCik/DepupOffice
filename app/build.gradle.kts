@@ -15,6 +15,8 @@ android {
         versionName = "2.1.0"
     }
 
+    base.archivesName.set("DepupOffice_v2.1.0")
+
     signingConfigs {
         create("release") {
             val ksFile = rootProject.file("depup-office.jks")
