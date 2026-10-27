@@ -6,7 +6,7 @@ Depup Office is a 100% offline, privacy-first, lightweight Android mobile office
 
 <div align="left">
   <a href="https://github.com/MeledakCik/DepupOffice/releases/tag/DepupOffice_v2.1.0">
-    <img src="https://img.shields.io/badge/Download-APK%20v1.0.0-00E095?style=for-the-badge&logo=android&logoColor=white" alt="Download APK">
+    <img src="https://img.shields.io/badge/Download-APK%20v2.1.0-00E095?style=for-the-badge&logo=android&logoColor=white" alt="Download APK">
   </a>
   <img src="https://img.shields.io/badge/Status-Stable-1E60D5?style=for-the-badge" alt="Status">
   <img src="https://img.shields.io/badge/Platform-Android%2010%2B-purple?style=for-the-badge" alt="Platform">
@@ -14,7 +14,7 @@ Depup Office is a 100% offline, privacy-first, lightweight Android mobile office
 
 ---
 
-## 🌟 Key Features (v1.0.0)
+## 🌟 Key Features (v2.1.0)
 
 ### 1. 📄 Advanced PDF Tools
 - **Target-Size PDF Compression**: Compress PDFs precisely to fit online portal limits (`< 200 KB`, `< 500 KB`, `< 1 MB`, `< 2 MB` for SSCASN, CPNS, BUMN, and job portals).
