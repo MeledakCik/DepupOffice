@@ -1,0 +1,61 @@
+name: Android CI/CD - Build & Release APK/AAB
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android Release APK & AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
+
+      - name: Build Debug & Release APK
+        run: ./gradlew assembleDebug assembleRelease bundleRelease --stacktrace
+
+      - name: Rename Release Binaries
+        run: |
+          mkdir -p build/outputs/release
+          cp app/build/outputs/apk/release/app-release.apk build/outputs/release/DepupOffice_v2.0.0.apk || true
+          cp app/build/outputs/bundle/release/app-release.aab build/outputs/release/DepupOffice_v2.0.0.aab || true
+
+      - name: Upload APK Artifact to Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: DepupOffice-Release-APK
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Upload AAB Artifact to Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: DepupOffice-Release-AAB
+          path: app/build/outputs/bundle/release/*.aab
+
+      - name: Automatic GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
+          body_path: RELEASE_NOTES_V2.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
