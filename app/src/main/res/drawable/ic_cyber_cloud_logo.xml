@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="160dp"
+    android:height="160dp"
+    android:viewportWidth="160"
+    android:viewportHeight="160">
+
+    <!-- Outer glowing cloud loop -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M50,110 H40 C26.2,110 15,98.8 15,85 C15,72.4 24.3,62 36.5,60.4 C39.5,43 54.6,30 73,30 C90.5,30 105,41.8 109,58 C120.5,60 129,70 129,82.5" />
+
+    <!-- Neon inner accent glow line -->
+    <path
+        android:strokeColor="#60A5FA"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M52,104 H42 C30,104 20,94 20,82 C20,71 28,62 39,60 C42,45 55,34 72,34 C87,34 100,44 104,59" />
+
+    <!-- Arrow curved line going up on right side -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="6"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M65,120 V85 C65,70 78,58 93,58 C108,58 125,72 135,50" />
+
+    <!-- Arrow head pointing top right -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="6"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M115,48 L138,46 L134,68" />
+
+    <!-- Document D Base Stem -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M65,85 H90 Q110,85 110,102.5 Q110,120 90,120 H65 Z" />
+
+    <!-- Light glow dots -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M40,40 A3,3 0 1,1 40,34 A3,3 0 1,1 40,40 Z M130,95 A2.5,2.5 0 1,1 130,90 A2.5,2.5 0 1,1 130,95 Z M100,25 A2,2 0 1,1 100,21 A2,2 0 1,1 100,25 Z M25,120 A2,2 0 1,1 25,116 A2,2 0 1,1 25,120 Z" />
+</vector>

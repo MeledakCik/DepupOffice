@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 1. Squircle background container with deep royal blue -->
+    <path
+        android:fillColor="#1E60D5"
+        android:pathData="M26,6 H82 A20,20 0 0 1 102,26 V82 A20,20 0 0 1 82,102 H26 A20,20 0 0 1 6,82 V26 A20,20 0 0 1 26,6 Z" />
+
+    <!-- Inner background shade -->
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M26,8 H82 A18,18 0 0 1 100,26 V82 A18,18 0 0 1 82,100 H26 A18,18 0 0 1 8,82 V26 A18,18 0 0 1 26,8 Z" />
+
+    <!-- 2. Main Stylized "D" Document Fold Outer Body -->
+    <path
+        android:fillColor="#60A5FA"
+        android:pathData="M32,24 L62,24 Q78,24 78,40 V68 Q78,84 62,84 H32 Z" />
+
+    <!-- Purple/Indigo Right Fold Curve -->
+    <path
+        android:fillColor="#4F46E5"
+        android:pathData="M54,24 L62,24 C78,24 78,40 78,54 C78,68 70,84 54,84 L48,84 C62,84 70,68 70,54 C70,40 62,24 48,24 Z" />
+
+    <!-- Paper Fold Top-Right Corner -->
+    <path
+        android:fillColor="#93C5FD"
+        android:pathData="M62,24 V36 Q62,40 66,40 H78 Z" />
+
+    <!-- Left Stem of "D" -->
+    <path
+        android:fillColor="#1D4ED8"
+        android:pathData="M32,24 H46 V84 H32 Q26,84 26,78 V30 Q26,24 32,24 Z" />
+
+    <!-- Inner "D" Cutout -->
+    <path
+        android:fillColor="#1E60D5"
+        android:pathData="M46,36 H56 Q66,36 66,54 Q66,72 56,72 H46 Z" />
+
+    <!-- 3 Horizontal Lines inside document -->
+    <path
+        android:fillColor="#E0F2FE"
+        android:pathData="M48,44 H62 Q64,44 64,45.5 Q64,47 62,47 H48 Q46,47 46,45.5 Q46,44 48,44 Z" />
+    <path
+        android:fillColor="#E0F2FE"
+        android:pathData="M48,52.5 H64 Q66,52.5 66,54 Q66,55.5 64,55.5 H48 Q46,55.5 46,54 Q46,52.5 48,52.5 Z" />
+    <path
+        android:fillColor="#E0F2FE"
+        android:pathData="M48,61 H60 Q62,61 62,62.5 Q62,64 60,64 H48 Q46,64 46,62.5 Q46,61 48,61 Z" />
+</vector>
