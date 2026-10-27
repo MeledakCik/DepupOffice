@@ -112,7 +112,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
-    // OCR offline (model Latin ikut di dalam APK, tanpa internet). Dipakai untuk PDF bisa dicari & Word bisa diedit.
+    // OCR offline & QR Code Scanner
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:barcode-scanning:17.2.0")
     implementation("com.google.android.gms:play-services-tasks:18.2.0")
 }

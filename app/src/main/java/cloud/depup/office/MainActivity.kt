@@ -863,8 +863,8 @@ class MainActivity : AppCompatActivity() {
                 chev = true) { compressGalleryFlow() }
         ), top = 12)
         p.add(twoCols(
-            tile(R.drawable.ic_img_add, C.INDIGO, C.INDIGO_BG, "JPG ke PDF", "Ubah foto atau hasil tangkapan kamera jadi PDF",
-                chev = true) { jpgToPdfFlow() },
+            tile(R.drawable.ic_spark, C.TEAL, C.TEAL_BG, "Pindai & Buat QR Code", "Pindai QR verifikasi atau buat QR kustom",
+                "Fitur Baru", C.TEAL, C.TEAL_BG) { showQrDialog() },
             tile(R.drawable.ic_lock, C.INDIGO, C.INDIGO_BG, "Kunci Password", "Proteksi & buka proteksi sandi dokumen rahasia",
                 chev = true) { pickFile(arrayOf(PDF)) { lockPasswordFlow(it) } }
         ), top = 12)
@@ -1768,6 +1768,69 @@ class MainActivity : AppCompatActivity() {
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
+        }
+    }
+
+    private fun showQrDialog() {
+        sheet { body, dismiss ->
+            sheetHeader(body, R.drawable.ic_spark, C.TEAL, C.TEAL_BG, "Manager Kode QR / Barcode", "Pindai kode verifikasi atau buat Kode QR kustom", dismiss)
+            val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
+
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.add(btn("Pindai QR dari Foto", true, C.TEAL, R.drawable.ic_search) {
+                dismiss()
+                pickFile(arrayOf("image/*")) { uri ->
+                    work("Membaca Kode QR / Barcode…", {
+                        val bmp = Pdf.decode(this, uri, 1200)
+                        val res = QrManager.scanBarcode(bmp)
+                        bmp.recycle()
+                        res
+                    }) { r ->
+                        r.onSuccess { text ->
+                            if (text.isBlank()) toast("Kode QR tidak terdeteksi pada gambar ini")
+                            else AlertDialog.Builder(this)
+                                .setTitle("Hasil Pindai Kode QR")
+                                .setMessage(text)
+                                .setPositiveButton("Salin Teks") { _, _ ->
+                                    val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("QR", text))
+                                    toast("Teks disalin")
+                                }
+                                .setNegativeButton("Tutup", null)
+                                .show()
+                        }.onFailure { fail(it) }
+                    }
+                }
+            }, w = 0, weight = 1f)
+
+            row.add(btn("Buat Kode QR", false, C.ACCENT, R.drawable.ic_spark) {
+                dismiss()
+                val et = field("Masukkan Link / Teks / No HP untuk QR")
+                AlertDialog.Builder(this)
+                    .setTitle("Pembuat Kode QR")
+                    .setView(vbox(16).apply { add(et) })
+                    .setPositiveButton("Buat QR") { _, _ ->
+                        val input = et.text.toString().trim()
+                        if (input.isBlank()) { toast("Teks tidak boleh kosong"); return@setPositiveButton }
+                        val qrBmp = QrManager.generateQr(input)
+
+                        val cv = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, "QR_Code_${System.currentTimeMillis()}.png")
+                            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
+                        }
+                        val dst = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
+                        if (dst != null) {
+                            contentResolver.openOutputStream(dst)!!.use { o -> qrBmp.compress(Bitmap.CompressFormat.PNG, 100, o) }
+                            toast("✓ Kode QR dibuat & disimpan di Galeri › Pictures/Depup Office!")
+                        }
+                    }
+                    .setNegativeButton("Batal", null)
+                    .show()
+            }, w = 0, weight = 1f, side = 8)
+
+            pad.add(row)
+            body.add(pad)
         }
     }
 
