@@ -3,79 +3,121 @@ package cloud.depup.office
 import android.graphics.Bitmap
 import android.graphics.Color
 import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.EncodeHintType
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.google.zxing.qrcode.QRCodeWriter
+
+/** Hasil pembacaan satu kode. */
+class QrResult(val text: String, val format: String)
 
 object QrManager {
 
-    /** Pindai Kode QR / Barcode dari Bitmap. */
-    fun scanBarcode(bmp: Bitmap): String {
-        return try {
-            val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
-            val image = InputImage.fromBitmap(bmp, 0)
-            val barcodes = Tasks.await(scanner.process(image))
-            if (barcodes.isNotEmpty()) {
-                val b = barcodes[0]
-                b.rawValue ?: b.displayValue ?: "Kode QR terdeteksi"
-            } else {
-                ""
+    /** Pindai Kode QR / Barcode dari Bitmap. Mengembalikan teks pertama yang ditemukan. */
+    fun scanBarcode(bmp: Bitmap): String = scanAll(bmp).firstOrNull()?.text.orEmpty()
+
+    /**
+     * Pindai semua kode pada gambar. ML Kit dipakai lebih dulu (akurat untuk foto miring/HP),
+     * lalu ZXing sebagai cadangan bila ML Kit tidak menemukan apa pun.
+     */
+    fun scanAll(bmp: Bitmap): List<QrResult> {
+        val found = LinkedHashMap<String, QrResult>()
+
+        try {
+            val scanner = BarcodeScanning.getClient()
+            try {
+                val image = InputImage.fromBitmap(bmp, 0)
+                Tasks.await(scanner.process(image)).forEach { b ->
+                    val text = (b.rawValue ?: b.displayValue).orEmpty().trim()
+                    if (text.isNotEmpty()) found[text] = QrResult(text, formatName(b.format))
+                }
+            } finally {
+                try { scanner.close() } catch (_: Exception) {}
             }
         } catch (_: Exception) {
-            ""
+            // Abaikan, lanjut ke decoder cadangan.
         }
-    }
 
-    /** Pembuat Kode QR Kustom Murni Kotlin (Tanpa Library Eksternal Berat). */
-    fun generateQr(text: String, width: Int = 512, height: Int = 512): Bitmap {
-        val qrMatrix = encodeQrMatrix(text, 25)
-        val matrixSize = qrMatrix.size
-        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val scaleX = width.toFloat() / matrixSize
-        val scaleY = height.toFloat() / matrixSize
-
-        val pixels = IntArray(width * height)
-        for (y in 0 until height) {
-            val my = (y / scaleY).toInt().coerceIn(0, matrixSize - 1)
-            for (x in 0 until width) {
-                val mx = (x / scaleX).toInt().coerceIn(0, matrixSize - 1)
-                pixels[y * width + x] = if (qrMatrix[my][mx]) Color.BLACK else Color.WHITE
-            }
-        }
-        bmp.setPixels(pixels, 0, width, 0, 0, width, height)
-        return bmp
-    }
-
-    private fun encodeQrMatrix(content: String, size: Int): Array<BooleanArray> {
-        val m = Array(size) { BooleanArray(size) }
-
-        fun addFinderPattern(x: Int, y: Int) {
-            for (i in 0..6) {
-                for (j in 0..6) {
-                    if (x + i < size && y + j < size) {
-                        m[y + j][x + i] = (i == 0 || i == 6 || j == 0 || j == 6 || (i in 2..4 && j in 2..4))
-                    }
-                }
+        if (found.isEmpty()) {
+            try {
+                val w = bmp.width
+                val h = bmp.height
+                val pixels = IntArray(w * h)
+                bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+                val source = RGBLuminanceSource(w, h, pixels)
+                val bitmap = BinaryBitmap(HybridBinarizer(source))
+                val result = MultiFormatReader().apply { setHints(buildDecodeHints()) }.decodeWithState(bitmap)
+                val text = result.text?.trim().orEmpty()
+                if (text.isNotEmpty()) found[text] = QrResult(text, result.barcodeFormat.name)
+            } catch (_: Exception) {
+                // Tidak ada kode yang terbaca.
             }
         }
 
-        addFinderPattern(0, 0)
-        addFinderPattern(size - 7, 0)
-        addFinderPattern(0, size - 7)
+        return found.values.toList()
+    }
 
-        for (i in 8 until size - 8) {
-            m[6][i] = (i % 2 == 0)
-            m[i][6] = (i % 2 == 0)
-        }
+    private fun buildDecodeHints() = mapOf(
+        com.google.zxing.DecodeHintType.TRY_HARDER to true,
+        com.google.zxing.DecodeHintType.CHARACTER_SET to "UTF-8"
+    )
 
-        val bytes = content.toByteArray(Charsets.UTF_8)
-        var bitIdx = 0
-        for (r in 8 until size - 1) {
-            for (c in 8 until size - 1) {
-                val byteVal = if (bytes.isNotEmpty()) bytes[bitIdx % bytes.size].toInt() else 0
-                val bit = ((byteVal shr (bitIdx % 8)) and 1) == 1
-                m[r][c] = bit
-                bitIdx++
+    private fun formatName(format: Int): String = when (format) {
+        Barcode.FORMAT_QR_CODE -> "QR Code"
+        Barcode.FORMAT_DATA_MATRIX -> "Data Matrix"
+        Barcode.FORMAT_PDF417 -> "PDF417"
+        Barcode.FORMAT_AZTEC -> "Aztec"
+        Barcode.FORMAT_EAN_13 -> "EAN-13"
+        Barcode.FORMAT_EAN_8 -> "EAN-8"
+        Barcode.FORMAT_UPC_A -> "UPC-A"
+        Barcode.FORMAT_UPC_E -> "UPC-E"
+        Barcode.FORMAT_CODE_128 -> "Code 128"
+        Barcode.FORMAT_CODE_39 -> "Code 39"
+        Barcode.FORMAT_CODE_93 -> "Code 93"
+        Barcode.FORMAT_ITF -> "ITF"
+        Barcode.FORMAT_CODABAR -> "Codabar"
+        else -> "Barcode"
+    }
+
+    /**
+     * Pembuat Kode QR asli (standar ISO/IEC 18004) memakai encoder ZXing.
+     * [margin] adalah quiet zone dalam modul; minimal 4 modul agar mudah dipindai.
+     */
+    fun generateQr(
+        text: String,
+        width: Int = 512,
+        height: Int = 512,
+        margin: Int = 4,
+        highCorrection: Boolean = true,
+    ): Bitmap {
+        require(text.isNotBlank()) { "Teks QR tidak boleh kosong" }
+        val hints = mapOf(
+            EncodeHintType.CHARACTER_SET to "UTF-8",
+            EncodeHintType.ERROR_CORRECTION to if (highCorrection) ErrorCorrectionLevel.H else ErrorCorrectionLevel.M,
+            EncodeHintType.MARGIN to margin.coerceAtLeast(0)
+        )
+        val side = maxOf(width, height)
+        val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, side, side, hints)
+        val bmp = Bitmap.createBitmap(matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(matrix.width * matrix.height)
+        var i = 0
+        for (y in 0 until matrix.height) {
+            for (x in 0 until matrix.width) {
+                pixels[i++] = if (matrix[x, y]) Color.BLACK else Color.WHITE
             }
         }
-        return m
+        bmp.setPixels(pixels, 0, matrix.width, 0, 0, matrix.width, matrix.height)
+        return if (bmp.width == width && bmp.height == height) bmp
+        else Bitmap.createScaledBitmap(bmp, width, height, false).also { if (it !== bmp) bmp.recycle() }
     }
+
+    /** Kapasitas aman QR versi 40 dengan koreksi error H sekitar 1.2 KB (UTF-8). */
+    fun isTextTooLong(text: String): Boolean = text.toByteArray(Charsets.UTF_8).size > 1200
 }

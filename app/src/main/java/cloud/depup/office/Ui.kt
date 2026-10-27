@@ -416,7 +416,7 @@ class SaveOption(val title: String, val desc: String, val tag: String? = null, v
 /** Modal "Simpan & Ekspor": nama berkas + (opsional) pilihan kualitas. */
 fun AppCompatActivity.saveSheet(
     title: String, sub: String, defaultName: String, options: List<SaveOption>?, defaultOpt: Int,
-    confirmLabel: String, onConfirm: (name: String, opt: Int) -> Unit
+    confirmLabel: String, ext: String = "pdf", onConfirm: (name: String, opt: Int) -> Unit
 ) = sheet { body, dismiss ->
     sheetHeader(body, R.drawable.ic_pdf, C.ACCENT, C.BLUE_BG, title, sub, dismiss)
     val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
@@ -439,7 +439,7 @@ fun AppCompatActivity.saveSheet(
         setSelectAllOnFocus(true)
     }
     nameRow.add(et, w = 0, weight = 1f)
-    nameRow.add(pill(".pdf", C.ACCENT, C.BLUE_BG, 12f), w = WRAP)
+    nameRow.add(pill(".$ext", C.ACCENT, C.BLUE_BG, 12f), w = WRAP)
     pad.add(nameRow, top = 8)
 
     var sel = defaultOpt
@@ -499,7 +499,7 @@ fun AppCompatActivity.saveSheet(
     }
     bar.add(btn("Batal", false) { dismiss() }, w = WRAP)
     bar.add(btn(confirmLabel, true, C.ACCENT, R.drawable.ic_check) {
-        val clean = et.text.toString().trim().replace(Regex("[\\/:*?\"<>|]+"), "_").removeSuffix(".pdf")
+        val clean = et.text.toString().trim().replace(Regex("[\\/:*?\"<>|]+"), "_").removeSuffix(".$ext")
         dismiss()
         onConfirm(clean.ifBlank { defaultName }, sel)
     }, w = 0, weight = 1f, side = 6)

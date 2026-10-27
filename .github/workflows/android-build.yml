@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
     tags:
       - "v*"
+      - "DepupOffice_*"
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -34,8 +35,8 @@ jobs:
       - name: Rename Release Binaries
         run: |
           mkdir -p build/outputs/release
-          cp app/build/outputs/apk/release/app-release.apk build/outputs/release/DepupOffice_v2.0.0.apk || true
-          cp app/build/outputs/bundle/release/app-release.aab build/outputs/release/DepupOffice_v2.0.0.aab || true
+          cp app/build/outputs/apk/release/app-release.apk build/outputs/release/DepupOffice_v2.1.0.apk || true
+          cp app/build/outputs/bundle/release/app-release.aab build/outputs/release/DepupOffice_v2.1.0.aab || true
 
       - name: Upload APK Artifact to Actions
         uses: actions/upload-artifact@v4
@@ -50,10 +51,12 @@ jobs:
           path: app/build/outputs/bundle/release/*.aab
 
       - name: Automatic GitHub Release on Tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            build/outputs/release/DepupOffice_v2.1.0.apk
+            build/outputs/release/DepupOffice_v2.1.0.aab
             app/build/outputs/apk/release/app-release.apk
             app/build/outputs/bundle/release/app-release.aab
           body_path: RELEASE_NOTES_V2.md

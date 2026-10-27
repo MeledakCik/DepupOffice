@@ -1,10 +1,10 @@
-# 🚀 Depup Office v2.0.0 Major Update Release Notes
+# 🚀 Depup Office v2.1.0 Update Release Notes
 
-**Depup Office v2.0.0** is a major feature update delivering advanced mobile office productivity, smart AI-driven document scanning, and enhanced privacy tools. Built for job seekers, office professionals, students, and businesses in Indonesia and worldwide.
+**Depup Office v2.1.0** is an update delivering document editing, native Excel/Spreadsheet & Word file support, advanced mobile office productivity, smart AI-driven document scanning, and enhanced privacy tools. Built for job seekers, office professionals, students, and businesses in Indonesia and worldwide.
 
 ---
 
-## 🌟 What's New in v2.0.0
+## 🌟 What's New in v2.1.0
 
 ### 📱 1. QR Code & Barcode Manager
 * **QR Code & Barcode Scanner**: Instant scanning of QR codes and barcodes from photos or documents (e.g. e-Meterai verification, document links, barcodes).

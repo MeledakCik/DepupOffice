@@ -6,7 +6,13 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /** Penulis .docx mini (tanpa library): paragraf teks hasil OCR dan/atau gambar halaman, ukuran A4. */
-class DocxWriter(out: File) {
+class DocxWriter(
+    out: File,
+    private val pageSize: String = "A4",
+    private val marginMode: Int = 0,
+    private val lineSpacing: Float = 1.15f,
+    private val fontFamily: Int = 0
+) {
     private companion object { const val XML = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" }
     private val zip = ZipOutputStream(FileOutputStream(out).buffered())
     private val body = StringBuilder()
@@ -55,14 +61,45 @@ class DocxWriter(out: File) {
 
     fun beginPage() = pageBreakIfNeeded()
 
-    fun paragraph(text: String) {
-        body.append("<w:p><w:pPr><w:spacing w:after=\"120\"/></w:pPr><w:r><w:rPr><w:sz w:val=\"22\"/></w:rPr><w:t xml:space=\"preserve\">")
-            .append(esc(text)).append("</w:t></w:r></w:p>")
+    /** Tulis teks ke dalam satu run, ubah baris baru menjadi <w:br/> agar tidak menyatu. */
+    private fun appendRunText(target: StringBuilder, text: String) {
+        text.split('\n').forEachIndexed { i, line ->
+            if (i > 0) target.append("<w:br/>")
+            target.append("<w:t xml:space=\"preserve\">").append(esc(line)).append("</w:t>")
+        }
+    }
+
+    fun paragraph(
+        text: String,
+        bold: Boolean = false,
+        italic: Boolean = false,
+        align: Int = 0
+    ) {
+        val jc = when (align) {
+            1 -> "<w:jc w:val=\"center\"/>"
+            2 -> "<w:jc w:val=\"right\"/>"
+            3 -> "<w:jc w:val=\"both\"/>"
+            else -> ""
+        }
+        val rPr = buildString {
+            if (bold) append("<w:b/>")
+            if (italic) append("<w:i/>")
+            append("<w:sz w:val=\"22\"/>")
+            if (fontFamily == 1) append("<w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\"/>")
+        }
+        body.append("<w:p><w:pPr>")
+            .append("<w:spacing w:after=\"120\" w:line=\"${(lineSpacing * 240).toInt()}\" w:lineRule=\"auto\"/>")
+            .append(jc)
+            .append("</w:pPr><w:r><w:rPr>").append(rPr).append("</w:rPr>")
+        appendRunText(body, text)
+        body.append("</w:r></w:p>")
     }
 
     fun note(text: String) {
-        body.append("<w:p><w:r><w:rPr><w:i/><w:color w:val=\"64748B\"/><w:sz w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">")
-            .append(esc(text)).append("</w:t></w:r></w:p>")
+        body.append("<w:p><w:pPr><w:spacing w:after=\"120\" w:line=\"${(lineSpacing * 240).toInt()}\" w:lineRule=\"auto\"/></w:pPr>")
+            .append("<w:r><w:rPr><w:i/><w:color w:val=\"64748B\"/><w:sz w:val=\"20\"/></w:rPr>")
+        appendRunText(body, text)
+        body.append("</w:r></w:p>")
     }
 
     /** Gambar JPEG satu halaman, diskalakan agar muat dalam area tulis A4 (17 x 25,7 cm). */
@@ -91,12 +128,22 @@ class DocxWriter(out: File) {
 
     fun finish() {
         val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        val (pgW, pgH) = when (pageSize) {
+            "Letter" -> 12240 to 15840
+            "F4" -> 11907 to 18720
+            else -> 11906 to 16838
+        }
+        val margin = when (marginMode) {
+            1 -> 680   // Sempit ±1,2 cm
+            2 -> 2154  // Lebar ±3,8 cm
+            else -> 1417 // Normal ±2,5 cm
+        }
         val doc = xml +
             "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
             "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
             "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\">" +
-            "<w:body>$body<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/>" +
-            "<w:pgMar w:top=\"1134\" w:right=\"1134\" w:bottom=\"1134\" w:left=\"1134\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>" +
+            "<w:body>$body<w:sectPr><w:pgSz w:w=\"$pgW\" w:h=\"$pgH\"/>" +
+            "<w:pgMar w:top=\"$margin\" w:right=\"$margin\" w:bottom=\"$margin\" w:left=\"$margin\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>" +
             "</w:sectPr></w:body></w:document>"
         val docRels = xml +
             "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">$rels</Relationships>"

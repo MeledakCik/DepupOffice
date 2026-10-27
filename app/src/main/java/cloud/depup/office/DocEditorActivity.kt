@@ -1,17 +1,15 @@
 package cloud.depup.office
 
-import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.EditText
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
 
@@ -26,15 +24,28 @@ class DocSection(
 
 class DocEditorActivity : AppCompatActivity() {
 
+    companion object {
+        const val EXTRA_URI = "uri"
+        const val EXTRA_TEMPLATE = "template"
+        const val TEMPLATE_SURAT = "surat"
+        const val TEMPLATE_CV = "cv"
+        const val TEMPLATE_BLANK = "blank"
+    }
+
     private lateinit var docTitleEt: EditText
     private lateinit var docSubEt: EditText
     private lateinit var sectionsBox: LinearLayout
+    private lateinit var paperPad: LinearLayout
+    private lateinit var formatInfo: TextView
     private val sections = mutableListOf<DocSection>()
+    private val sectionEditors = mutableListOf<EditText>()
 
     private var currentFontFamily = 0
     private var currentMarginMode = 0
     private var currentLineSpacing = 1.15f
     private var currentPageSize = "A4"
+    private var sourceUri: Uri? = null
+    private var sourceName: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,9 +68,8 @@ class DocEditorActivity : AppCompatActivity() {
             overScrollMode = View.OVER_SCROLL_NEVER
         }
 
-        val paperPad = vbox(16).apply {
-            setPadding(marginPx(), marginPx(), marginPx(), marginPx())
-        }
+        paperPad = vbox(16)
+        applyPagePadding()
 
         val paperCard = card(16, 16).apply {
             setBackgroundColor(Color.WHITE)
@@ -89,12 +99,7 @@ class DocEditorActivity : AppCompatActivity() {
         sectionsBox = vbox()
         paperCard.add(sectionsBox, top = 12)
 
-        // Seed default initial section if empty
-        if (sections.isEmpty()) {
-            sections.add(DocSection("Pasal 1 — Ketentuan Umum\nPIHAK PERTAMA dan PIHAK KEDUA dengan ini sepakat untuk menjalin kerjasama operasional sesuai dengan syarat dan ketentuan yang tercantum dalam dokumen ini.", isHeading = false))
-            sections.add(DocSection("Catatan Tambahan: Mohon periksa kembali tanggal dan nomor dokumen sebelum ditandatangani secara digital.", isNote = true))
-        }
-        renderSections()
+        loadInitialContent()
 
         val addBtn = btn("+ Tambah Paragraf Baru", false, C.ACCENT, R.drawable.ic_plus) {
             sections.add(DocSection("Ketik paragraf baru di sini..."))
@@ -107,12 +112,105 @@ class DocEditorActivity : AppCompatActivity() {
 
         root.add(paperScroll, w = MATCH, h = 0, weight = 1f)
         setContentView(root)
+
+        updateFormatInfo()
+        renderSections()
     }
 
-    private fun marginPx(): Int = when (currentMarginMode) {
-        1 -> dp(10) // Sempit
-        2 -> dp(28) // Lebar
-        else -> dp(16) // Normal
+    private fun loadInitialContent() {
+        val uri = intent.getStringExtra(EXTRA_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val template = intent.getStringExtra(EXTRA_TEMPLATE)
+
+        if (uri != null) {
+            sourceUri = uri
+            sourceName = Files.baseName(Files.nameOf(this, uri))
+            val paragraphs = try {
+                OfficeReader.readDocx(this, uri)
+            } catch (_: Exception) {
+                emptyList<OfficeReader.Paragraph>()
+            }
+            if (paragraphs.isEmpty()) {
+                toast("Teks dokumen tidak ditemukan. Mulai menulis dari halaman kosong.")
+                seedDefault()
+                return
+            }
+            val first = paragraphs.first()
+            val useFirstAsTitle = first.text.length <= 100 && paragraphs.size > 1
+            docTitleEt.setText(if (useFirstAsTitle) first.text else (sourceName ?: "Dokumen Word"))
+            paragraphs.drop(if (useFirstAsTitle) 1 else 0).forEach { p ->
+                sections.add(
+                    DocSection(
+                        p.text,
+                        isBold = p.bold,
+                        isItalic = p.italic,
+                        align = when (p.align) {
+                            1 -> Gravity.CENTER
+                            2 -> Gravity.END
+                            3 -> Gravity.START
+                            else -> Gravity.START
+                        }
+                    )
+                )
+            }
+        } else if (template != null) {
+            applyTemplate(template)
+        } else {
+            seedDefault()
+        }
+    }
+
+    private fun seedDefault() {
+        docTitleEt.setText("")
+        sections.add(DocSection("Pasal 1 — Ketentuan Umum\nPIHAK PERTAMA dan PIHAK KEDUA dengan ini sepakat untuk menjalin kerjasama operasional sesuai dengan syarat dan ketentuan yang tercantum dalam dokumen ini."))
+        sections.add(DocSection("Catatan Tambahan: Mohon periksa kembali tanggal dan nomor dokumen sebelum ditandatangani secara digital.", isNote = true))
+    }
+
+    private fun applyTemplate(key: String) {
+        when (key) {
+            TEMPLATE_SURAT -> {
+                docTitleEt.setText("Surat Lamaran Kerja")
+                docSubEt.setText("Nomor: 001/LAMARAN/${java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)}")
+                sections.add(DocSection("Kepada Yth.\nHRD Manager\nPT Nama Perusahaan\nDi Tempat", isHeading = true))
+                sections.add(DocSection("Dengan hormat,\n\nBerdasarkan informasi lowongan pekerjaan yang saya peroleh, saya bermaksud mengajukan lamaran kerja untuk posisi yang tersedia di perusahaan Bapak/Ibu."))
+                sections.add(DocSection("Data Diri\nNama: (Nama Lengkap)\nTempat/Tanggal Lahir: (Kota, Tanggal)\nPendidikan Terakhir: (Jenjang / Jurusan)\nAlamat: (Alamat Lengkap)\nNo. HP: (Nomor Aktif)\nEmail: (Alamat Email)"))
+                sections.add(DocSection("Sebagai bahan pertimbangan, saya lampirkan Curriculum Vitae, fotokopi ijazah, transkrip nilai, dan dokumen pendukung lainnya. Besar harapan saya untuk dapat diberikan kesempatan wawancara."))
+                sections.add(DocSection("Demikian surat lamaran ini saya buat dengan sebenar-benarnya. Atas perhatian dan kesempatan yang diberikan, saya ucapkan terima kasih.", isNote = true))
+                sections.add(DocSection("Hormat saya,\n\n\n(Nama Lengkap)", align = Gravity.END))
+            }
+            TEMPLATE_CV -> {
+                docTitleEt.setText("Curriculum Vitae")
+                docSubEt.setText("Data Pribadi & Riwayat Profesional")
+                sections.add(DocSection("DATA PRIBADI", isHeading = true))
+                sections.add(DocSection("Nama Lengkap: (Nama)\nTempat/Tanggal Lahir: (Kota, Tanggal)\nJenis Kelamin: (L/P)\nAlamat: (Alamat)\nNo. HP: (Nomor)\nEmail: (Email)"))
+                sections.add(DocSection("RINGKASAN PROFIL", isHeading = true))
+                sections.add(DocSection("Profesional yang berorientasi pada hasil dengan pengalaman di bidang (bidang). Terbiasa bekerja secara mandiri maupun dalam tim, teliti, dan mampu beradaptasi dengan cepat."))
+                sections.add(DocSection("PENGALAMAN KERJA", isHeading = true))
+                sections.add(DocSection("(Tahun – Sekarang) — (Nama Perusahaan)\nPosisi: (Jabatan)\nTanggung jawab: (Uraikan pekerjaan dan pencapaian utama)"))
+                sections.add(DocSection("PENDIDIKAN", isHeading = true))
+                sections.add(DocSection("(Tahun – Tahun) — (Nama Institusi)\nJenjang / Jurusan: (S1 / Teknik Informatika)\nIPK: (Nilai)"))
+                sections.add(DocSection("KEAHLIAN", isHeading = true))
+                sections.add(DocSection("• (Keahlian 1)\n• (Keahlian 2)\n• (Keahlian 3)"))
+            }
+            TEMPLATE_BLANK -> {
+                docTitleEt.setText("")
+                docSubEt.setText("")
+                sections.add(DocSection(""))
+            }
+            else -> seedDefault()
+        }
+    }
+
+    private fun updateFormatInfo() {
+        formatInfo.text = "Format .docx • $currentPageSize • Spasi ${currentLineSpacing}x"
+    }
+
+    private fun applyPagePadding() {
+        val margin = when (currentMarginMode) {
+            1 -> 10
+            2 -> 28
+            else -> 16
+        }
+        paperPad.setPadding(dp(margin), dp(margin), dp(margin), dp(margin))
     }
 
     private fun topBar(): View {
@@ -131,14 +229,14 @@ class DocEditorActivity : AppCompatActivity() {
 
         val col = vbox()
         col.add(tv("Editor Dokumen Word", 16f, C.TEXT, true))
-        col.add(tv("Format .docx • Ukuran $currentPageSize", 11f, C.MUTED))
+        formatInfo = tv("Format .docx • Ukuran $currentPageSize", 11f, C.MUTED)
+        col.add(formatInfo)
         bar.add(col, w = 0, weight = 1f, side = 8)
 
-        val settingsBtn = icon(R.drawable.ic_tune, C.ACCENT, 22).apply {
+        bar.add(icon(R.drawable.ic_tune, C.ACCENT, 22).apply {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             setOnClickListener { showWordSettingsSheet() }
-        }
-        bar.add(settingsBtn, w = dp(40), h = dp(40))
+        }, w = dp(40), h = dp(40))
 
         val saveBtn = tv("Simpan", 13f, Color.WHITE, true).apply {
             background = shape(C.ACCENT, 8)
@@ -185,7 +283,7 @@ class DocEditorActivity : AppCompatActivity() {
             renderSections()
         }
 
-        toolChip("Atur Margin", R.drawable.ic_crop) {
+        toolChip("Atur Halaman", R.drawable.ic_crop) {
             showWordSettingsSheet()
         }
 
@@ -196,6 +294,7 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun renderSections() {
         sectionsBox.removeAllViews()
+        sectionEditors.clear()
         sections.forEachIndexed { idx, sec ->
             val secCard = vbox(10).apply {
                 background = shape(if (sec.isNote) 0xFFFEF3C7.toInt() else (if (sec.isHeading) 0xFFEFF6FF.toInt() else 0xFFF8FAFC.toInt()), 10)
@@ -215,6 +314,33 @@ class DocEditorActivity : AppCompatActivity() {
             }
             topRow.add(boldBtn, w = WRAP)
 
+            val italicBtn = tv("I", 13f, if (sec.isItalic) C.ACCENT else C.MUTED, true).apply {
+                typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+                setPadding(dp(6), dp(4), dp(6), dp(4))
+                setOnClickListener { sec.isItalic = !sec.isItalic; renderSections() }
+            }
+            topRow.add(italicBtn, w = WRAP, side = 2)
+
+            val alignBtn = tv(
+                when (sec.align) {
+                    Gravity.CENTER -> "≡"
+                    Gravity.END -> "⇥"
+                    else -> "⇤"
+                },
+                13f, C.MUTED, true
+            ).apply {
+                setPadding(dp(6), dp(4), dp(6), dp(4))
+                setOnClickListener {
+                    sec.align = when (sec.align) {
+                        Gravity.START -> Gravity.CENTER
+                        Gravity.CENTER -> Gravity.END
+                        else -> Gravity.START
+                    }
+                    renderSections()
+                }
+            }
+            topRow.add(alignBtn, w = WRAP, side = 2)
+
             val delBtn = icon(R.drawable.ic_close, C.RED, 16).apply {
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 setOnClickListener {
@@ -231,26 +357,34 @@ class DocEditorActivity : AppCompatActivity() {
                 textSize = if (sec.isHeading) 16f else 13f
                 setTextColor(if (sec.isNote) 0xFF92400E.toInt() else C.TEXT)
                 typeface = when {
-                    sec.isHeading || sec.isBold -> Fonts.head(this@DocEditorActivity)
+                    sec.isHeading -> Fonts.head(this@DocEditorActivity)
+                    sec.isItalic -> Typeface.create(Fonts.body(this@DocEditorActivity), Typeface.ITALIC)
+                    sec.isBold -> Fonts.headSemi(this@DocEditorActivity)
                     else -> Fonts.body(this@DocEditorActivity)
                 }
+                gravity = sec.align or Gravity.TOP
+                setLineSpacing(0f, currentLineSpacing)
                 background = null
                 isSingleLine = false
                 minLines = if (sec.isHeading) 1 else 2
                 setPadding(0, dp(4), 0, dp(4))
                 addTextChangedListener(object : android.text.TextWatcher {
-                    override fun afterTextChanged(s: android.text.Editable?) { sec.text = s?.toString().orEmpty() }
+                    override fun afterTextChanged(s: android.text.Editable?) {
+                        val newText = s?.toString().orEmpty()
+                        if (sec.text != newText) sec.text = newText
+                    }
                     override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                     override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 })
             }
+            sectionEditors.add(et)
             secCard.add(et)
             sectionsBox.add(secCard, top = if (idx == 0) 0 else 8)
         }
     }
 
     private fun showWordSettingsSheet() = sheet { body, dismiss ->
-        sheetHeader(body, R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Pengaturan Format Word", "Sesuaikan ukuran, font, margin, dan spasi", dismiss)
+        sheetHeader(body, R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Pengaturan Format Word", "Sesuaikan ukuran, margin, dan spasi tanpa kehilangan isi", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
 
         pad.add(tv("Ukuran Kertas", 14f, C.TEXT, true))
@@ -265,8 +399,9 @@ class DocEditorActivity : AppCompatActivity() {
                 setOnClickListener {
                     currentPageSize = sz
                     DocSettings.setPageSize(this@DocEditorActivity, sz)
+                    updateFormatInfo()
+                    renderSections()
                     dismiss()
-                    recreate()
                 }
             }
             sizeRow.add(btn, w = 0, weight = 1f, side = 4)
@@ -285,8 +420,8 @@ class DocEditorActivity : AppCompatActivity() {
                 setOnClickListener {
                     currentMarginMode = idx
                     DocSettings.setMarginMode(this@DocEditorActivity, idx)
+                    applyPagePadding()
                     dismiss()
-                    recreate()
                 }
             }
             marginRow.add(btn, w = 0, weight = 1f, side = 4)
@@ -306,8 +441,9 @@ class DocEditorActivity : AppCompatActivity() {
                 setOnClickListener {
                     currentLineSpacing = spacingVal[idx]
                     DocSettings.setLineSpacing(this@DocEditorActivity, spacingVal[idx])
+                    sectionEditors.forEach { it.setLineSpacing(0f, currentLineSpacing) }
+                    updateFormatInfo()
                     dismiss()
-                    recreate()
                 }
             }
             spacingRow.add(btn, w = 0, weight = 1f, side = 4)
@@ -320,41 +456,60 @@ class DocEditorActivity : AppCompatActivity() {
     private fun saveWordDocument() {
         val title = docTitleEt.text.toString().trim().ifBlank { "Dokumen Word" }
         val sub = docSubEt.text.toString().trim()
-        val defaultName = Files.baseName(title)
+        val defaultName = sourceName ?: Files.baseName(title)
 
         saveSheet(
-            "Simpan Dokumen Word", "Pilih nama dan format file yang diinginkan", defaultName, null, 0,
-            "Simpan Berkas"
+            "Simpan Dokumen Word", "Pilih nama file .docx yang diinginkan", defaultName, null, 0,
+            "Simpan Berkas", ext = "docx"
         ) { cleanName, _ ->
             val docxFile = Files.namedOut(this, cleanName, "docx")
+            val pdfFile = Files.namedOut(this, cleanName, "pdf")
+            val snapshot = sections.map {
+                DocSection(it.text, it.isHeading, it.isNote, it.isBold, it.isItalic, it.align)
+            }
             work("Membuat Dokumen Word (.docx)…", {
-                val writer = DocxWriter(docxFile)
+                val writer = DocxWriter(
+                    docxFile,
+                    pageSize = currentPageSize,
+                    marginMode = currentMarginMode,
+                    lineSpacing = currentLineSpacing,
+                    fontFamily = currentFontFamily
+                )
                 writer.beginPage()
-                writer.paragraph(title.uppercase())
+                writer.paragraph(title.uppercase(), bold = true, align = 1)
                 if (sub.isNotBlank()) writer.note(sub)
                 writer.paragraph(" ")
-                sections.forEach { sec ->
+                snapshot.forEach { sec ->
                     if (sec.isNote) writer.note(sec.text)
-                    else writer.paragraph(sec.text)
+                    else writer.paragraph(
+                        sec.text,
+                        bold = sec.isBold,
+                        italic = sec.isItalic,
+                        align = when (sec.align) {
+                            Gravity.CENTER -> 1
+                            Gravity.END -> 2
+                            else -> 0
+                        }
+                    )
                 }
                 writer.finish()
+
+                val fullText = "$title\n$sub\n\n" + snapshot.joinToString("\n\n") { it.text }
+                Pdf.text(fullText, pdfFile)
             }) { res ->
                 res.onSuccess {
-                    val pdfFile = Files.namedOut(this, cleanName, "pdf")
-                    val fullText = "$title\n$sub\n\n" + sections.joinToString("\n\n") { it.text }
-                    Pdf.text(fullText, pdfFile)
-                    showResult("Dokumen Word Berhasil Dibuat", docxFile, DOCX)
+                    showResult("Dokumen Word Berhasil Dibuat", docxFile, DOCX, "PDF juga dibuat: ${pdfFile.name}")
                 }.onFailure { fail(it) }
             }
         }
     }
 
-    private fun showResult(title: String, file: File, mime: String) {
+    private fun showResult(title: String, file: File, mime: String, extra: String = "") {
         val uri = Files.uriFor(this, file)
         Recent.add(this, uri, file.name, mime)
         Meta.setLastJob(this, title, file)
         resultSheet(
-            title, "${file.name} • ${Files.fmtSize(file.length())}", "", "Buka Dokumen",
+            title, "${file.name} • ${Files.fmtSize(file.length())}", extra, "Buka Dokumen",
             { Files.open(this, uri, mime) },
             listOf(
                 SheetAction(R.drawable.ic_download, "Simpan ke Unduhan") {

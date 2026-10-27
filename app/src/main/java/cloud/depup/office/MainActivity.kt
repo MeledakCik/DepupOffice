@@ -16,6 +16,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.GridLayout
 import android.widget.TextView
 import android.view.Gravity
 import android.view.View
@@ -28,6 +29,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
+import java.text.NumberFormat
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -277,10 +280,18 @@ class MainActivity : AppCompatActivity() {
         return bar
     }
 
-    private fun openEWallet(walletIndex: Int, phone: String, amount: String) {
+    private fun rupiah(value: Long): String =
+        "Rp " + NumberFormat.getIntegerInstance(Locale("id", "ID")).format(value)
+
+    private fun shortRupiah(value: Long): String = when {
+        value >= 1_000_000 -> "${value / 1_000_000} jt"
+        value >= 1_000 -> "${value / 1_000} rb"
+        else -> value.toString()
+    }
+
+    private fun openEWallet(walletIndex: Int, phone: String, amountText: String) {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        val clip = android.content.ClipData.newPlainText("No HP Donasi", phone)
-        clipboard.setPrimaryClip(clip)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("No HP Donasi", phone))
 
         val walletName = when (walletIndex) {
             0 -> "GoPay / Gojek"
@@ -293,7 +304,7 @@ class MainActivity : AppCompatActivity() {
             else -> listOf("com.shopee.id")
         }
 
-        toast("Nomor $phone (a.n. MKA) disalin! Membuka $walletName…")
+        toast("Nomor $phone disalin. Membuka $walletName…")
 
         var launched = false
         for (pkg in pkgs) {
@@ -308,144 +319,387 @@ class MainActivity : AppCompatActivity() {
         }
         if (!launched) {
             AlertDialog.Builder(this)
-                .setTitle("Nomor Berhasil Disalin!")
-                .setMessage("Nomor e-Wallet $phone (a.n. MKA) telah disalin ke clipboard.\n\nBuka aplikasi $walletName Anda dan paste nomor tersebut untuk melakukan transfer donasi $amount.")
-                .setPositiveButton("Mengerti", null)
+                .setTitle("Nomor Donasi Sudah Disalin")
+                .setMessage(
+                    "Nomor e-Wallet:\n$phone (a.n. MKA)\n\n" +
+                        "Nominal donasi: $amountText\n\n" +
+                        "Aplikasi $walletName belum terpasang. Pasang aplikasinya, lalu tempel nomor yang sudah disalin untuk mengirim donasi. Terima kasih!"
+                )
+                .setPositiveButton("Buka Play Store") { _, _ ->
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=${pkgs.first()}")))
+                    } catch (_: Exception) {
+                        toast("Play Store tidak tersedia di perangkat ini")
+                    }
+                }
+                .setNegativeButton("Tutup", null)
                 .show()
         }
     }
 
     private fun showDonationDialog() {
-        val ctx = this
-        val dialogView = vbox(12).apply {
-            setPadding(dp(20), dp(20), dp(20), dp(20))
-        }
+        val phone = "081322544391"
+        val amounts = listOf(1_000L, 2_000L, 5_000L, 10_000L, 25_000L, 50_000L, 100_000L, 1_000_000L)
+        val wallets = listOf(
+            Triple("GoPay", "com.gojek.app", 0xFF00AA13.toInt()),
+            Triple("DANA", "id.dana", 0xFF118EEA.toInt()),
+            Triple("ShopeePay", "com.shopee.id", 0xFFEE4D2D.toInt())
+        )
+        var selectedAmount = 10_000L
+        var customAmount: Long? = null
+        var selectedWallet = 1
+        var formatting = false
 
-        val headRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        headRow.add(iconBadge(R.drawable.ic_heart, 0xFFEF4444.toInt(), 0xFFFEE2E2.toInt(), 100, 24), w = dp(44), h = dp(44))
-        val headCol = vbox()
-        headCol.add(tv("Dukung Pengembang (Donasi)", 17f, C.TEXT, true))
-        headCol.add(tv("Bantu aplikasi ini agar tetap 100% bebas iklan", 11f, C.MUTED), top = 2)
-        headRow.add(headCol, w = 0, weight = 1f, side = 10)
-        dialogView.add(headRow)
+        sheet { body, dismiss ->
+            sheetHeader(
+                body, R.drawable.ic_heart, 0xFFDC2626.toInt(), C.RED_BG,
+                "Dukung Depup Office", "Donasi sukarela • tetap offline & bebas iklan", dismiss
+            )
+            val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
 
-        dialogView.add(tv("Pilih Nominal Donasi:", 13f, C.TEXT, true), top = 10)
+            // Kartu ringkasan nominal
+            val heroCard = vbox(16).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(0xFFDC2626.toInt(), 0xFFF97316.toInt())
+                ).apply { cornerRadius = dp(18).toFloat() }
+                elevation = dp(2).toFloat()
+            }
+            val heroRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            heroRow.add(iconBadge(R.drawable.ic_heart, Color.WHITE, 0x33FFFFFF, 100, 24), w = dp(48), h = dp(48))
+            val heroCol = vbox()
+            heroCol.add(tv("Nominal Donasi", 11f, 0xE6FFFFFF.toInt()))
+            val amountTv = tv(rupiah(selectedAmount), 26f, Color.WHITE, true)
+            heroCol.add(amountTv, top = 2)
+            val walletSummaryTv = tv("via DANA • a.n. MKA", 12f, 0xE6FFFFFF.toInt())
+            heroCol.add(walletSummaryTv, top = 2)
+            heroRow.add(heroCol, w = 0, weight = 1f, side = 12)
+            heroRow.add(iconBadge(R.drawable.ic_shield, Color.WHITE, 0x33FFFFFF, 100, 20), w = dp(40), h = dp(40))
+            heroCard.add(heroRow)
+            heroCard.add(tv("Donasi membantu pengembangan fitur baru tanpa iklan, tanpa langganan, dan tanpa mengunggah file pengguna.", 11f, 0xF2FFFFFF.toInt()))
+            pad.add(heroCard)
 
-        val amounts = listOf("Rp 1.000", "Rp 2.000", "Rp 5.000", "Rp 10.000", "Rp 25.000", "Rp 50.000", "Rp 100.000", "Rp 1.000.000")
-        var selectedAmount = "Rp 10.000"
+            // Dibuat lebih awal agar bisa dipakai oleh chip nominal & ringkasan.
+            val customEt = EditText(this).apply {
+                hint = "Nominal lainnya (min. 1.000)"
+                setHintTextColor(C.MUTED)
+                setTextColor(C.TEXT)
+                textSize = 14f
+                typeface = Fonts.body(this@MainActivity)
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                background = null
+                setPadding(dp(10), dp(12), dp(10), dp(12))
+            }
+            val transferLabel = tv("Donasi ${rupiah(selectedAmount)} via DANA", 14f, Color.WHITE, true)
 
-        val amountsGrid = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+            val amountChips = mutableListOf<Pair<Long, TextView>>()
+            val walletChips = mutableListOf<LinearLayout>()
 
-        fun renderChips() {
-            amountsGrid.removeAllViews()
-            var row: LinearLayout? = null
-            amounts.forEachIndexed { i, amt ->
-                if (i % 4 == 0) {
-                    row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-                    amountsGrid.add(row!!, top = if (i == 0) 0 else 6)
-                }
-                val isSel = amt == selectedAmount
-                val chip = tv(amt, 11f, if (isSel) Color.WHITE else C.TEXT, true).apply {
-                    background = shape(if (isSel) C.ACCENT else C.SURFACE2, 8)
-                    setPadding(dp(4), dp(8), dp(4), dp(8))
-                    gravity = Gravity.CENTER
-                    isClickable = true
-                    setOnClickListener {
-                        selectedAmount = amt
-                        renderChips()
-                    }
-                }
-                row?.add(chip, w = 0, weight = 1f).also {
-                    if (i % 4 > 0) (chip.layoutParams as LinearLayout.LayoutParams).marginStart = dp(4)
+            fun paintAmounts() {
+                val customActive = customAmount != null
+                amountChips.forEach { (amountValue, chip) ->
+                    val on = !customActive && amountValue == selectedAmount
+                    chip.setTextColor(if (on) Color.WHITE else C.TEXT)
+                    chip.background = shape(if (on) C.ACCENT else C.SURFACE2, 10)
                 }
             }
-        }
-        renderChips()
-        dialogView.add(amountsGrid, top = 6)
 
-        val customEt = EditText(ctx).apply {
-            hint = "Nominal Lainnya (misal: 15000)"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            textSize = 13f
-            background = shape(C.SURFACE2, 10)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-        }
-        dialogView.add(customEt, top = 8)
+            fun paintWallets() {
+                walletChips.forEachIndexed { idx, card ->
+                    val on = idx == selectedWallet
+                    val color = wallets[idx].third
+                    card.background = if (on) shape(0xFFF0F9FF.toInt(), 12, color, 2)
+                    else shape(C.SURFACE, 12, C.LINE, 1)
+                }
+            }
 
-        dialogView.add(tv("Pilih e-Wallet:", 13f, C.TEXT, true), top = 12)
+            fun currentAmount(): Long = customAmount?.takeIf { it > 0 } ?: selectedAmount
 
-        var selectedWallet = 1
-        val wallets = listOf("GoPay", "DANA", "ShopeePay")
-        val walletRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+            fun refreshDonation() {
+                val amount = currentAmount()
+                amountTv.text = if (amount > 0) rupiah(amount) else "Rp —"
+                walletSummaryTv.text = "via ${wallets[selectedWallet].first} • a.n. MKA"
+                transferLabel.text = if (amount > 0) {
+                    "Donasi ${rupiah(amount)} via ${wallets[selectedWallet].first}"
+                } else {
+                    "Pilih nominal donasi"
+                }
+            }
 
-        fun renderWallets() {
-            walletRow.removeAllViews()
-            wallets.forEachIndexed { idx, wName ->
-                val isSel = idx == selectedWallet
-                val wChip = tv(wName, 12f, if (isSel) Color.WHITE else C.TEXT, true).apply {
-                    background = shape(if (isSel) 0xFF0284C7.toInt() else C.SURFACE2, 10)
-                    setPadding(dp(8), dp(10), dp(8), dp(10))
+            pad.add(tv("Pilih Nominal", 14f, C.TEXT, true), top = 18)
+            val amountGrid = GridLayout(this).apply {
+                columnCount = 4
+                useDefaultMargins = false
+            }
+            amounts.forEach { amountValue ->
+                val chip = tv(shortRupiah(amountValue), 11f, C.TEXT, true).apply {
                     gravity = Gravity.CENTER
+                    isClickable = true
+                }
+                chip.setOnClickListener {
+                    selectedAmount = amountValue
+                    customAmount = null
+                    formatting = true
+                    customEt.setText("")
+                    formatting = false
+                    paintAmounts()
+                    refreshDonation()
+                }
+                amountChips.add(amountValue to chip)
+                val lp = GridLayout.LayoutParams(
+                    GridLayout.spec(GridLayout.UNDEFINED, 1f),
+                    GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                ).apply {
+                    width = 0
+                    height = dp(42)
+                    setMargins(dp(3), dp(3), dp(3), dp(3))
+                }
+                amountGrid.addView(chip, lp)
+            }
+            pad.add(amountGrid, top = 8)
+
+            // Nominal kustom
+            val customRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = shape(C.SURFACE2, 12)
+                setPadding(dp(14), dp(2), dp(10), dp(2))
+            }
+            customRow.add(tv("Rp", 14f, C.MUTED, true), w = WRAP)
+            customRow.add(customEt, w = 0, weight = 1f)
+            pad.add(customRow, top = 8)
+
+            customEt.addTextChangedListener(object : TextWatcher {
+                override fun afterTextChanged(s: Editable?) {
+                    if (formatting) return
+                    val digits = s?.toString().orEmpty().filter { it.isDigit() }.take(9)
+                    formatting = true
+                    val formatted = if (digits.isEmpty()) "" else NumberFormat
+                        .getIntegerInstance(Locale("id", "ID")).format(digits.toLong())
+                    customEt.setText(formatted)
+                    customEt.setSelection(formatted.length)
+                    formatting = false
+                    customAmount = digits.toLongOrNull()?.takeIf { it > 0 }
+                    paintAmounts()
+                    refreshDonation()
+                }
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            })
+
+            pad.add(tv("Metode Donasi", 14f, C.TEXT, true), top = 16)
+            val walletRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            wallets.forEachIndexed { idx, wallet ->
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    setPadding(dp(8), dp(10), dp(8), dp(10))
                     isClickable = true
                     setOnClickListener {
                         selectedWallet = idx
-                        renderWallets()
+                        paintWallets()
+                        refreshDonation()
                     }
                 }
-                walletRow.add(wChip, w = 0, weight = 1f).also {
-                    if (idx > 0) (wChip.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+                card.add(TextView(this).apply {
+                    text = wallet.first.take(1)
+                    textSize = 15f
+                    setTextColor(Color.WHITE)
+                    typeface = Fonts.label(this@MainActivity)
+                    gravity = Gravity.CENTER
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(wallet.third)
+                    }
+                }, w = dp(30), h = dp(30))
+                card.add(tv(wallet.first, 11f, C.TEXT, true).apply { gravity = Gravity.CENTER }, top = 6)
+                walletChips.add(card)
+                walletRow.add(card, w = 0, weight = 1f).also {
+                    if (idx > 0) (card.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
                 }
             }
-        }
-        renderWallets()
-        dialogView.add(walletRow, top = 6)
+            pad.add(walletRow, top = 8)
 
-        val accountCard = card(12, 12).apply {
-            background = shape(0xFFF0F9FF.toInt(), 12, 0xFFBAE6FD.toInt(), 1)
-        }
-        val acRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val acCol = vbox()
-        acCol.add(tv("Nomor HP Donasi:", 11f, C.MUTED))
-        acCol.add(tv("081322544391", 16f, C.TEXT, true), top = 2)
-        acCol.add(tv("a.n. MKA", 12f, 0xFF0284C7.toInt(), true), top = 2)
-        acRow.add(acCol, w = 0, weight = 1f)
-
-        val copyBtn = tv("Salin No HP", 11f, Color.WHITE, true).apply {
-            background = shape(C.ACCENT, 8)
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            isClickable = true
-            setOnClickListener {
-                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("No HP Donasi", "081322544391"))
-                toast("Nomor 081322544391 (a.n. MKA) disalin!")
+            val accountCard = card(12, 12).apply {
+                background = shape(0xFFF0F9FF.toInt(), 12, 0xFFBAE6FD.toInt(), 1)
             }
-        }
-        acRow.add(copyBtn, w = WRAP)
-        accountCard.add(acRow)
-        dialogView.add(accountCard, top = 10)
+            val acRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val acCol = vbox()
+            acCol.add(tv("Nomor HP Donasi", 11f, C.MUTED))
+            acCol.add(tv(phone, 17f, C.TEXT, true), top = 2)
+            acCol.add(tv("a.n. MKA • GoPay / DANA / ShopeePay", 11f, C.SKY, true), top = 2)
+            acRow.add(acCol, w = 0, weight = 1f)
+            val copyBtn = tv("Salin", 11f, Color.WHITE, true).apply {
+                background = shape(C.ACCENT, 8)
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                isClickable = true
+                setOnClickListener {
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("No HP Donasi", phone))
+                    toast("Nomor $phone (a.n. MKA) disalin")
+                }
+            }
+            acRow.add(copyBtn, w = WRAP)
+            accountCard.add(acRow)
+            pad.add(accountCard, top = 12)
 
-        val transferBtn = btn("Transfer Sekarang via e-Wallet", true, C.ACCENT, R.drawable.ic_heart) {
-            val custom = customEt.text.toString().trim()
-            val finalAmount = if (custom.isNotBlank()) "Rp $custom" else selectedAmount
-            openEWallet(selectedWallet, "081322544391", finalAmount)
-        }
-        dialogView.add(transferBtn, top = 14)
+            // Tombol utama dinamis
+            val transferBtn = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                background = shape(C.ACCENT, 12)
+                minimumHeight = dp(50)
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                isClickable = true
+                isFocusable = true
+                add(icon(R.drawable.ic_heart, Color.WHITE, 20), w = dp(20), h = dp(20))
+            }
+            transferBtn.add(transferLabel, w = WRAP, side = 4)
+            transferBtn.setOnClickListener {
+                val amount = customAmount?.takeIf { it > 0 } ?: selectedAmount
+                if (amount < 1_000L) {
+                    toast("Minimal donasi Rp 1.000")
+                    return@setOnClickListener
+                }
+                openEWallet(selectedWallet, phone, rupiah(amount))
+            }
+            pad.add(transferBtn, top = 14)
 
-        AlertDialog.Builder(ctx)
-            .setView(dialogView)
-            .setNegativeButton("Tutup", null)
-            .show()
+            val secondaryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val qrBtn = btn("QR Info Donasi", false, C.ACCENT, R.drawable.ic_spark) {
+                val amount = customAmount?.takeIf { it > 0 } ?: selectedAmount
+                showDonationQr(phone, wallets[selectedWallet].first, amount)
+            }
+            val shareBtn = btn("Bagikan Info", false, C.ACCENT, R.drawable.ic_share) {
+                val amount = customAmount?.takeIf { it > 0 } ?: selectedAmount
+                val text = "Dukung Depup Office 💙\n\nDonasi via ${wallets[selectedWallet].first}: $phone (a.n. MKA)\nNominal: ${rupiah(amount)}\n\nAplikasi office & scanner PDF offline, tanpa iklan. Terima kasih!"
+                startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                }, "Bagikan info donasi"))
+            }
+            secondaryRow.add(qrBtn, w = 0, weight = 1f)
+            secondaryRow.add(shareBtn, w = 0, weight = 1f).also {
+                (shareBtn.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+            }
+            pad.add(secondaryRow, top = 10)
+
+            pad.add(
+                tv(
+                    "Donasi bersifat sukarela dan tidak membuka fitur tertentu. Semua pemrosesan tetap berjalan lokal di perangkat Anda.",
+                    11f, C.MUTED
+                ).apply {
+                    background = shape(C.SURFACE2, 10)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                }, top = 12
+            )
+
+            paintAmounts()
+            paintWallets()
+            refreshDonation()
+            body.add(pad)
+        }
+    }
+
+    private fun showDonationQr(phone: String, walletName: String, amount: Long) {
+        val content = "DONASI DEPUP OFFICE\n\n" +
+            "Metode: $walletName\n" +
+            "Nomor: $phone\n" +
+            "Atas nama: MKA\n" +
+            "Nominal: ${rupiah(amount)}\n\n" +
+            "Terima kasih telah mendukung aplikasi offline ini!"
+        val bmp = try {
+            QrManager.generateQr(content, 640, 640)
+        } catch (t: Throwable) {
+            fail(t)
+            return
+        }
+
+        sheet { body, dismiss ->
+            sheetHeader(
+                body, R.drawable.ic_spark, C.SKY, C.SKY_BG,
+                "QR Info Donasi", "Pindai untuk menyalin detail donasi", dismiss
+            )
+            val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
+
+            val qrCard = FrameLayout(this).apply {
+                background = shape(Color.WHITE, 16, C.LINE, 1)
+                setPadding(dp(14), dp(14), dp(14), dp(14))
+            }
+            qrCard.addView(ImageView(this).apply {
+                setImageBitmap(bmp)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }, FrameLayout.LayoutParams(MATCH, dp(260)))
+            pad.add(qrCard)
+
+            pad.add(tv("$walletName • $phone • a.n. MKA", 13f, C.TEXT, true).apply { gravity = Gravity.CENTER }, top = 12)
+            pad.add(tv("Nominal: ${rupiah(amount)}", 12f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 2)
+            pad.add(
+                tv("QR ini berisi informasi donasi, bukan QRIS pembayaran. Tunjukkan QR ke perangkat lain untuk menyalin detail donasi.", 11f, C.MUTED)
+                    .apply {
+                        gravity = Gravity.CENTER
+                        background = shape(C.SURFACE2, 10)
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                    }, top = 12
+            )
+
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.add(btn("Simpan ke Galeri", true, C.ACCENT, R.drawable.ic_download) {
+                saveQrBitmap(bmp, "Donasi_Depup")
+                toast("QR disimpan ke Galeri › Pictures/Depup Office")
+            }, w = 0, weight = 1f)
+            val shareQrBtn = btn("Bagikan", false, C.ACCENT, R.drawable.ic_share) {
+                shareQrBitmap(bmp, content)
+            }
+            row.add(shareQrBtn, w = 0, weight = 1f)
+            (shareQrBtn.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+            pad.add(row, top = 14)
+
+            body.add(pad)
+        }
+    }
+
+    private fun saveQrBitmap(bmp: Bitmap, base: String) {
+        try {
+            val cv = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "${base}_${System.currentTimeMillis()}.png")
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
+            }
+            val dst = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: throw java.io.IOException("Gagal menyimpan QR")
+            contentResolver.openOutputStream(dst)!!.use { o -> bmp.compress(Bitmap.CompressFormat.PNG, 100, o) }
+        } catch (t: Throwable) {
+            fail(t)
+        }
+    }
+
+    private fun shareQrBitmap(bmp: Bitmap, caption: String) {
+        try {
+            val f = File(cacheDir, "qr_donasi.png")
+            java.io.FileOutputStream(f).use { o -> bmp.compress(Bitmap.CompressFormat.PNG, 100, o) }
+            val uri = Files.uriFor(this, f)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, caption)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Bagikan QR donasi"))
+        } catch (t: Throwable) {
+            fail(t)
+        }
     }
 
     private fun showSearchDialog() {
-        val et = EditText(this).apply { hint = "Cari dokumen PDF, Word, Excel…" }
+        val et = EditText(this).apply {
+            hint = "Cari dokumen PDF, Word, Excel…"
+            setText(query)
+            setSelection(text.length)
+        }
         AlertDialog.Builder(this).setTitle("Pencarian Dokumen").setView(et)
             .setPositiveButton("Cari") { _, _ ->
                 query = et.text.toString().trim()
-                recentBox?.let { fillRecent(it, 8, query) }
+                select(0)
             }
             .setNegativeButton("Batal", null).show()
     }
@@ -610,14 +864,7 @@ class MainActivity : AppCompatActivity() {
             pm.setOnMenuItemClickListener { m ->
                 when (m.itemId) {
                     1 -> openIt()
-                    2 -> {
-                        val name = e[1].lowercase()
-                        if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".csv")) {
-                            startActivity(Intent(this, SheetEditorActivity::class.java))
-                        } else {
-                            startActivity(Intent(this, DocEditorActivity::class.java))
-                        }
-                    }
+                    2 -> editDoc(uriStr, e[1], e[2])
                     3 -> showRenameFileDialog(uriStr, e[1])
                     4 -> try { Files.share(this, Uri.parse(uriStr), e[2], false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
                     else -> { Recent.remove(this, uriStr); render() }
@@ -645,6 +892,25 @@ class MainActivity : AppCompatActivity() {
             box.add(card(16, 16).apply { add(tv(msg, 13f, C.MUTED)) })
         } else {
             list.forEachIndexed { i, e -> box.add(fileRow(e), top = if (i == 0) 0 else 10) }
+        }
+    }
+
+    /** Buka editor yang sesuai. PDF/gambar/format lain dibuka di pratinjau, bukan editor kosong. */
+    private fun editDoc(uriStr: String, name: String, mime: String) {
+        val n = name.lowercase()
+        when {
+            n.endsWith(".docx") || n.endsWith(".doc") ->
+                startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_URI, uriStr))
+            n.endsWith(".xlsx") || n.endsWith(".xls") || n.endsWith(".csv") ->
+                startActivity(Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_URI, uriStr))
+            else -> {
+                if (n.endsWith(".pdf") || mime.startsWith("image/") || mime.startsWith("text/")) {
+                    Files.open(this, Uri.parse(uriStr), mime)
+                } else {
+                    toast("Format ini belum bisa diedit. Membuka pratinjau…")
+                    Files.open(this, Uri.parse(uriStr), mime)
+                }
+            }
         }
     }
 
@@ -727,7 +993,7 @@ class MainActivity : AppCompatActivity() {
                     Files.open(this, u, Files.mimeOf(this, u))
                 }
             },
-            tile(R.drawable.ic_folder, C.INDIGO, C.INDIGO_BG, "Semua Berkas", "Buka File Manager sistem HP",
+            tile(R.drawable.ic_folder, C.INDIGO, C.INDIGO_BG, "Semua Berkas", "Pilih berkas apa pun dari perangkat",
                 "${outFiles().size} total", C.MUTED, C.SURFACE2) { openAny() }
         ), top = 12)
 
@@ -865,8 +1131,8 @@ class MainActivity : AppCompatActivity() {
         p.add(twoCols(
             tile(R.drawable.ic_spark, C.TEAL, C.TEAL_BG, "Pindai & Buat QR Code", "Pindai QR verifikasi atau buat QR kustom",
                 "Fitur Baru", C.TEAL, C.TEAL_BG) { showQrDialog() },
-            tile(R.drawable.ic_lock, C.INDIGO, C.INDIGO_BG, "Kunci Password", "Proteksi & buka proteksi sandi dokumen rahasia",
-                chev = true) { pickFile(arrayOf(PDF)) { lockPasswordFlow(it) } }
+            tile(R.drawable.ic_lock, C.INDIGO, C.INDIGO_BG, "Kunci & Enkripsi", "Masukkan dokumen rahasia ke Brankas AES-256",
+                chev = true) { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } }
         ), top = 12)
 
         p.add(sectionTitle("Pengaturan Format Dokumen", "3 Format"), top = 22)
@@ -897,52 +1163,220 @@ class MainActivity : AppCompatActivity() {
         p.add(tip, top = 20)
     }
 
+    /** Baris pilihan pengaturan: label, indeks terpilih, dan aksi saat dipilih. */
+    private fun settingsChips(
+        row: LinearLayout,
+        labels: List<String>,
+        selectedIndex: Int,
+        color: Int,
+        onPick: (Int) -> Unit
+    ) {
+        row.removeAllViews()
+        labels.forEachIndexed { i, label ->
+            val sel = i == selectedIndex
+            val v = tv(label, 12f, if (sel) Color.WHITE else C.TEXT, true).apply {
+                gravity = Gravity.CENTER
+                background = shape(if (sel) color else C.SURFACE2, 10)
+                setPadding(dp(6), dp(10), dp(6), dp(10))
+                isClickable = true
+                setOnClickListener { onPick(i) }
+            }
+            row.add(v, w = 0, h = dp(40), weight = 1f).also {
+                if (i > 0) (v.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+            }
+        }
+    }
+
     private fun showWordFormatSettingsSheet() = sheet { body, dismiss ->
         sheetHeader(body, R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Pengaturan Format Word", "Konfigurasi standar dokumen .docx", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
-        pad.add(tv("Ukuran Kertas Standar: ${DocSettings.pageSize(this)}", 13f, C.TEXT, true))
-        pad.add(tv("Spasi Baris Standar: ${DocSettings.lineSpacing(this)}x", 13f, C.TEXT, true), top = 8)
+        var size = DocSettings.pageSize(this)
+        var margin = DocSettings.marginMode(this)
+        var spacing = DocSettings.lineSpacing(this)
+        var font = DocSettings.fontFamily(this)
+
+        val sizes = listOf("A4", "Letter", "F4")
+        val margins = listOf("Normal", "Sempit", "Lebar")
+        val spacings = listOf(1.0f, 1.15f, 1.5f, 2.0f)
+        val fonts = listOf("Sans", "Times")
+
+        val sizeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val marginRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val spacingRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val fontRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        fun render() {
+            settingsChips(sizeRow, sizes, sizes.indexOf(size), C.ACCENT) {
+                size = sizes[it]; DocSettings.setPageSize(this, size); render()
+            }
+            settingsChips(marginRow, margins, margin, C.ACCENT) {
+                margin = it; DocSettings.setMarginMode(this, margin); render()
+            }
+            settingsChips(spacingRow, spacings.map { "${it}x" }, spacings.indexOf(spacing), C.TEAL) {
+                spacing = spacings[it]; DocSettings.setLineSpacing(this, spacing); render()
+            }
+            settingsChips(fontRow, fonts, font.coerceIn(0, fonts.lastIndex), C.INDIGO) {
+                font = it; DocSettings.setFontFamily(this, font); render()
+            }
+        }
+
+        pad.add(tv("Ukuran Kertas", 13f, C.TEXT, true))
+        pad.add(sizeRow, top = 8)
+        pad.add(tv("Batas Margin", 13f, C.TEXT, true), top = 14)
+        pad.add(marginRow, top = 8)
+        pad.add(tv("Spasi Baris", 13f, C.TEXT, true), top = 14)
+        pad.add(spacingRow, top = 8)
+        pad.add(tv("Jenis Huruf", 13f, C.TEXT, true), top = 14)
+        pad.add(fontRow, top = 8)
         pad.add(btn("Buka Editor Word Dokumen") {
             dismiss()
-            startActivity(Intent(this, DocEditorActivity::class.java))
+            startActivity(Intent(this, DocEditorActivity::class.java)
+                .putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_BLANK))
         }, top = 16)
         body.add(pad)
+        render()
     }
 
     private fun showExcelFormatSettingsSheet() = sheet { body, dismiss ->
         sheetHeader(body, R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Pengaturan Format Excel", "Konfigurasi standar spreadsheet", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
-        pad.add(tv("Mata Uang Standar: ${SheetSettings.currencySymbol(this)}", 13f, C.TEXT, true))
-        pad.add(tv("Garis Kisi (Gridlines): ${if (SheetSettings.showGridlines(this)) "Aktif" else "Nonaktif"}", 13f, C.TEXT, true), top = 8)
+        var grid = SheetSettings.showGridlines(this)
+        var currency = SheetSettings.currencySymbol(this)
+        var autoSum = SheetSettings.autoSum(this)
+
+        val gridOptions = listOf("Aktif", "Nonaktif")
+        val currencies = listOf("Rp", "\$", "€")
+        val autoOptions = listOf("Aktif", "Nonaktif")
+        val gridRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val currencyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val autoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        fun render() {
+            settingsChips(gridRow, gridOptions, if (grid) 0 else 1, C.TEAL) {
+                grid = it == 0; SheetSettings.setShowGridlines(this, grid); render()
+            }
+            settingsChips(currencyRow, currencies, currencies.indexOf(currency).coerceAtLeast(0), C.ACCENT) {
+                currency = currencies[it]; SheetSettings.setCurrencySymbol(this, currency); render()
+            }
+            settingsChips(autoRow, autoOptions, if (autoSum) 0 else 1, C.INDIGO) {
+                autoSum = it == 0; SheetSettings.setAutoSum(this, autoSum); render()
+            }
+        }
+
+        pad.add(tv("Garis Kisi (Gridlines)", 13f, C.TEXT, true))
+        pad.add(gridRow, top = 8)
+        pad.add(tv("Simbol Mata Uang", 13f, C.TEXT, true), top = 14)
+        pad.add(currencyRow, top = 8)
+        pad.add(tv("Jumlah Otomatis (AutoSum)", 13f, C.TEXT, true), top = 14)
+        pad.add(autoRow, top = 8)
         pad.add(btn("Buka Editor Spreadsheet Excel") {
             dismiss()
-            startActivity(Intent(this, SheetEditorActivity::class.java))
+            startActivity(Intent(this, SheetEditorActivity::class.java)
+                .putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_BLANK))
         }, top = 16)
         body.add(pad)
+        render()
     }
 
     private fun showPdfFormatSettingsSheet() = sheet { body, dismiss ->
         sheetHeader(body, R.drawable.ic_pdf, C.RED, C.RED_BG, "Pengaturan Format PDF", "Konfigurasi standar pembaca PDF", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
-        pad.add(tv("Preset Zoom Reader: ${(PdfSettings.defaultZoom(this) * 100).toInt()}%", 13f, C.TEXT, true))
-        pad.add(tv("Tema Tampilan: Mode Siang", 13f, C.TEXT, true), top = 8)
+        var zoom = PdfSettings.defaultZoom(this).coerceIn(1f, 2.5f)
+        var theme = PdfSettings.readerTheme(this)
+        var smooth = PdfSettings.smoothScroll(this)
+
+        val summary = tv("", 12f, C.MUTED)
+        val zoomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val themeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val smoothRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        fun option(label: String, selected: Boolean, color: Int, onClick: () -> Unit): TextView =
+            tv(label, 12f, if (selected) Color.WHITE else C.TEXT, true).apply {
+                gravity = Gravity.CENTER
+                background = shape(if (selected) color else C.SURFACE2, 10)
+                setPadding(dp(6), dp(10), dp(6), dp(10))
+                isClickable = true
+                setOnClickListener { onClick() }
+            }
+
+        fun render() {
+            val zooms = listOf(1.0f, 1.25f, 1.5f, 2.0f)
+            zoomRow.removeAllViews()
+            zooms.forEachIndexed { i, z ->
+                val v = option("${(z * 100).toInt()}%", zoom == z, C.ACCENT) {
+                    zoom = z
+                    PdfSettings.setDefaultZoom(this, z)
+                    render()
+                }
+                zoomRow.add(v, w = 0, h = dp(40), weight = 1f).also {
+                    if (i > 0) (v.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+                }
+            }
+
+            val themes = listOf("Siang", "Malam", "Sepia", "Eye-Care")
+            themeRow.removeAllViews()
+            themes.forEachIndexed { i, label ->
+                val v = option(label, theme == i, C.INDIGO) {
+                    theme = i
+                    PdfSettings.setReaderTheme(this, i)
+                    render()
+                }
+                themeRow.add(v, w = 0, h = dp(40), weight = 1f).also {
+                    if (i > 0) (v.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+                }
+            }
+
+            smoothRow.removeAllViews()
+            listOf(true to "Halus", false to "Langsung").forEachIndexed { i, (value, label) ->
+                val v = option(label, smooth == value, C.TEAL) {
+                    smooth = value
+                    PdfSettings.setSmoothScroll(this, value)
+                    render()
+                }
+                smoothRow.add(v, w = 0, h = dp(40), weight = 1f).also {
+                    if (i > 0) (v.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+                }
+            }
+
+            summary.text = "Zoom ${(zoom * 100).toInt()}% • Tema ${themes[theme.coerceIn(0, themes.lastIndex)]} • Gulir ${if (smooth) "Halus" else "Langsung"}"
+        }
+
+        pad.add(tv("Preset Zoom Reader", 13f, C.TEXT, true))
+        pad.add(zoomRow, top = 8)
+        pad.add(tv("Tema Tampilan", 13f, C.TEXT, true), top = 14)
+        pad.add(themeRow, top = 8)
+        pad.add(tv("Efek Gulir", 13f, C.TEXT, true), top = 14)
+        pad.add(smoothRow, top = 8)
+        pad.add(summary, top = 14)
+        pad.add(btn("Buka Pembaca PDF") {
+            dismiss()
+            pickFile(arrayOf(PDF)) { u -> remember(u); Files.open(this, u, PDF) }
+        }, top = 16)
         body.add(pad)
+        render()
     }
 
     private fun lockPasswordFlow(u: Uri) {
         val name = Files.nameOf(this, u)
-        val et = EditText(this).apply {
-            hint = "Masukkan kata sandi rahasia"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        if (!Vault.hasPin(this)) {
+            AlertDialog.Builder(this)
+                .setTitle("Brankas belum aktif")
+                .setMessage("Buat PIN Brankas dulu. Berkas akan dienkripsi AES-256 dan hanya bisa dibuka dengan PIN atau sidik jari.")
+                .setPositiveButton("Buat PIN") { _, _ -> startActivity(Intent(this, VaultActivity::class.java)) }
+                .setNegativeButton("Batal", null)
+                .show()
+            return
         }
         AlertDialog.Builder(this)
-            .setTitle("Kunci Password PDF")
-            .setMessage("Lindungi file '$name' dengan kata sandi rahasia.")
-            .setView(et)
-            .setPositiveButton("Kunci & Simpan") { _, _ ->
-                val pass = et.text.toString().trim()
-                if (pass.isBlank()) { toast("Kata sandi tidak boleh kosong"); return@setPositiveButton }
-                toast("File '$name' telah diproteksi kata sandi")
+            .setTitle("Kunci & Enkripsi Berkas")
+            .setMessage("'$name' akan dienkripsi AES-256 dan disimpan di Brankas. Berkas asli tetap aman di tempatnya. Buka lewat tab Simpan → Brankas Vault.")
+            .setPositiveButton("Enkripsi Sekarang") { _, _ ->
+                work("Mengenkripsi…", {
+                    contentResolver.openInputStream(u)?.use { Vault.encrypt(this, it, name) }
+                        ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+                }) { r ->
+                    r.onSuccess { toast("Berkas terkunci di Brankas") }.onFailure { fail(it) }
+                }
             }
             .setNegativeButton("Batal", null)
             .show()
@@ -1005,11 +1439,13 @@ class MainActivity : AppCompatActivity() {
         p.add(twoCols(
             tile(R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Buat Word", "Editor .docx interaktif",
                 "A4 & Format", C.ACCENT, C.BLUE_BG) {
-                startActivity(Intent(this, DocEditorActivity::class.java))
+                startActivity(Intent(this, DocEditorActivity::class.java)
+                    .putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_BLANK))
             },
             tile(R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Buat Excel", "Spreadsheet & Rumus",
                 "Rumus =SUM", C.TEAL, C.TEAL_BG) {
-                startActivity(Intent(this, SheetEditorActivity::class.java))
+                startActivity(Intent(this, SheetEditorActivity::class.java)
+                    .putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_BLANK))
             }
         ), top = 16)
 
@@ -1018,17 +1454,20 @@ class MainActivity : AppCompatActivity() {
         p.add(twoCols(
             tile(R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Surat Lamaran Kerja", "Template resmi HRD, siap edit & simpan .docx",
                 "Siap Kerja", C.ACCENT, C.BLUE_BG) {
-                startActivity(Intent(this, DocEditorActivity::class.java))
+                startActivity(Intent(this, DocEditorActivity::class.java)
+                    .putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_SURAT))
             },
             tile(R.drawable.ic_doc, C.INDIGO, C.INDIGO_BG, "CV / Resume Profesional", "Template Curriculum Vitae terstruktur",
                 "Karir", C.INDIGO, C.INDIGO_BG) {
-                startActivity(Intent(this, DocEditorActivity::class.java))
+                startActivity(Intent(this, DocEditorActivity::class.java)
+                    .putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_CV))
             }
         ), top = 12)
         p.add(twoCols(
             tile(R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Kuintansi / Invoice", "Format pembayaran resmi & nota penjualan",
                 "Keuangan", C.TEAL, C.TEAL_BG) {
-                startActivity(Intent(this, SheetEditorActivity::class.java))
+                startActivity(Intent(this, SheetEditorActivity::class.java)
+                    .putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_INVOICE))
             },
             tile(R.drawable.ic_sign, C.ACCENT, C.BLUE_BG, "Ekstrak TTD Transparan", "Ubah foto TTD basah kertas jadi PNG transparan",
                 "Fitur Baru", C.ACCENT, C.BLUE_BG) {
@@ -1176,11 +1615,7 @@ class MainActivity : AppCompatActivity() {
                             pm.setOnMenuItemClickListener { m ->
                                 when (m.itemId) {
                                     1 -> { dismiss(); Files.open(this@MainActivity, uri, mime) }
-                                    2 -> {
-                                        dismiss()
-                                        if (label == "XLSX") startActivity(Intent(this@MainActivity, SheetEditorActivity::class.java))
-                                        else startActivity(Intent(this@MainActivity, DocEditorActivity::class.java))
-                                    }
+                                    2 -> { dismiss(); editDoc(uri.toString(), f.name, mime) }
                                     3 -> { dismiss(); showRenameFileDialog(uri.toString(), f.name) }
                                     4 -> {
                                         confirm("Hapus Berkas", "Hapus '${f.name}' dari perangkat?", "Hapus") {
@@ -1357,6 +1792,33 @@ class MainActivity : AppCompatActivity() {
         ), 8), top = 12)
         p.add(ex, top = 16)
 
+        // Kartu donasi: pintu masuk yang jelas tanpa mengganggu fungsi utama.
+        val donate = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xFFFEF2F2.toInt(), 0xFFFFF7ED.toInt())
+            ).apply {
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), 0xFFFECACA.toInt())
+            }
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showDonationDialog() }
+        }
+        donate.add(iconBadge(R.drawable.ic_heart, 0xFFDC2626.toInt(), 0xFFFEE2E2.toInt(), 100, 22), w = dp(44), h = dp(44))
+        val dc = vbox()
+        dc.add(tv("Dukung Depup Office", 16f, C.TEXT, true))
+        dc.add(tv("Donasi sukarela • tetap offline, tanpa iklan & langganan", 11f, C.MUTED), top = 2)
+        donate.add(dc, w = 0, weight = 1f, side = 12)
+        donate.add(tv("Donasi", 11f, Color.WHITE, true).apply {
+            background = shape(0xFFDC2626.toInt(), 100)
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+        }, w = WRAP)
+        p.add(donate, top = 16)
+
         p.add(sectionTitle("Riwayat Berbagi Terakhir"), top = 22)
         val sh2 = Meta.shares(this).take(3)
         if (sh2.isEmpty()) {
@@ -1395,7 +1857,7 @@ class MainActivity : AppCompatActivity() {
     private fun showRecent() {
         val list = Recent.load(this)
         if (list.isEmpty()) { toast("Belum ada file terakhir"); return }
-        AlertDialog.Builder(this).setTitle("Recent Files")
+        AlertDialog.Builder(this).setTitle("Berkas Terakhir Dibuka")
             .setItems(list.map { it[1] }.toTypedArray()) { _, i ->
                 try { Files.open(this, Uri.parse(list[i][0]), list[i][2]) }
                 catch (e: Exception) { toast("File tidak lagi tersedia") }
@@ -1712,15 +2174,25 @@ class MainActivity : AppCompatActivity() {
         box.add(tv("Kecilkan ukuran file foto galeri agar cepat dikirim via WhatsApp / Email.", 12f, C.MUTED))
 
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val chips = mutableListOf<TextView>()
+        fun paintLevels() {
+            chips.forEachIndexed { i, chip ->
+                val on = i == sel
+                chip.setTextColor(if (on) Color.WHITE else C.TEXT)
+                chip.background = shape(if (on) C.TEAL else C.SURFACE2, 8)
+            }
+        }
         levels.forEachIndexed { i, name ->
-            val chip = tv(name, 10f, if (i == sel) Color.WHITE else C.TEXT, true).apply {
-                background = shape(if (i == sel) C.TEAL else C.SURFACE2, 8)
+            val chip = tv(name, 10f, C.TEXT, true).apply {
                 setPadding(dp(8), dp(8), dp(8), dp(8))
                 gravity = Gravity.CENTER
-                setOnClickListener { sel = i }
+                isClickable = true
+                setOnClickListener { sel = i; paintLevels() }
             }
+            chips.add(chip)
             row.add(chip, w = 0, weight = 1f).also { if (i > 0) (chip.layoutParams as LinearLayout.LayoutParams).marginStart = dp(4) }
         }
+        paintLevels()
         box.add(row, top = 8)
 
         AlertDialog.Builder(this)
@@ -1773,64 +2245,212 @@ class MainActivity : AppCompatActivity() {
 
     private fun showQrDialog() {
         sheet { body, dismiss ->
-            sheetHeader(body, R.drawable.ic_spark, C.TEAL, C.TEAL_BG, "Manager Kode QR / Barcode", "Pindai kode verifikasi atau buat Kode QR kustom", dismiss)
-            val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
+            sheetHeader(
+                body, R.drawable.ic_spark, C.TEAL, C.TEAL_BG,
+                "Kode QR & Barcode", "Pindai dari foto atau buat kode QR asli", dismiss
+            )
+            val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(18)) }
 
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row.add(btn("Pindai QR dari Foto", true, C.TEAL, R.drawable.ic_search) {
+            val scanCard = actionRow(
+                R.drawable.ic_search, "Pindai dari Foto / Galeri",
+                "Membaca QR, barcode produk, tiket, dan kode verifikasi",
+                C.TEAL, C.TEAL_BG
+            ) {
                 dismiss()
                 pickFile(arrayOf("image/*")) { uri ->
                     work("Membaca Kode QR / Barcode…", {
-                        val bmp = Pdf.decode(this, uri, 1200)
-                        val res = QrManager.scanBarcode(bmp)
+                        val bmp = Pdf.decode(this, uri, 1600)
+                        val results = QrManager.scanAll(bmp)
                         bmp.recycle()
-                        res
+                        results
                     }) { r ->
-                        r.onSuccess { text ->
-                            if (text.isBlank()) toast("Kode QR tidak terdeteksi pada gambar ini")
-                            else AlertDialog.Builder(this)
-                                .setTitle("Hasil Pindai Kode QR")
-                                .setMessage(text)
-                                .setPositiveButton("Salin Teks") { _, _ ->
-                                    val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("QR", text))
-                                    toast("Teks disalin")
-                                }
-                                .setNegativeButton("Tutup", null)
-                                .show()
-                        }.onFailure { fail(it) }
+                        r.onSuccess { results -> showQrScanResult(results) }.onFailure { fail(it) }
                     }
                 }
-            }, w = 0, weight = 1f)
+            }
+            pad.add(scanCard)
 
-            row.add(btn("Buat Kode QR", false, C.ACCENT, R.drawable.ic_spark) {
+            val makeCard = actionRow(
+                R.drawable.ic_spark, "Buat Kode QR Baru",
+                "Link, teks, nomor HP, atau informasi donasi",
+                C.ACCENT, C.BLUE_BG
+            ) {
                 dismiss()
-                val et = field("Masukkan Link / Teks / No HP untuk QR")
-                AlertDialog.Builder(this)
-                    .setTitle("Pembuat Kode QR")
-                    .setView(vbox(16).apply { add(et) })
-                    .setPositiveButton("Buat QR") { _, _ ->
-                        val input = et.text.toString().trim()
-                        if (input.isBlank()) { toast("Teks tidak boleh kosong"); return@setPositiveButton }
-                        val qrBmp = QrManager.generateQr(input)
+                showQrGenerator()
+            }
+            pad.add(makeCard, top = 10)
 
-                        val cv = ContentValues().apply {
-                            put(MediaStore.MediaColumns.DISPLAY_NAME, "QR_Code_${System.currentTimeMillis()}.png")
-                            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
-                        }
-                        val dst = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
-                        if (dst != null) {
-                            contentResolver.openOutputStream(dst)!!.use { o -> qrBmp.compress(Bitmap.CompressFormat.PNG, 100, o) }
-                            toast("✓ Kode QR dibuat & disimpan di Galeri › Pictures/Depup Office!")
-                        }
-                    }
-                    .setNegativeButton("Batal", null)
-                    .show()
-            }, w = 0, weight = 1f, side = 8)
-
-            pad.add(row)
+            pad.add(
+                tv(
+                    "Kode QR dibuat dengan standar ISO/IEC 18004 dan koreksi error tinggi, sehingga tetap terbaca walau sedikit tergores atau buram.",
+                    11f, C.MUTED
+                ).apply {
+                    background = shape(C.SURFACE2, 10)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                }, top = 14
+            )
             body.add(pad)
+        }
+    }
+
+    private fun showQrScanResult(results: List<QrResult>) {
+        if (results.isEmpty()) {
+            toast("Kode QR / barcode tidak terdeteksi. Coba foto yang lebih tajam dan terang.")
+            return
+        }
+        val main = results.first()
+        val allText = results.joinToString("\n\n") { "${it.format}:\n${it.text}" }
+
+        val box = vbox(14).apply { setPadding(dp(20), dp(8), dp(20), dp(8)) }
+        results.forEach { result ->
+            val c = card(12, 12)
+            c.add(pill(result.format, C.TEAL, C.TEAL_BG, 10f), w = WRAP)
+            c.add(TextView(this).apply {
+                text = result.text
+                textSize = 14f
+                setTextColor(C.TEXT)
+                typeface = Fonts.body(this@MainActivity)
+                setTextIsSelectable(true)
+            }, top = 8)
+            box.add(c, top = if (results.indexOf(result) == 0) 6 else 8)
+        }
+
+        val canOpen = main.text.startsWith("http://") || main.text.startsWith("https://") ||
+            main.text.startsWith("tel:") || main.text.startsWith("mailto:")
+        if (canOpen) {
+            box.add(btn("Buka Link", true, C.ACCENT, R.drawable.ic_cloud) {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(main.text)))
+                } catch (_: Exception) {
+                    toast("Link tidak dapat dibuka")
+                }
+            }, top = 12)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Hasil Pindai (${results.size} kode)")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Salin Semua") { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("QR", allText))
+                toast("Teks QR disalin")
+            }
+            .setNeutralButton("Bagikan") { _, _ ->
+                startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, allText)
+                }, "Bagikan hasil pindai"))
+            }
+            .setNegativeButton("Tutup", null)
+            .create()
+        dialog.show()
+    }
+
+    private fun showQrGenerator() {
+        sheet { body, dismiss ->
+            sheetHeader(
+                body, R.drawable.ic_spark, C.ACCENT, C.BLUE_BG,
+                "Pembuat Kode QR", "Pratinjau langsung • simpan PNG atau bagikan", dismiss
+            )
+            val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(18)) }
+
+            val previewCard = FrameLayout(this).apply {
+                background = shape(Color.WHITE, 16, C.LINE, 1)
+                setPadding(dp(18), dp(18), dp(18), dp(18))
+            }
+            val preview = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                setImageResource(R.drawable.ic_spark)
+                setColorFilter(0xFFCBD5E1.toInt())
+            }
+            previewCard.addView(preview, FrameLayout.LayoutParams(MATCH, dp(250)))
+            pad.add(previewCard)
+
+            val status = tv("Ketik sesuatu untuk melihat pratinjau kode QR.", 11f, C.MUTED).apply {
+                gravity = Gravity.CENTER
+            }
+            pad.add(status, top = 8)
+
+            val et = field("Masukkan link, teks, nomor HP, atau info donasi")
+            pad.add(et, top = 12)
+
+            var currentBitmap: Bitmap? = null
+
+            fun updatePreview() {
+                val text = et.text.toString().trim()
+                if (text.isEmpty()) {
+                    currentBitmap = null
+                    preview.setImageResource(R.drawable.ic_spark)
+                    preview.setColorFilter(0xFFCBD5E1.toInt())
+                    status.setTextColor(C.MUTED)
+                    status.text = "Ketik sesuatu untuk melihat pratinjau kode QR."
+                    return
+                }
+                if (QrManager.isTextTooLong(text)) {
+                    currentBitmap = null
+                    preview.setImageResource(R.drawable.ic_spark)
+                    preview.setColorFilter(C.RED)
+                    status.setTextColor(C.RED)
+                    status.text = "Teks terlalu panjang. Maksimal ±1.200 karakter untuk QR koreksi tinggi."
+                    return
+                }
+                try {
+                    val bmp = QrManager.generateQr(text, 640, 640)
+                    currentBitmap = bmp
+                    preview.clearColorFilter()
+                    preview.setImageBitmap(bmp)
+                    status.setTextColor(C.TEAL)
+                    status.text = "Kode QR siap dipindai • ${text.toByteArray(Charsets.UTF_8).size} byte"
+                } catch (_: Throwable) {
+                    currentBitmap = null
+                    preview.setImageResource(R.drawable.ic_spark)
+                    preview.setColorFilter(C.RED)
+                    status.setTextColor(C.RED)
+                    status.text = "Teks ini tidak dapat dijadikan kode QR."
+                }
+            }
+
+            et.addTextChangedListener(object : TextWatcher {
+                override fun afterTextChanged(s: Editable?) = updatePreview()
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            })
+
+            pad.add(
+                tv(
+                    "Tips: gunakan link lengkap (https://…) agar bisa langsung dibuka saat dipindai. Untuk teks panjang, kode QR akan lebih padat.",
+                    11f, C.MUTED
+                ).apply {
+                    background = shape(C.SURFACE2, 10)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                }, top = 10
+            )
+
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.add(btn("Simpan PNG", true, C.ACCENT, R.drawable.ic_download) {
+                val bmp = currentBitmap
+                if (bmp == null) {
+                    toast("Teks QR masih kosong atau terlalu panjang")
+                    return@btn
+                }
+                saveQrBitmap(bmp, "QR_Code")
+                toast("Kode QR disimpan di Galeri › Pictures/Depup Office")
+            }, w = 0, weight = 1f)
+            val shareBtn = btn("Bagikan", false, C.ACCENT, R.drawable.ic_share) {
+                val bmp = currentBitmap
+                val text = et.text.toString().trim()
+                if (bmp == null) {
+                    toast("Teks QR masih kosong atau terlalu panjang")
+                    return@btn
+                }
+                shareQrBitmap(bmp, text)
+            }
+            row.add(shareBtn, w = 0, weight = 1f)
+            (shareBtn.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+            pad.add(row, top = 12)
+
+            body.add(pad)
+            et.requestFocus()
         }
     }
 
@@ -1869,10 +2489,11 @@ class MainActivity : AppCompatActivity() {
         val pad = SignatureView(this)
         val page = field("Halaman (1-$pages)", number = true).apply { setText(pages.toString()) }
         val pos = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        val posIds = IntArray(3) { View.generateViewId() }
         listOf("Kiri", "Tengah", "Kanan").forEachIndexed { i, n ->
-            pos.addView(RadioButton(this).apply { text = n; id = 100 + i; setTextColor(C.TEXT) })
+            pos.addView(RadioButton(this).apply { text = n; id = posIds[i]; setTextColor(C.TEXT) })
         }
-        pos.check(102)
+        pos.check(posIds[2])
         val box = vbox(20)
         box.add(tv("Gambar tanda tangan di kotak putih", 13f, C.MUTED))
         box.add(pad, top = 8, h = dp(170))
@@ -1888,7 +2509,7 @@ class MainActivity : AppCompatActivity() {
             val n = page.text.toString().toIntOrNull()
             if (n == null || n < 1 || n > pages) { toast("Nomor halaman tidak valid"); return@setOnClickListener }
             val sig = pad.toBitmap() ?: run { toast("Tanda tangan masih kosong"); return@setOnClickListener }
-            val p = pos.checkedRadioButtonId - 100
+            val p = posIds.indexOf(pos.checkedRadioButtonId).coerceAtLeast(0)
             d.dismiss()
             val out = Files.newOut(this, "ttd", "pdf")
             work("Menempel tanda tangan…", { Pdf.sign(this, uri, sig, n, p, out) }) { r ->

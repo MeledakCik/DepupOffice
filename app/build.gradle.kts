@@ -11,8 +11,8 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.1.0"
     }
 
     signingConfigs {
@@ -116,4 +116,6 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
     implementation("com.google.android.gms:play-services-tasks:18.2.0")
+    // Encoder QR asli (ringan, murni Java) + fallback decoder foto.
+    implementation("com.google.zxing:core:3.5.3")
 }

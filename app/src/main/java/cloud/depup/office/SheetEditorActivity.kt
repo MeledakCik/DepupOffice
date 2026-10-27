@@ -1,25 +1,34 @@
 package cloud.depup.office
 
-import android.content.Context
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
+import java.text.NumberFormat
+import java.util.Locale
 
 class SheetCell(var valStr: String = "", var isBold: Boolean = false, var bgColor: Int = Color.WHITE)
 
 class SheetEditorActivity : AppCompatActivity() {
 
+    companion object {
+        const val EXTRA_URI = "uri"
+        const val EXTRA_TEMPLATE = "template"
+        const val TEMPLATE_INVOICE = "invoice"
+        const val TEMPLATE_PRESENSI = "presensi"
+        const val TEMPLATE_BLANK = "blank"
+    }
+
     private lateinit var sheetTitleEt: EditText
     private lateinit var formulaEt: EditText
-    private lateinit var activeCellPill: TextView
+    private lateinit var activeCellPill: android.widget.TextView
     private lateinit var gridBox: LinearLayout
 
     private var numCols = 4
@@ -28,11 +37,19 @@ class SheetEditorActivity : AppCompatActivity() {
 
     private var activeRow = 0
     private var activeCol = 0
+    private var updatingFormula = false
 
     private var currentGridlines = true
     private var currentCurrency = "Rp"
     private var currentSeparator = ","
     private var currentAutoSum = true
+
+    private var sourceName: String? = null
+    private val visitingCells = HashSet<String>()
+    private val numberFormat = NumberFormat.getNumberInstance(Locale("id", "ID")).apply {
+        maximumFractionDigits = 2
+        minimumFractionDigits = 0
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,15 +59,14 @@ class SheetEditorActivity : AppCompatActivity() {
         currentSeparator = SheetSettings.csvSeparator(this)
         currentAutoSum = SheetSettings.autoSum(this)
 
-        // Seed initial table matrix
-        seedDefaultMatrix()
+        val initialTitle = loadInitialMatrix()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xFFF1F5F9.toInt())
         }
 
-        root.add(topBar())
+        root.add(topBar(initialTitle))
         root.add(formulaBar())
         root.add(gridToolbar())
 
@@ -67,11 +83,93 @@ class SheetEditorActivity : AppCompatActivity() {
         root.add(gridScroll, w = MATCH, h = 0, weight = 1f)
         setContentView(root)
 
+        syncFormulaBar()
         renderGrid()
+    }
+
+    // ================= MUAT DATA =================
+
+    private fun loadInitialMatrix(): String {
+        val uriStr = intent.getStringExtra(EXTRA_URI)
+        val template = intent.getStringExtra(EXTRA_TEMPLATE)
+
+        if (uriStr != null) {
+            val uri = runCatching { Uri.parse(uriStr) }.getOrNull()
+            if (uri != null) {
+                sourceName = Files.baseName(Files.nameOf(this, uri))
+                val name = Files.nameOf(this, uri).lowercase()
+                val sheet = try {
+                    if (name.endsWith(".csv") || name.endsWith(".txt")) OfficeReader.readCsv(this, uri)
+                    else OfficeReader.readXlsx(this, uri)
+                } catch (_: Exception) {
+                    null
+                }
+                if (sheet != null && sheet.rows.isNotEmpty()) {
+                    fillMatrix(sheet.rows, sheet.boldRows)
+                    return sheet.name.ifBlank { sourceName ?: "Spreadsheet" }
+                }
+                toast("Isi spreadsheet tidak terbaca. Mulai dari tabel kosong.")
+            }
+        }
+
+        when (template) {
+            TEMPLATE_INVOICE -> {
+                matrix.clear()
+                matrix.add(mutableListOf(
+                    SheetCell("No Invoice", true), SheetCell("Klien", true),
+                    SheetCell("Jatuh Tempo", true), SheetCell("Total Tagihan", true)
+                ))
+                matrix.add(mutableListOf(SheetCell("INV-001"), SheetCell("PT Depup Tech"), SheetCell("28 Okt 2024"), SheetCell("15000000")))
+                matrix.add(mutableListOf(SheetCell("INV-002"), SheetCell("CV Jaya Abadi"), SheetCell("30 Okt 2024"), SheetCell("8500000")))
+                matrix.add(mutableListOf(SheetCell("TOTAL", true), SheetCell(""), SheetCell(""), SheetCell("=SUM(D2:D3)", true)))
+                numCols = 4
+                return "Invoice / Kuintansi"
+            }
+            TEMPLATE_PRESENSI -> {
+                matrix.clear()
+                matrix.add(mutableListOf(
+                    SheetCell("Nama Karyawan", true), SheetCell("Hadir", true),
+                    SheetCell("Izin", true), SheetCell("Status", true)
+                ))
+                matrix.add(mutableListOf(SheetCell("Budi Pratama"), SheetCell("22 Hari"), SheetCell("0"), SheetCell("Lengkap")))
+                matrix.add(mutableListOf(SheetCell("Siti Aminah"), SheetCell("21 Hari"), SheetCell("1"), SheetCell("Izin Sakit")))
+                numCols = 4
+                return "Presensi & Daftar Hadir"
+            }
+            TEMPLATE_BLANK -> {
+                matrix.clear()
+                matrix.add(mutableListOf(SheetCell(""), SheetCell(""), SheetCell(""), SheetCell("")))
+                numCols = 4
+                return "Spreadsheet Baru"
+            }
+        }
+
+        seedDefaultMatrix()
+        return "Laporan_Keuangan_Depup"
+    }
+
+    private fun fillMatrix(rows: List<List<String>>, boldRows: Set<Int>) {
+        matrix.clear()
+        val maxCols = rows.maxOfOrNull { it.size } ?: 0
+        numCols = maxCols.coerceIn(2, 8)
+        rows.take(200).forEachIndexed { r, row ->
+            val list = MutableList(numCols) { c ->
+                SheetCell(
+                    row.getOrNull(c).orEmpty(),
+                    isBold = r in boldRows,
+                    bgColor = if (r in boldRows) 0xFFE2E8F0.toInt() else Color.WHITE
+                )
+            }
+            matrix.add(list)
+        }
+        if (matrix.isEmpty()) {
+            matrix.add(MutableList(numCols) { SheetCell("") })
+        }
     }
 
     private fun seedDefaultMatrix() {
         matrix.clear()
+        numCols = 4
         val defaultRows = listOf(
             listOf("Produk/Item", "Qty", "Harga Satuan", "Total (Rp)"),
             listOf("Depup Cloud Pro", "12", "120000", "=B2*C2"),
@@ -84,13 +182,25 @@ class SheetEditorActivity : AppCompatActivity() {
         defaultRows.forEachIndexed { rIdx, row ->
             val rList = mutableListOf<SheetCell>()
             row.forEach { cellVal ->
-                rList.add(SheetCell(cellVal, isBold = rIdx == 0 || rIdx == 5, bgColor = if (rIdx == 0) 0xFFE2E8F0.toInt() else (if (rIdx == 5) 0xFFE0F2FE.toInt() else Color.WHITE)))
+                rList.add(
+                    SheetCell(
+                        cellVal,
+                        isBold = rIdx == 0 || rIdx == 5,
+                        bgColor = when (rIdx) {
+                            0 -> 0xFFE2E8F0.toInt()
+                            5 -> 0xFFE0F2FE.toInt()
+                            else -> Color.WHITE
+                        }
+                    )
+                )
             }
             matrix.add(rList)
         }
     }
 
-    private fun topBar(): View {
+    // ================= UI =================
+
+    private fun topBar(initialTitle: String): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -105,7 +215,7 @@ class SheetEditorActivity : AppCompatActivity() {
         }, w = dp(40), h = dp(40))
 
         sheetTitleEt = field("Nama Spreadsheet Excel", multi = false).apply {
-            setText("Laporan_Keuangan_Depup")
+            setText(initialTitle)
             textSize = 15f
             typeface = Fonts.head(this@SheetEditorActivity)
             setTextColor(C.TEXT)
@@ -119,11 +229,10 @@ class SheetEditorActivity : AppCompatActivity() {
         }
         bar.add(tmplBtn, w = WRAP, side = 4)
 
-        val settingsBtn = icon(R.drawable.ic_tune, C.TEAL, 22).apply {
+        bar.add(icon(R.drawable.ic_tune, C.TEAL, 22).apply {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             setOnClickListener { showExcelSettingsSheet() }
-        }
-        bar.add(settingsBtn, w = dp(40), h = dp(40))
+        }, w = dp(40), h = dp(40))
 
         val saveBtn = tv("Ekspor", 13f, Color.WHITE, true).apply {
             background = shape(C.TEAL, 8)
@@ -157,10 +266,12 @@ class SheetEditorActivity : AppCompatActivity() {
             setPadding(dp(10), dp(6), dp(10), dp(6))
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun afterTextChanged(s: android.text.Editable?) {
+                    if (updatingFormula) return
                     val m = this@SheetEditorActivity.matrix
-                    val r = this@SheetEditorActivity.activeRow
-                    val c = this@SheetEditorActivity.activeCol
-                    if (r in 0 until m.size && c in 0 until m[r].size) {
+                    val r = activeRow
+                    val c = activeCol
+                    if (r in m.indices && c in 0 until numCols) {
+                        ensureCell(r, c)
                         m[r][c].valStr = s?.toString().orEmpty()
                         renderGrid()
                     }
@@ -196,39 +307,74 @@ class SheetEditorActivity : AppCompatActivity() {
         }
 
         toolBtn("+ Baris") {
-            val rList = MutableList(numCols) { SheetCell("") }
-            matrix.add(rList)
+            matrix.add(MutableList(numCols) { SheetCell("") })
+            activeRow = matrix.size - 1
+            activeCol = activeCol.coerceIn(0, numCols - 1)
+            syncFormulaBar()
             renderGrid()
         }
 
         toolBtn("- Baris") {
-            if (matrix.size > 1) { matrix.removeAt(matrix.size - 1); renderGrid() }
+            if (matrix.size > 1) {
+                matrix.removeAt(matrix.size - 1)
+                activeRow = activeRow.coerceIn(0, matrix.size - 1)
+                syncFormulaBar()
+                renderGrid()
+            } else toast("Minimal 1 baris")
         }
 
-        toolBtn("+ Rumus =SUM") {
-            if (activeRow < matrix.size && activeCol < matrix[activeRow].size) {
-                matrix[activeRow][activeCol].valStr = "=SUM(D2:D5)"
-                formulaEt.setText("=SUM(D2:D5)")
+        toolBtn("+ Kolom") {
+            if (numCols < colNames.size) {
+                numCols++
+                matrix.forEachIndexed { r, cells ->
+                    while (cells.size < numCols) cells.add(SheetCell("", r == 0))
+                }
                 renderGrid()
-            }
+            } else toast("Maksimal ${colNames.size} kolom")
+        }
+
+        toolBtn("- Kolom") {
+            if (numCols > 2) {
+                numCols--
+                matrix.forEach { if (it.size > numCols) it.subList(numCols, it.size).clear() }
+                activeCol = activeCol.coerceIn(0, numCols - 1)
+                syncFormulaBar()
+                renderGrid()
+            } else toast("Minimal 2 kolom")
+        }
+
+        toolBtn("=SUM") {
+            val colName = colNames[activeCol]
+            val start = (activeRow + 1).coerceAtLeast(1)
+            val end = matrix.size
+            if (end > start) {
+                val formula = "=SUM($colName$start:$colName$end)"
+                ensureCell(activeRow, activeCol)
+                matrix[activeRow][activeCol].valStr = formula
+                syncFormulaBar()
+                renderGrid()
+            } else toast("Tambahkan baris angka terlebih dahulu")
         }
 
         toolBtn("Bold Sel") {
-            if (activeRow < matrix.size && activeCol < matrix[activeRow].size) {
+            if (activeRow in matrix.indices) {
+                ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].isBold = !matrix[activeRow][activeCol].isBold
                 renderGrid()
             }
         }
 
         toolBtn("Warna Biru") {
-            if (activeRow < matrix.size && activeCol < matrix[activeRow].size) {
+            if (activeRow in matrix.indices) {
+                ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].bgColor = 0xFFE0F2FE.toInt()
                 renderGrid()
             }
         }
 
         toolBtn("Warna Putih") {
-            if (activeRow < matrix.size && activeCol < matrix[activeRow].size) {
+            if (activeRow in matrix.indices) {
+                ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].bgColor = Color.WHITE
                 renderGrid()
             }
@@ -239,34 +385,281 @@ class SheetEditorActivity : AppCompatActivity() {
         return bar
     }
 
-    private fun evalCell(rIdx: Int, cIdx: Int): String {
-        val raw = matrix.getOrNull(rIdx)?.getOrNull(cIdx)?.valStr.orEmpty().trim()
-        if (!raw.startsWith("=")) return raw
-        val expr = raw.substring(1).uppercase()
-        return when {
-            expr.startsWith("SUM(") -> {
-                var sum = 0.0
-                matrix.drop(1).forEach { row ->
-                    val v = row.getOrNull(cIdx)?.valStr?.toDoubleOrNull() ?: 0.0
-                    sum += v
-                }
-                if (sum > 0) "$currentCurrency ${Files.fmtSize(sum.toLong()).replace(" B", "")}" else "102.600.000"
-            }
-            expr.contains("*") -> {
-                val p = expr.split("*")
-                val a = p.getOrNull(0)?.toDoubleOrNull() ?: 12.0
-                val b = p.getOrNull(1)?.toDoubleOrNull() ?: 120000.0
-                (a * b).toLong().toString()
-            }
-            else -> raw
+    private fun ensureCell(r: Int, c: Int) {
+        if (r !in matrix.indices) return
+        while (matrix[r].size <= c) matrix[r].add(SheetCell(""))
+    }
+
+    private fun syncFormulaBar() {
+        val raw = matrix.getOrNull(activeRow)?.getOrNull(activeCol)?.valStr.orEmpty()
+        updatingFormula = true
+        formulaEt.setText(raw)
+        formulaEt.setSelection(formulaEt.text.length)
+        updatingFormula = false
+        activeCellPill.text = "${colNames.getOrElse(activeCol) { "C${activeCol + 1}" }}${activeRow + 1}"
+    }
+
+    // ================= RUMUS =================
+
+    /** Nilai numerik mentah sebuah sel (rumus dievaluasi rekursif, aman dari siklus). */
+    private fun cellNumber(r: Int, c: Int): Double? {
+        val raw = matrix.getOrNull(r)?.getOrNull(c)?.valStr?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        if (!raw.startsWith("=")) return parseNumber(raw)
+
+        val key = "$r:$c"
+        if (!visitingCells.add(key)) return 0.0
+        return try {
+            val value = FormulaParser(raw.substring(1), r, c).parse()
+            if (value.isNaN() || value.isInfinite()) null else value
+        } catch (_: Exception) {
+            null
+        } finally {
+            visitingCells.remove(key)
         }
     }
 
+    private fun parseNumber(raw: String): Double? {
+        var s = raw.trim()
+            .replace(currentCurrency, "", ignoreCase = true)
+            .replace("Rp", "", ignoreCase = true)
+            .replace("$", "")
+            .replace("€", "")
+            .replace(" ", "")
+        if (s.isEmpty()) return null
+        if (s.none { it.isDigit() }) return null
+        if (!s.matches(Regex("^[+\\-0-9.,]+$"))) return null
+        // Nomor HP / kode berawalan nol bukan angka agar nol tidak hilang dan tidak ikut di-SUM.
+        if (s.length > 1 && s.startsWith("0") && !s.startsWith("0.") && !s.startsWith("0,")) return null
+        val hasDot = s.contains('.')
+        val hasComma = s.contains(',')
+        if (hasDot && hasComma) {
+            if (s.lastIndexOf(',') > s.lastIndexOf('.')) s = s.replace(".", "").replace(',', '.')
+            else s = s.replace(",", "")
+        } else if (hasComma) {
+            val decimals = s.substringAfterLast(',').length
+            s = if (decimals in 1..2 && s.count { it == ',' } == 1) s.replace(',', '.')
+            else s.replace(",", "")
+        } else if (hasDot) {
+            val decimals = s.substringAfterLast('.').length
+            val groups = s.count { it == '.' }
+            s = if (groups == 1 && decimals != 3) s else s.replace(".", "")
+        }
+        return s.toDoubleOrNull()
+    }
+
+    private fun displayValue(r: Int, c: Int): String {
+        val raw = matrix.getOrNull(r)?.getOrNull(c)?.valStr.orEmpty()
+        if (!raw.trim().startsWith("=")) return raw
+        val value = cellNumber(r, c) ?: return "#ERROR!"
+        return numberFormat.format(value)
+    }
+
+    private inner class FormulaParser(
+        private val src: String,
+        private val baseRow: Int,
+        private val baseCol: Int
+    ) {
+        private var pos = 0
+
+        fun parse(): Double {
+            val v = expr()
+            skipSpace()
+            if (pos < src.length) throw IllegalArgumentException("Sisa ekspresi: ${src.substring(pos)}")
+            return scalar(v)
+        }
+
+        private fun expr(): Any {
+            var value = term()
+            while (true) {
+                skipSpace()
+                if (pos >= src.length) break
+                when (src[pos]) {
+                    '+' -> { pos++; value = scalar(value) + scalar(term()) }
+                    '-' -> { pos++; value = scalar(value) - scalar(term()) }
+                    else -> return value
+                }
+            }
+            return value
+        }
+
+        private fun term(): Any {
+            var value = power()
+            while (true) {
+                skipSpace()
+                if (pos >= src.length) break
+                when (src[pos]) {
+                    '*' -> { pos++; value = scalar(value) * scalar(power()) }
+                    '/' -> {
+                        pos++
+                        val divisor = scalar(power())
+                        value = if (divisor == 0.0) Double.NaN else scalar(value) / divisor
+                    }
+                    else -> return value
+                }
+            }
+            return value
+        }
+
+        private fun power(): Any {
+            var value = unary()
+            skipSpace()
+            if (pos < src.length && src[pos] == '^') {
+                pos++
+                value = Math.pow(scalar(value), scalar(power()))
+            }
+            return value
+        }
+
+        private fun unary(): Any {
+            skipSpace()
+            if (pos < src.length) {
+                when (src[pos]) {
+                    '-' -> { pos++; return -scalar(unary()) }
+                    '+' -> { pos++; return unary() }
+                }
+            }
+            return primary()
+        }
+
+        private fun primary(): Any {
+            skipSpace()
+            if (pos >= src.length) throw IllegalArgumentException("Ekspresi kosong")
+            val ch = src[pos]
+            if (ch == '(') {
+                pos++
+                val v = expr()
+                skipSpace()
+                if (pos < src.length && src[pos] == ')') pos++
+                return v
+            }
+            if (ch.isDigit() || ch == '.') return readNumber()
+            if (ch == '$') { pos++; return primary() }
+            if (ch.isLetter()) return readNameOrCell()
+            throw IllegalArgumentException("Karakter tak dikenal: $ch")
+        }
+
+        private fun readNumber(): Double {
+            val start = pos
+            while (pos < src.length && (src[pos].isDigit() || src[pos] == '.')) pos++
+            return src.substring(start, pos).toDoubleOrNull()
+                ?: throw IllegalArgumentException("Angka tidak valid")
+        }
+
+        private fun readNameOrCell(): Any {
+            val start = pos
+            while (pos < src.length && src[pos].isLetter()) pos++
+            val name = src.substring(start, pos).uppercase()
+
+            // Referensi sel: huruf + angka.
+            val digitsStart = pos
+            while (pos < src.length && src[pos].isDigit()) pos++
+            if (pos > digitsStart) {
+                val rowIdx = (src.substring(digitsStart, pos).toIntOrNull() ?: 1) - 1
+                val colIdx = columnIndex(name)
+                skipSpace()
+                if (pos < src.length && src[pos] == ':') {
+                    pos++
+                    val end = readCellReference() ?: return 0.0
+                    return rangeValues(rowIdx, colIdx, end.first, end.second)
+                }
+                return cellNumber(rowIdx, colIdx) ?: 0.0
+            }
+
+            skipSpace()
+            if (pos >= src.length || src[pos] != '(') return 0.0
+            pos++
+            val args = ArrayList<Any>()
+            skipSpace()
+            if (pos < src.length && src[pos] == ')') {
+                pos++
+            } else {
+                while (true) {
+                    args.add(expr())
+                    skipSpace()
+                    if (pos < src.length && src[pos] == ',') { pos++; continue }
+                    if (pos < src.length && src[pos] == ')') { pos++; break }
+                    throw IllegalArgumentException("Fungsi $name tidak valid")
+                }
+            }
+            return applyFunction(name, args)
+        }
+
+        private fun readCellReference(): Pair<Int, Int>? {
+            skipSpace()
+            val start = pos
+            while (pos < src.length && src[pos].isLetter()) pos++
+            val letters = src.substring(start, pos)
+            val digitsStart = pos
+            while (pos < src.length && src[pos].isDigit()) pos++
+            if (letters.isEmpty() || pos == digitsStart) return null
+            val row = (src.substring(digitsStart, pos).toIntOrNull() ?: 1) - 1
+            return row to columnIndex(letters)
+        }
+
+        private fun columnIndex(letters: String): Int {
+            var n = 0
+            for (ch in letters) n = n * 26 + (ch.uppercaseChar() - 'A' + 1)
+            return (n - 1).coerceAtLeast(0)
+        }
+
+        private fun rangeValues(r1: Int, c1: Int, r2: Int, c2: Int): List<Double> {
+            val top = minOf(r1, r2)
+            val bottom = maxOf(r1, r2)
+            val left = minOf(c1, c2)
+            val right = maxOf(c1, c2)
+            val out = ArrayList<Double>()
+            for (r in top..bottom) {
+                for (c in left..right) {
+                    cellNumber(r, c)?.let { out.add(it) }
+                }
+            }
+            return out
+        }
+
+        private fun applyFunction(name: String, args: List<Any>): Double {
+            val values = ArrayList<Double>()
+            args.forEach { arg ->
+                if (arg is List<*>) arg.forEach { item -> if (item is Double) values.add(item) }
+                else if (arg is Double) values.add(arg)
+            }
+            return when (name) {
+                "SUM" -> values.sum()
+                "AVERAGE", "AVG" -> if (values.isEmpty()) 0.0 else values.sum() / values.size
+                "MIN" -> values.minOrNull() ?: 0.0
+                "MAX" -> values.maxOrNull() ?: 0.0
+                "COUNT" -> values.size.toDouble()
+                "ABS" -> kotlin.math.abs(values.firstOrNull() ?: 0.0)
+                "ROUND" -> {
+                    val v = values.getOrNull(0) ?: 0.0
+                    val digits = (values.getOrNull(1) ?: 0.0).toInt()
+                    val factor = Math.pow(10.0, digits.toDouble())
+                    Math.round(v * factor) / factor
+                }
+                "INT" -> kotlin.math.floor(values.firstOrNull() ?: 0.0)
+                else -> throw IllegalArgumentException("Fungsi $name belum didukung")
+            }
+        }
+
+        private fun scalar(v: Any): Double = when (v) {
+            is Double -> v
+            is List<*> -> (v.firstOrNull() as? Double) ?: 0.0
+            else -> 0.0
+        }
+
+        private fun skipSpace() {
+            while (pos < src.length && src[pos].isWhitespace()) pos++
+        }
+    }
+
+    // ================= TAMPILAN GRID =================
+
     private fun renderGrid() {
         gridBox.removeAllViews()
-        val cardGrid = card(8, 12).apply { background = shape(C.SURFACE, 12, if (currentGridlines) C.LINE else Color.TRANSPARENT, 1) }
+        val cardGrid = card(8, 12).apply {
+            background = shape(C.SURFACE, 12, if (currentGridlines) C.LINE else Color.TRANSPARENT, 1)
+        }
 
-        // Header Row (#, A, B, C, D)
         val colHead = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = shape(0xFFE2E8F0.toInt(), 6)
@@ -290,11 +683,16 @@ class SheetEditorActivity : AppCompatActivity() {
             for (cIdx in 0 until numCols) {
                 val cell = row.getOrElse(cIdx) { SheetCell("") }
                 val isActive = rIdx == activeRow && cIdx == activeCol
-                val evaluated = evalCell(rIdx, cIdx)
+                val evaluated = displayValue(rIdx, cIdx)
 
                 val cellTv = tv(evaluated.ifBlank { "-" }, 12f, if (isActive) C.TEAL else C.TEXT, cell.isBold || isActive).apply {
                     gravity = Gravity.CENTER
-                    background = shape(if (isActive) 0xFFCCFBF1.toInt() else cell.bgColor, 6, if (isActive) C.TEAL else (if (currentGridlines) C.LINE else Color.TRANSPARENT), 1)
+                    background = shape(
+                        if (isActive) 0xFFCCFBF1.toInt() else cell.bgColor,
+                        6,
+                        if (isActive) C.TEAL else (if (currentGridlines) C.LINE else Color.TRANSPARENT),
+                        1
+                    )
                     setPadding(dp(4), dp(6), dp(4), dp(6))
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
@@ -302,8 +700,7 @@ class SheetEditorActivity : AppCompatActivity() {
                     setOnClickListener {
                         activeRow = rIdx
                         activeCol = cIdx
-                        activeCellPill.text = "${colNames.getOrElse(cIdx) { "C" }}${rIdx + 1}"
-                        formulaEt.setText(cell.valStr)
+                        syncFormulaBar()
                         renderGrid()
                     }
                 }
@@ -323,21 +720,27 @@ class SheetEditorActivity : AppCompatActivity() {
                 1 -> {
                     matrix.clear()
                     matrix.add(mutableListOf(SheetCell("No Invoice", true), SheetCell("Klien", true), SheetCell("Jatuh Tempo", true), SheetCell("Total Tagihan", true)))
-                    matrix.add(mutableListOf(SheetCell("INV-001"), SheetCell("PT Depup Tech"), SheetCell("28 Okt 2024"), SheetCell("15.000.000")))
-                    matrix.add(mutableListOf(SheetCell("INV-002"), SheetCell("CV Jaya Abadi"), SheetCell("30 Okt 2024"), SheetCell("8.500.000")))
+                    matrix.add(mutableListOf(SheetCell("INV-001"), SheetCell("PT Depup Tech"), SheetCell("28 Okt 2024"), SheetCell("15000000")))
+                    matrix.add(mutableListOf(SheetCell("INV-002"), SheetCell("CV Jaya Abadi"), SheetCell("30 Okt 2024"), SheetCell("8500000")))
+                    matrix.add(mutableListOf(SheetCell("TOTAL", true), SheetCell(""), SheetCell(""), SheetCell("=SUM(D2:D3)", true)))
+                    numCols = 4
                 }
                 2 -> {
                     matrix.clear()
                     matrix.add(mutableListOf(SheetCell("Nama Karyawan", true), SheetCell("Hadir", true), SheetCell("Izin", true), SheetCell("Status", true)))
                     matrix.add(mutableListOf(SheetCell("Budi Pratama"), SheetCell("22 Hari"), SheetCell("0"), SheetCell("Lengkap")))
                     matrix.add(mutableListOf(SheetCell("Siti Aminah"), SheetCell("21 Hari"), SheetCell("1"), SheetCell("Izin Sakit")))
+                    numCols = 4
                 }
                 else -> {
                     matrix.clear()
-                    matrix.add(mutableListOf(SheetCell("A1"), SheetCell("B1"), SheetCell("C1"), SheetCell("D1")))
                     matrix.add(mutableListOf(SheetCell(""), SheetCell(""), SheetCell(""), SheetCell("")))
+                    numCols = 4
                 }
             }
+            activeRow = 0
+            activeCol = 0
+            syncFormulaBar()
             renderGrid()
         }.setNegativeButton("Batal", null).show()
     }
@@ -389,40 +792,45 @@ class SheetEditorActivity : AppCompatActivity() {
         body.add(pad)
     }
 
+    // ================= EKSPOR =================
+
     private fun saveSpreadsheet() {
         val title = sheetTitleEt.text.toString().trim().ifBlank { "Spreadsheet_Excel" }
-        val defaultName = Files.baseName(title)
+        val defaultName = sourceName ?: Files.baseName(title)
 
         saveSheet(
-            "Ekspor Spreadsheet", "Pilih format file hasil ekspor", defaultName, null, 0,
-            "Ekspor Sekarang"
+            "Ekspor Spreadsheet", "File Excel (.xlsx) asli + salinan PDF siap cetak", defaultName, null, 0,
+            "Ekspor Sekarang", ext = "xlsx"
         ) { cleanName, _ ->
-            val csvFile = Files.namedOut(this, cleanName, "csv")
+            val xlsxFile = Files.namedOut(this, cleanName, "xlsx")
             val pdfFile = Files.namedOut(this, cleanName, "pdf")
 
-            work("Ekspor Spreadsheet Excel…", {
-                val csvContent = matrix.joinToString("\n") { row ->
-                    row.map { it.valStr.replace(currentSeparator, " ") }.joinToString(currentSeparator)
+            work("Mengekspor Spreadsheet Excel…", {
+                val exportRows = matrix.mapIndexed { r, _ ->
+                    (0 until numCols).map { c -> displayValue(r, c) }
                 }
-                csvFile.writeText(csvContent)
+                val boldRows = matrix.indices
+                    .filter { r -> matrix[r].any { it.isBold } }
+                    .toSet()
+                XlsxWriter.write(xlsxFile, title, exportRows, boldRows, numCols)
 
-                val pdfText = "SURAT & LAPORAN SPREADSHEET EXCEL\nJudul: $title\n\n" +
-                    matrix.joinToString("\n") { row -> row.joinToString(" | ") { it.valStr } }
+                val pdfText = "LAPORAN SPREADSHEET EXCEL\nJudul: $title\n\n" +
+                    exportRows.joinToString("\n") { row -> row.joinToString(" | ") }
                 Pdf.text(pdfText, pdfFile)
             }) { res ->
                 res.onSuccess {
-                    showResult("Spreadsheet Berhasil Diekspor", csvFile, XLSX)
+                    showResult("Spreadsheet Berhasil Diekspor", xlsxFile, XLSX, "PDF juga dibuat: ${pdfFile.name}")
                 }.onFailure { fail(it) }
             }
         }
     }
 
-    private fun showResult(title: String, file: File, mime: String) {
+    private fun showResult(title: String, file: File, mime: String, extra: String = "") {
         val uri = Files.uriFor(this, file)
         Recent.add(this, uri, file.name, mime)
         Meta.setLastJob(this, title, file)
         resultSheet(
-            title, "${file.name} • ${Files.fmtSize(file.length())}", "", "Buka Dokumen",
+            title, "${file.name} • ${Files.fmtSize(file.length())}", extra, "Buka Dokumen",
             { Files.open(this, uri, mime) },
             listOf(
                 SheetAction(R.drawable.ic_download, "Simpan ke Unduhan") {

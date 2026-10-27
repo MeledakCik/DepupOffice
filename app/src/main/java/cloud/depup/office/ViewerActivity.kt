@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.pdf.PdfRenderer
 import android.os.Bundle
@@ -122,6 +123,9 @@ class ViewerActivity : AppCompatActivity() {
         val name = Files.nameOf(this, uri)
         val mime = intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
         mimeStr = mime
+        paperTheme = PdfSettings.readerTheme(this)
+        night = paperTheme == 1
+        zoom = PdfSettings.defaultZoom(this).coerceIn(1f, 2.5f)
 
         baseW = resources.displayMetrics.widthPixels
         uriStr = uri.toString()
@@ -357,107 +361,166 @@ class ViewerActivity : AppCompatActivity() {
                     background = shape(C.TEAL, 8)
                     setPadding(dp(10), dp(7), dp(10), dp(7))
                     setOnClickListener {
-                        startActivity(android.content.Intent(this@ViewerActivity, SheetEditorActivity::class.java))
+                        startActivity(android.content.Intent(this@ViewerActivity, SheetEditorActivity::class.java)
+                            .putExtra(SheetEditorActivity.EXTRA_URI, uri.toString()))
+                        finish()
                     }
                 }, w = WRAP)
                 banner.add(bRow)
                 paper.add(banner)
 
-                val formulaBar = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    background = shape(C.SURFACE2, 10)
-                    setPadding(dp(10), dp(8), dp(10), dp(8))
+                val sheet = try {
+                    if (name.endsWith(".csv", ignoreCase = true) || mime == "text/csv") OfficeReader.readCsv(this, uri)
+                    else OfficeReader.readXlsx(this, uri)
+                } catch (_: Exception) {
+                    null
                 }
-                formulaBar.add(pill("D7", C.TEAL, Color.WHITE, 10f), w = WRAP)
-                formulaBar.add(tv("fx", 12f, C.MUTED, true), w = WRAP, side = 8)
-                formulaBar.add(tv("=SUM(D2:D6)", 13f, C.TEXT, true), w = 0, weight = 1f, side = 6)
-                paper.add(formulaBar, top = 10)
+                val gridData = (sheet?.rows ?: emptyList()).take(60)
+                val cols = (gridData.maxOfOrNull { it.size } ?: 0).coerceIn(1, 8)
+                val boldRows = sheet?.boldRows ?: setOf(0)
 
-                val lines = try {
-                    contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() } ?: ""
-                } catch (_: Exception) { "" }.split("\n").filter { it.isNotBlank() }
+                if (gridData.isEmpty()) {
+                    paper.add(tv("Isi spreadsheet tidak dapat dibaca atau masih kosong.", 13f, C.MUTED), top = 16)
+                } else {
+                    val sheetLabel = sheet?.name?.takeIf { it.isNotBlank() } ?: "Sheet1"
+                    paper.add(tv("Sheet: $sheetLabel • ${gridData.size} baris", 12f, C.MUTED), top = 10)
 
-                val defaultData = listOf(
-                    listOf("Produk/Item", "Qty", "Harga Satuan"),
-                    listOf("Depup Cloud Pro", "142", "Rp 120.000"),
-                    listOf("Lisensi PDF OCR", "88", "Rp 250.000"),
-                    listOf("Add-on e-Meterai", "210", "Rp 12.500"),
-                    listOf("Server Vault Storage", "65", "Rp 450.000"),
-                    listOf("TOTAL PENDAPATAN", "505", "Rp 91.600.000")
-                )
+                    val tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-                val gridData = if (lines.isNotEmpty()) lines.take(10).map { it.split(Regex("[,;\t]")) } else defaultData
-
-                val tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-
-                val colHead = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    background = shape(0xFFE2E8F0.toInt(), 6)
-                    setPadding(dp(6), dp(6), dp(6), dp(6))
-                }
-                colHead.add(tv("#", 11f, C.MUTED, true), w = dp(28))
-                listOf("A", "B", "C").forEach { colName ->
-                    colHead.add(tv(colName, 11f, C.MUTED, true).apply { gravity = Gravity.CENTER }, w = 0, weight = 1f)
-                }
-                tableBox.add(colHead, top = 8)
-
-                gridData.forEachIndexed { rowIdx, rowCells ->
-                    val rowView = LinearLayout(this).apply {
+                    val colHead = LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        background = shape(if (rowIdx == 5) 0xFFE0F2FE.toInt() else (if (rowIdx % 2 == 0) C.SURFACE2 else Color.WHITE), 6)
-                        setPadding(dp(6), dp(8), dp(6), dp(8))
+                        background = shape(0xFFE2E8F0.toInt(), 6)
+                        setPadding(dp(6), dp(6), dp(6), dp(6))
                     }
-                    rowView.add(tv("${rowIdx + 1}", 11f, C.MUTED, true), w = dp(28))
-                    rowCells.forEachIndexed { cellIdx, cellText ->
-                        rowView.add(tv(cellText.trim(), 12f, if (rowIdx == 5) 0xFF0284C7.toInt() else C.TEXT, rowIdx == 0 || rowIdx == 5).apply {
-                            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                        }, w = 0, weight = 1f, side = 4)
+                    colHead.add(tv("#", 11f, C.MUTED, true), w = dp(28))
+                    for (c in 0 until cols) {
+                        colHead.add(tv(XlsxWriter.columnName(c), 11f, C.MUTED, true).apply { gravity = Gravity.CENTER }, w = 0, weight = 1f)
                     }
-                    tableBox.add(rowView, top = 2)
+                    tableBox.add(colHead, top = 8)
+
+                    gridData.forEachIndexed { rowIdx, rowCells ->
+                        val header = rowIdx in boldRows
+                        val rowView = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            background = shape(
+                                if (header) 0xFFE0F2FE.toInt() else (if (rowIdx % 2 == 0) C.SURFACE2 else Color.WHITE),
+                                6
+                            )
+                            setPadding(dp(6), dp(8), dp(6), dp(8))
+                        }
+                        rowView.add(tv("${rowIdx + 1}", 11f, C.MUTED, true), w = dp(28))
+                        for (c in 0 until cols) {
+                            rowView.add(tv(rowCells.getOrNull(c).orEmpty().trim(), 12f, if (header) C.TEAL else C.TEXT, header).apply {
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            }, w = 0, weight = 1f, side = 4)
+                        }
+                        tableBox.add(rowView, top = 2)
+                    }
+                    paper.add(tableBox, top = 6)
                 }
-                paper.add(tableBox, top = 6)
+            }
+            mime.startsWith("text/") || name.endsWith(".txt", ignoreCase = true) || name.endsWith(".md", ignoreCase = true) -> {
+                val content = try {
+                    contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                } catch (_: Exception) {
+                    ""
+                }
+                val banner = card(12, 12).apply {
+                    background = shape(C.SURFACE2, 12, C.LINE, 1)
+                }
+                val bRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                bRow.add(iconBadge(R.drawable.ic_note, C.INDIGO, C.INDIGO_BG, 100, 20), w = dp(38), h = dp(38))
+                val bCol = vbox()
+                bCol.add(tv("Pratinjau Teks", 14f, C.TEXT, true))
+                bCol.add(tv("${content.length} karakter • teks bisa disalin", 11f, C.MUTED), top = 2)
+                bRow.add(bCol, w = 0, weight = 1f, side = 8)
+                banner.add(bRow)
+                paper.add(banner)
+                if (content.isBlank()) {
+                    paper.add(tv("File teks ini kosong atau tidak bisa dibaca.", 13f, C.MUTED), top = 16)
+                } else {
+                    paper.add(TextView(this).apply {
+                        text = content.take(200_000)
+                        textSize = 13f
+                        setTextColor(if (night) Color.WHITE else C.TEXT)
+                        typeface = Typeface.MONOSPACE
+                        setTextIsSelectable(true)
+                        setLineSpacing(dp(3).toFloat(), 1.15f)
+                    }, top = 16)
+                }
             }
             else -> {
-                // Word DOCX View (Image 4)
+                // Pratinjau isi .docx asli (bukan contoh).
+                val paragraphs = try {
+                    OfficeReader.readDocx(this, uri)
+                } catch (_: Exception) {
+                    emptyList<OfficeReader.Paragraph>()
+                }
                 val banner = card(12, 12).apply {
                     background = shape(C.BLUE_BG, 12, C.ACCENT, 1)
                 }
                 val bRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 bRow.add(iconBadge(R.drawable.ic_doc, C.ACCENT, Color.WHITE, 100, 20), w = dp(38), h = dp(38))
                 val bCol = vbox()
-                bCol.add(tv("Konversi Cepat Depup", 14f, C.TEXT, true))
-                bCol.add(tv("Ubah .docx ini menjadi PDF legal siap tanda tangan", 11f, C.MUTED), top = 2)
+                bCol.add(tv("Pratinjau Isi Dokumen Word", 14f, C.TEXT, true))
+                bCol.add(tv("${paragraphs.size} paragraf terbaca • ketuk Edit Word untuk mengubah teks", 11f, C.MUTED), top = 2)
                 bRow.add(bCol, w = 0, weight = 1f, side = 8)
                 bRow.add(tv("Edit Word", 11f, Color.WHITE, true).apply {
                     background = shape(C.ACCENT, 8)
                     setPadding(dp(12), dp(7), dp(12), dp(7))
                     setOnClickListener {
-                        startActivity(android.content.Intent(this@ViewerActivity, DocEditorActivity::class.java))
+                        startActivity(android.content.Intent(this@ViewerActivity, DocEditorActivity::class.java)
+                            .putExtra(DocEditorActivity.EXTRA_URI, uri.toString()))
+                        finish()
                     }
                 }, w = WRAP)
                 banner.add(bRow)
                 paper.add(banner)
 
-                paper.add(tv("SURAT PERJANJIAN KERJASAMA OPERASIONAL", 18f, if (night) Color.WHITE else C.TEXT, true).apply { gravity = Gravity.CENTER }, top = 16)
-                paper.add(tv("Nomor Dokumen: 084/SPKD-DEPUP/X/2024 • Tanggal: 18 Oktober 2024", 11f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 4)
+                if (paragraphs.isEmpty()) {
+                    paper.add(tv("Dokumen ini tidak memiliki teks yang bisa ditampilkan (mungkin hanya berisi gambar).", 13f, C.MUTED), top = 16)
+                } else {
+                    paragraphs.take(300).forEachIndexed { i, p ->
+                        val tv = TextView(this).apply {
+                            text = p.text
+                            textSize = if (i == 0) 17f else 13f
+                            setTextColor(if (night) Color.WHITE else C.TEXT)
+                            typeface = when {
+                                p.bold -> Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                                p.italic -> Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+                                i == 0 -> Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                                else -> Typeface.DEFAULT
+                            }
+                            gravity = when (p.align) {
+                                1 -> Gravity.CENTER_HORIZONTAL
+                                2 -> Gravity.END
+                                else -> Gravity.START
+                            }
+                            setLineSpacing(dp(3).toFloat(), 1.15f)
+                        }
+                        paper.add(tv, top = if (i == 0) 16 else 10)
+                    }
+                }
 
-                paper.add(tv("Pasal 3 — Hak dan Kewajiban Para Pihak", 14f, C.ACCENT, true), top = 16)
-                paper.add(tv("PIHAK PERTAMA menjamin ketersediaan infrastruktur cloud dan layanan converter PDF berkecepatan tinggi dengan SLA minimum 99.8%.\n\nPIHAK KEDUA berkewajiban menjaga kerahasiaan token akses API serta tidak mengalihkan lisensi kepada pihak ketiga tanpa izin tertulis.", 13f, if (night) Color.WHITE else C.TEXT), top = 6)
-
-                paper.add(tv("Pasal 4 — Pembagian Hasil & Termin Pembayaran", 14f, C.ACCENT, true), top = 14)
-                paper.add(tv("Pembayaran dilakukan dalam 3 termin bertahap melalui transfer rekening bank resmi. Seluruh faktur pajak dan invoice wajib diserahkan selambat-lambatnya 14 hari kerja.", 13f, if (night) Color.WHITE else C.TEXT), top = 6)
-
-                val commentBox = card(12, 12).apply { background = shape(0xFFEEF2FF.toInt(), 12) }
-                val cmRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                cmRow.add(iconBadge(R.drawable.ic_user, Color.WHITE, C.INDIGO, 100, 16), w = dp(32), h = dp(32))
-                val cmCol = vbox()
-                cmCol.add(tv("Budi Pratama • Legal Counsel", 11f, C.INDIGO, true))
-                cmCol.add(tv("\"Mohon pastikan klausul termin pembayaran disesuaikan dengan invoice termin ke-2 serta lampiran NPWP terbaru.\"", 12f, C.TEXT), top = 2)
-                cmRow.add(cmCol, w = 0, weight = 1f, side = 8)
-                commentBox.add(cmRow)
-                paper.add(commentBox, top = 12)
+                paper.add(btn("Jadikan PDF", true, C.ACCENT, R.drawable.ic_pdf) {
+                    if (paragraphs.isEmpty()) {
+                        toast("Tidak ada teks untuk dikonversi")
+                    } else {
+                        val base = name.substringBeforeLast('.').replace(Regex("[^\\p{L}\\p{N} _.-]+"), "_")
+                        val out = Files.namedOut(this, base, "pdf")
+                        val text = paragraphs.joinToString("\n\n") { it.text }
+                        work("Mengonversi Word ke PDF…", { Pdf.text(text, out) }) { r ->
+                            r.onSuccess {
+                                val newUri = Files.uriFor(this, out)
+                                Recent.add(this, newUri, out.name, PDF)
+                                toast("PDF dibuat: ${out.name}")
+                                Files.open(this, newUri, PDF)
+                            }.onFailure { fail(it) }
+                        }
+                    }
+                }, top = 18)
             }
         }
 
