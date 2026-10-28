@@ -55,6 +55,37 @@ object Files {
         return byName(nameOf(ctx, uri))
     }
 
+    /**
+     * Menyalin aliran berkas dari WPS Office, Microsoft Office, WhatsApp, atau penyedia berkas pihak ketiga
+     * ke berkas lokal sementara di cacheDir agar dapat diakses penuh (seekable) oleh PdfRenderer & OfficeReader.
+     */
+    fun cacheCopy(ctx: Context, uri: Uri): Uri {
+        if (uri.scheme == "file") return uri
+        try {
+            ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {}
+
+        return try {
+            val name = nameOf(ctx, uri)
+            val ext = name.substringAfterLast('.', "tmp")
+            val cleanBase = baseName(name).replace(Regex("[^\\p{L}\\p{N}_.-]+"), "_")
+            val tempFile = File(ctx.cacheDir, "open_${cleanBase}.$ext")
+            
+            ctx.contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (tempFile.exists() && tempFile.length() > 0) {
+                Uri.fromFile(tempFile)
+            } else {
+                uri
+            }
+        } catch (_: Exception) {
+            uri
+        }
+    }
+
     fun outDir(ctx: Context): File {
         val sd = Environment.getExternalStorageDirectory()
         val depupDir = File(sd, "DepupOffice")

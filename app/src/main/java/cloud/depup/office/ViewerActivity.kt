@@ -117,8 +117,9 @@ class ViewerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val uri = intent.data
-        if (uri == null) { finish(); return }
+        val rawUri = intent.data
+        if (rawUri == null) { finish(); return }
+        val uri = Files.cacheCopy(this, rawUri)
 
         val name = Files.nameOf(this, uri)
         val mime = intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
@@ -131,6 +132,7 @@ class ViewerActivity : AppCompatActivity() {
         uriStr = uri.toString()
 
         var isPdfLoaded = false
+        var isPasswordProtected = false
         try {
             pfd = contentResolver.openFileDescriptor(uri, "r")
             if (pfd != null) {
@@ -138,6 +140,9 @@ class ViewerActivity : AppCompatActivity() {
                 total = renderer!!.pageCount
                 isPdfLoaded = true
             }
+        } catch (e: SecurityException) {
+            isPasswordProtected = true
+            toast("Dokumen ini dilindungi kata sandi (Password Protected)")
         } catch (_: Exception) {}
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFFE9EDF7.toInt()) }

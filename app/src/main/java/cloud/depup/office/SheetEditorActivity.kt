@@ -94,8 +94,9 @@ class SheetEditorActivity : AppCompatActivity() {
         val template = intent.getStringExtra(EXTRA_TEMPLATE)
 
         if (uriStr != null) {
-            val uri = runCatching { Uri.parse(uriStr) }.getOrNull()
-            if (uri != null) {
+            val rawUri = runCatching { Uri.parse(uriStr) }.getOrNull()
+            if (rawUri != null) {
+                val uri = Files.cacheCopy(this, rawUri)
                 sourceName = Files.baseName(Files.nameOf(this, uri))
                 val name = Files.nameOf(this, uri).lowercase()
                 val sheet = try {

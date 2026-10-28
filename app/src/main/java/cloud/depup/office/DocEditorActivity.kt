@@ -118,7 +118,8 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     private fun loadInitialContent() {
-        val uri = intent.getStringExtra(EXTRA_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val rawUri = intent.getStringExtra(EXTRA_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val uri = rawUri?.let { Files.cacheCopy(this, it) }
         val template = intent.getStringExtra(EXTRA_TEMPLATE)
 
         if (uri != null) {
