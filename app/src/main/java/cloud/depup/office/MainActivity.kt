@@ -968,6 +968,28 @@ class MainActivity : AppCompatActivity() {
                 chev = true) { startActivity(Intent(this, VaultActivity::class.java)) }
         ), top = 12)
 
+        p.add(sectionTitle("Informasi & Bantuan", "Play Store"), top = 22)
+        p.add(twoCols(
+            tile(R.drawable.ic_shield, C.ACCENT, C.BLUE_BG, "Privacy Policy", "Kebijakan privasi & perlindungan data",
+                chev = true) { startActivity(Intent(this, PrivacyPolicyActivity::class.java)) },
+            tile(R.drawable.ic_heart, C.RED, C.RED_BG, "Dukung Developer", "Donasi sukarela via Saweria",
+                chev = true) {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://saweria.co/depupdonate")))
+                } catch (_: Exception) { toast("Tidak dapat membuka browser") }
+            }
+        ), top = 12)
+        p.add(twoCols(
+            tile(R.drawable.ic_spark, C.INDIGO, C.INDIGO_BG, "Kontak Developer", "Hubungi depupdev@gmail.com",
+                chev = true) {
+                try {
+                    startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:depupdev@gmail.com")))
+                } catch (_: Exception) { toast("Email client tidak tersedia") }
+            },
+            tile(R.drawable.ic_doc, C.TEAL, C.TEAL_BG, "Tentang Aplikasi", "Depup Office • 100% Offline",
+                chev = true) { startActivity(Intent(this, PrivacyPolicyActivity::class.java)) }
+        ), top = 12)
+
         val tip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
