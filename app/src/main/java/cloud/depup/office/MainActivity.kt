@@ -338,255 +338,77 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDonationDialog() {
-        val phone = "081322544391"
-        val amounts = listOf(1_000L, 2_000L, 5_000L, 10_000L, 25_000L, 50_000L, 100_000L, 1_000_000L)
-        val wallets = listOf(
-            Triple("GoPay", "com.gojek.app", 0xFF00AA13.toInt()),
-            Triple("DANA", "id.dana", 0xFF118EEA.toInt()),
-            Triple("ShopeePay", "com.shopee.id", 0xFFEE4D2D.toInt())
-        )
-        var selectedAmount = 10_000L
-        var customAmount: Long? = null
-        var selectedWallet = 1
-        var formatting = false
+        val saweriaUrl = "https://saweria.co/depupdonate"
 
         sheet { body, dismiss ->
             sheetHeader(
                 body, R.drawable.ic_heart, 0xFFDC2626.toInt(), C.RED_BG,
-                "Dukung Depup Office", "Donasi sukarela • tetap offline & bebas iklan", dismiss
+                "Dukung Depup Office", "Donasi sukarela via Saweria • Bebas iklan & 100% offline", dismiss
             )
             val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
 
-            // Kartu ringkasan nominal
+            // Kartu Hero Saweria
             val heroCard = vbox(16).apply {
                 background = GradientDrawable(
                     GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xFFDC2626.toInt(), 0xFFF97316.toInt())
+                    intArrayOf(0xFFEA580C.toInt(), 0xFFC2410C.toInt())
                 ).apply { cornerRadius = dp(18).toFloat() }
                 elevation = dp(2).toFloat()
             }
             val heroRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             heroRow.add(iconBadge(R.drawable.ic_heart, Color.WHITE, 0x33FFFFFF, 100, 24), w = dp(48), h = dp(48))
             val heroCol = vbox()
-            heroCol.add(tv("Nominal Donasi", 11f, 0xE6FFFFFF.toInt()))
-            val amountTv = tv(rupiah(selectedAmount), 26f, Color.WHITE, true)
-            heroCol.add(amountTv, top = 2)
-            val walletSummaryTv = tv("via DANA • a.n. MKA", 12f, 0xE6FFFFFF.toInt())
-            heroCol.add(walletSummaryTv, top = 2)
+            heroCol.add(tv("Donasi via Saweria", 12f, 0xE6FFFFFF.toInt()))
+            heroCol.add(tv("saweria.co/depupdonate", 20f, Color.WHITE, true), top = 2)
+            heroCol.add(tv("GoPay • DANA • OVO • QRIS • LinkAja • ShopeePay", 11f, 0xE6FFFFFF.toInt()), top = 2)
             heroRow.add(heroCol, w = 0, weight = 1f, side = 12)
-            heroRow.add(iconBadge(R.drawable.ic_shield, Color.WHITE, 0x33FFFFFF, 100, 20), w = dp(40), h = dp(40))
             heroCard.add(heroRow)
-            heroCard.add(tv("Donasi membantu pengembangan fitur baru tanpa iklan, tanpa langganan, dan tanpa mengunggah file pengguna.", 11f, 0xF2FFFFFF.toInt()))
+            heroCard.add(tv("Dukungan Anda membantu pengembangan fitur baru Depup Office tanpa iklan, tanpa langganan, dan tetap 100% offline di perangkat Anda.", 11f, 0xF2FFFFFF.toInt()))
             pad.add(heroCard)
 
-            // Dibuat lebih awal agar bisa dipakai oleh chip nominal & ringkasan.
-            val customEt = EditText(this).apply {
-                hint = "Nominal lainnya (min. 1.000)"
-                setHintTextColor(C.MUTED)
-                setTextColor(C.TEXT)
-                textSize = 14f
-                typeface = Fonts.body(this@MainActivity)
-                inputType = android.text.InputType.TYPE_CLASS_NUMBER
-                background = null
-                setPadding(dp(10), dp(12), dp(10), dp(12))
-            }
-            val transferLabel = tv("Donasi ${rupiah(selectedAmount)} via DANA", 14f, Color.WHITE, true)
-
-            val amountChips = mutableListOf<Pair<Long, TextView>>()
-            val walletChips = mutableListOf<LinearLayout>()
-
-            fun paintAmounts() {
-                val customActive = customAmount != null
-                amountChips.forEach { (amountValue, chip) ->
-                    val on = !customActive && amountValue == selectedAmount
-                    chip.setTextColor(if (on) Color.WHITE else C.TEXT)
-                    chip.background = shape(if (on) C.ACCENT else C.SURFACE2, 10)
-                }
-            }
-
-            fun paintWallets() {
-                walletChips.forEachIndexed { idx, card ->
-                    val on = idx == selectedWallet
-                    val color = wallets[idx].third
-                    card.background = if (on) shape(0xFFF0F9FF.toInt(), 12, color, 2)
-                    else shape(C.SURFACE, 12, C.LINE, 1)
-                }
-            }
-
-            fun currentAmount(): Long = customAmount?.takeIf { it > 0 } ?: selectedAmount
-
-            fun refreshDonation() {
-                val amount = currentAmount()
-                amountTv.text = if (amount > 0) rupiah(amount) else "Rp —"
-                walletSummaryTv.text = "via ${wallets[selectedWallet].first} • a.n. MKA"
-                transferLabel.text = if (amount > 0) {
-                    "Donasi ${rupiah(amount)} via ${wallets[selectedWallet].first}"
-                } else {
-                    "Pilih nominal donasi"
-                }
-            }
-
-            pad.add(tv("Pilih Nominal", 14f, C.TEXT, true), top = 18)
-            val amountGrid = GridLayout(this).apply {
-                columnCount = 4
-                useDefaultMargins = false
-            }
-            amounts.forEach { amountValue ->
-                val chip = tv(shortRupiah(amountValue), 11f, C.TEXT, true).apply {
-                    gravity = Gravity.CENTER
-                    isClickable = true
-                }
-                chip.setOnClickListener {
-                    selectedAmount = amountValue
-                    customAmount = null
-                    formatting = true
-                    customEt.setText("")
-                    formatting = false
-                    paintAmounts()
-                    refreshDonation()
-                }
-                amountChips.add(amountValue to chip)
-                val lp = GridLayout.LayoutParams(
-                    GridLayout.spec(GridLayout.UNDEFINED, 1f),
-                    GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                ).apply {
-                    width = 0
-                    height = dp(42)
-                    setMargins(dp(3), dp(3), dp(3), dp(3))
-                }
-                amountGrid.addView(chip, lp)
-            }
-            pad.add(amountGrid, top = 8)
-
-            // Nominal kustom
-            val customRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = shape(C.SURFACE2, 12)
-                setPadding(dp(14), dp(2), dp(10), dp(2))
-            }
-            customRow.add(tv("Rp", 14f, C.MUTED, true), w = WRAP)
-            customRow.add(customEt, w = 0, weight = 1f)
-            pad.add(customRow, top = 8)
-
-            customEt.addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) {
-                    if (formatting) return
-                    val digits = s?.toString().orEmpty().filter { it.isDigit() }.take(9)
-                    formatting = true
-                    val formatted = if (digits.isEmpty()) "" else NumberFormat
-                        .getIntegerInstance(Locale("id", "ID")).format(digits.toLong())
-                    customEt.setText(formatted)
-                    customEt.setSelection(formatted.length)
-                    formatting = false
-                    customAmount = digits.toLongOrNull()?.takeIf { it > 0 }
-                    paintAmounts()
-                    refreshDonation()
-                }
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            })
-
-            pad.add(tv("Metode Donasi", 14f, C.TEXT, true), top = 16)
-            val walletRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            wallets.forEachIndexed { idx, wallet ->
-                val card = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.CENTER
-                    setPadding(dp(8), dp(10), dp(8), dp(10))
-                    isClickable = true
-                    setOnClickListener {
-                        selectedWallet = idx
-                        paintWallets()
-                        refreshDonation()
-                    }
-                }
-                card.add(TextView(this).apply {
-                    text = wallet.first.take(1)
-                    textSize = 15f
-                    setTextColor(Color.WHITE)
-                    typeface = Fonts.label(this@MainActivity)
-                    gravity = Gravity.CENTER
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(wallet.third)
-                    }
-                }, w = dp(30), h = dp(30))
-                card.add(tv(wallet.first, 11f, C.TEXT, true).apply { gravity = Gravity.CENTER }, top = 6)
-                walletChips.add(card)
-                walletRow.add(card, w = 0, weight = 1f).also {
-                    if (idx > 0) (card.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
-                }
-            }
-            pad.add(walletRow, top = 8)
-
-            val accountCard = card(12, 12).apply {
-                background = shape(0xFFF0F9FF.toInt(), 12, 0xFFBAE6FD.toInt(), 1)
-            }
-            val acRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            val acCol = vbox()
-            acCol.add(tv("Nomor HP Donasi", 11f, C.MUTED))
-            acCol.add(tv(phone, 17f, C.TEXT, true), top = 2)
-            acCol.add(tv("a.n. MKA • GoPay / DANA / ShopeePay", 11f, C.SKY, true), top = 2)
-            acRow.add(acCol, w = 0, weight = 1f)
-            val copyBtn = tv("Salin", 11f, Color.WHITE, true).apply {
-                background = shape(C.ACCENT, 8)
-                setPadding(dp(12), dp(8), dp(12), dp(8))
-                isClickable = true
-                setOnClickListener {
-                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("No HP Donasi", phone))
-                    toast("Nomor $phone (a.n. MKA) disalin")
-                }
-            }
-            acRow.add(copyBtn, w = WRAP)
-            accountCard.add(acRow)
-            pad.add(accountCard, top = 12)
-
-            // Tombol utama dinamis
-            val transferBtn = LinearLayout(this).apply {
+            // Tombol Utama Buka Saweria
+            val saweriaBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                background = shape(C.ACCENT, 12)
+                background = shape(0xFFEA580C.toInt(), 12)
                 minimumHeight = dp(50)
                 setPadding(dp(16), dp(12), dp(16), dp(12))
                 isClickable = true
                 isFocusable = true
                 add(icon(R.drawable.ic_heart, Color.WHITE, 20), w = dp(20), h = dp(20))
-            }
-            transferBtn.add(transferLabel, w = WRAP, side = 4)
-            transferBtn.setOnClickListener {
-                val amount = customAmount?.takeIf { it > 0 } ?: selectedAmount
-                if (amount < 1_000L) {
-                    toast("Minimal donasi Rp 1.000")
-                    return@setOnClickListener
+                add(tv(" Buka Saweria (saweria.co/depupdonate) →", 14f, Color.WHITE, true), w = WRAP, side = 6)
+                setOnClickListener {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(saweriaUrl)))
+                    } catch (_: Exception) {
+                        toast("Tidak dapat membuka browser")
+                    }
                 }
-                openEWallet(selectedWallet, phone, rupiah(amount))
             }
-            pad.add(transferBtn, top = 14)
+            pad.add(saweriaBtn, top = 16)
 
-            val secondaryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            val qrBtn = btn("QR Info Donasi", false, C.ACCENT, R.drawable.ic_spark) {
-                val amount = customAmount?.takeIf { it > 0 } ?: selectedAmount
-                showDonationQr(phone, wallets[selectedWallet].first, amount)
+            val secRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val copyBtn = btn("Salin Link Saweria", false, C.ACCENT, R.drawable.ic_spark) {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Link Donasi Saweria", saweriaUrl))
+                toast("Link $saweriaUrl berhasil disalin!")
             }
-            val shareBtn = btn("Bagikan Info", false, C.ACCENT, R.drawable.ic_share) {
-                val amount = customAmount?.takeIf { it > 0 } ?: selectedAmount
-                val text = "Dukung Depup Office 💙\n\nDonasi via ${wallets[selectedWallet].first}: $phone (a.n. MKA)\nNominal: ${rupiah(amount)}\n\nAplikasi office & scanner PDF offline, tanpa iklan. Terima kasih!"
+            val shareBtn = btn("Bagikan Link Donasi", false, C.ACCENT, R.drawable.ic_share) {
+                val text = "Dukung pengembangan Depup Office 💙\n\nDonasi via Saweria (GoPay, DANA, OVO, QRIS, dll):\n$saweriaUrl\n\nAplikasi office & scanner PDF 100% offline & bebas iklan. Terima kasih!"
                 startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, text)
-                }, "Bagikan info donasi"))
+                }, "Bagikan link donasi"))
             }
-            secondaryRow.add(qrBtn, w = 0, weight = 1f)
-            secondaryRow.add(shareBtn, w = 0, weight = 1f).also {
+            secRow.add(copyBtn, w = 0, weight = 1f)
+            secRow.add(shareBtn, w = 0, weight = 1f).also {
                 (shareBtn.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
             }
-            pad.add(secondaryRow, top = 10)
+            pad.add(secRow, top = 10)
 
             pad.add(
                 tv(
-                    "Donasi bersifat sukarela dan tidak membuka fitur tertentu. Semua pemrosesan tetap berjalan lokal di perangkat Anda.",
+                    "Donasi bersifat sukarela dan tidak membatasi fitur aplikasi. Seluruh fitur Depup Office tetap dapat dipakai gratis 100% offline.",
                     11f, C.MUTED
                 ).apply {
                     background = shape(C.SURFACE2, 10)
@@ -594,9 +416,6 @@ class MainActivity : AppCompatActivity() {
                 }, top = 12
             )
 
-            paintAmounts()
-            paintWallets()
-            refreshDonation()
             body.add(pad)
         }
     }
