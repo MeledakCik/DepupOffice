@@ -922,12 +922,12 @@ class MainActivity : AppCompatActivity() {
             p.add(c, top = 16)
         }
 
-        p.add(sectionTitle("Peralatan Utama PDF & Dokumen", "12 Alat Tersedia"), top = 22)
+        p.add(sectionTitle("Peralatan Utama PDF & Dokumen", "13 Alat Tersedia"), top = 22)
         p.add(twoCols(
+            tile(R.drawable.ic_camera, C.ACCENT, C.BLUE_BG, "CamScanner Auto-Crop", "Deteksi 4 sudut kertas HVS & Warp (OpenCV)",
+                "OpenCV AI", C.ACCENT, C.BLUE_BG) { startActivity(Intent(this, ScannerActivity::class.java)) },
             tile(R.drawable.ic_merge, C.INDIGO, C.INDIGO_BG, "Gabung PDF", "Satukan banyak dokumen PDF jadi satu, urutan bebas",
-                "Populer", C.ACCENT, C.BLUE_BG) { mergeFlow() },
-            tile(R.drawable.ic_cut, C.INDIGO, C.INDIGO_BG, "Pisah PDF", "Pilah halaman atau pisahkan berkas sesuai rentang",
-                chev = true) { pickFile(arrayOf(PDF)) { splitFlow(it) } }
+                "Populer", C.ACCENT, C.BLUE_BG) { mergeFlow() }
         ), top = 12)
         p.add(twoCols(
             tile(R.drawable.ic_crop, C.ACCENT, C.BLUE_BG, "Susun & Hapus PDF", "Atur urutan, putar 90°, atau buang halaman PDF",

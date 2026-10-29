@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -11,11 +12,11 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 34
-        versionCode = 3
-        versionName = "2.2.0"
+        versionCode = 4
+        versionName = "2.3.0"
     }
 
-    base.archivesName.set("DepupOffice_v2.2.0")
+    base.archivesName.set("DepupOffice_v2.3.0")
 
     signingConfigs {
         create("release") {
@@ -100,9 +101,11 @@ android {
             }
         }
     }
+    buildFeatures {
+        compose = true
+    }
 }
 
-// Sengaja minim: tanpa Compose, tanpa library PDF pihak ketiga -> APK kecil & ringan.
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
@@ -114,6 +117,15 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
+    // Jetpack Compose
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.compose.ui:ui:1.6.8")
+    implementation("androidx.compose.ui:ui-graphics:1.6.8")
+    implementation("androidx.compose.ui:ui-tooling-preview:1.6.8")
+    implementation("androidx.compose.material3:material3:1.2.1")
+    implementation("androidx.compose.material:material-icons-extended:1.6.8")
+    // OpenCV
+    implementation("com.quickbirdstudios:opencv:4.5.3.0")
     // OCR offline & QR Code Scanner
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")

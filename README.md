@@ -1,15 +1,15 @@
-# 🚀 DepupOffice_v2.2.0
+# 🚀 DepupOffice_v2.3.0
 
-**DepupOffice_v2.2.0** is a 100% offline, privacy-first, lightweight Android mobile office, document editor, spreadsheet manager, smart camera scanner, direct WiFi/Bluetooth printer, and voice reader. Powered by on-device Google ML Kit OCR and Android native APIs, Depup Office delivers fast PDF processing, Word document editing, Excel spreadsheet management, QR code scanning/generation, and security tools **without sending your private files to cloud servers**.
+**DepupOffice_v2.3.0** is a 100% offline, privacy-first, lightweight Android mobile office, document editor, spreadsheet manager, CamScanner-style AI document scanner (OpenCV + Jetpack Compose), direct WiFi/Bluetooth printer, and voice reader. Powered by OpenCV Android SDK, Google ML Kit OCR, and Android native APIs, Depup Office delivers fast PDF processing, Word document editing, Excel spreadsheet management, QR code scanning/generation, and security tools **without sending your private files to cloud servers**.
 
 <br>
 
 <div align="left">
-  <a href="https://github.com/MeledakCik/DepupOffice/releases/tag/DepupOffice_v2.2.0">
-    <img src="https://img.shields.io/badge/Download-APK%20v2.2.0-00E095?style=for-the-badge&logo=android&logoColor=white" alt="Download APK">
+  <a href="https://github.com/MeledakCik/DepupOffice/releases/tag/DepupOffice_v2.3.0">
+    <img src="https://img.shields.io/badge/Download-APK%20v2.3.0-00E095?style=for-the-badge&logo=android&logoColor=white" alt="Download APK">
   </a>
-  <a href="https://github.com/MeledakCik/DepupOffice/releases/tag/DepupOffice_v2.2.0">
-    <img src="https://img.shields.io/badge/Download-AAB%20v2.2.0-FFB800?style=for-the-badge&logo=googleplay&logoColor=white" alt="Download AAB">
+  <a href="https://github.com/MeledakCik/DepupOffice/releases/tag/DepupOffice_v2.3.0">
+    <img src="https://img.shields.io/badge/Download-AAB%20v2.3.0-FFB800?style=for-the-badge&logo=googleplay&logoColor=white" alt="Download AAB">
   </a>
   <img src="https://img.shields.io/badge/Privacy-100%25%20Offline-1E60D5?style=for-the-badge&logo=lock&logoColor=white" alt="100% Offline">
   <img src="https://img.shields.io/badge/Platform-Android%2010%2B-purple?style=for-the-badge&logo=android&logoColor=white" alt="Platform">
@@ -17,44 +17,47 @@
 
 ---
 
-## 🌟 What's New in v2.2.0
+## 🌟 What's New in v2.3.0
 
-### 🖨️ 1. Direct WiFi & Bluetooth Printing
-* **1-Click Direct Print**: Print PDFs, Word `.docx` documents, Excel `.xlsx` spreadsheets, and photo scans (KTP 2-sided layouts, receipts, stamps) directly to any WiFi or Bluetooth printer using native Android `PrintManager`.
+### 📷 1. CamScanner Auto-Crop Document Scanner (OpenCV + Jetpack Compose)
+* **Auto-Detect Document Contours**: OpenCV Canny edge & contour analysis detects 4 corners of paper/documents on cluttered tables.
+* **Interactive 4-Corner Draggable Points**: Fine-tune crop bounds manually with 4 draggable corner handles on Compose Canvas.
+* **Perspective Correction (Warp)**: Flattens skewed photos into a perfectly straight rectangular document.
+* **3 Document Filters**:
+  * 🖼️ **Original** (Cropped photo)
+  * ✨ **Magic Color / Enhanced** (Boosted contrast & paper brightness)
+  * 🖤 **Black & White** (Adaptive threshold photocopy effect)
+* **Multi-Page PDF Export**: Saves merged PDF documents directly into `/Documents/DepupOffice/`.
 
-### 🔊 2. Offline Document Voice Reader (Text-To-Speech)
-* **100% Offline Read Aloud**: Reads PDF text, Word documents, Excel tables, and OCR-scanned text out loud using native Android `TextToSpeech`.
-* **Interactive Control Dialog**:
-  * ⏯️ **Play, Pause, Resume, Stop** controls.
-  * ⚡ **Speed Selector** (`0.75x`, `1.0x`, `1.25x`, `1.5x`, `2.0x`).
-  * 🇮🇩 / 🇬🇧 **Language Switcher** (Indonesian `id_ID` & English `en_US`).
-  * Real-time paragraph progress and preview.
+### 🖨️ 2. Direct WiFi & Bluetooth Printing
+* **1-Click Direct Print**: Print PDFs, Word `.docx`, Excel `.xlsx`, and photo scans directly to any WiFi or Bluetooth printer using `PrintManager`.
 
-### 📝 3. Native Word & Document Editor (`.docx`, `.txt`)
-* **WYSIWYG Rich-Text Editing**: Text formatting (Bold, Italic, Underline, Strikethrough, Colors), alignment, list support, image & table insertion, and offline `.docx` export.
+### 🔊 3. Offline Document Voice Reader (Text-To-Speech)
+* **100% Offline Read Aloud**: Reads PDF text, Word documents, Excel tables, and OCR text out loud using native Android `TextToSpeech`.
+* Controls for Play, Pause, Stop, Speed (`0.75x`, `1.0x`, `1.25x`, `1.5x`, `2.0x`), and Language (Indonesian `id_ID` & English `en_US`).
 
-### 📊 4. Native Excel & Spreadsheet Editor (`.xlsx`, `.csv`)
-* **Full Grid Spreadsheet Interface**: Multi-column, multi-row editor with formula evaluation (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`), cell styling, and export to `.xlsx` and `.csv`.
+### 📝 4. Native Word & Excel Editors
+* Full WYSIWYG Word `.docx` editor and Excel `.xlsx` spreadsheet editor with formula calculations (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`).
 
 ### 📱 5. QR Code & Barcode Manager
-* **Scanner & Generator**: High-speed QR Code/Barcode scanning and generator with direct PDF stamping.
+* High-speed QR Code/Barcode scanning and generator with direct PDF stamping.
 
-### 👁️ 6. Eye-Care Paper Reading Themes
-* **4 Reader Modes**: Day, Night Dark (`#0F172A`), Sepia Parchment (`#FBF0D9`), and Anti-Glare Soft Green (`#E2F0D9`).
-
-### 📷 7. Smart Camera Scanner & OCR
-* **KTP 2-Sided Layout**: Guided capture that places Front & Back ID photos on 1 clean A4 page. Receipt scanner, OCR translator, and smart summary.
-
-### 🔒 8. Privacy, Security & Biometric Vault
-* **AES-256 Vault**: Encrypted storage protected by Fingerprint / Biometric / Screen Lock. Permanent blackout redaction & watermarking.
+### 🔒 6. Privacy, Security & Biometric Vault
+* AES-256 encrypted vault protected by Fingerprint / Biometric / Screen Lock. Permanent blackout redaction & watermarking.
 
 ---
 
-## 🛡️ 100% Offline & Privacy Guarantee
+## 🛠️ Technical Specifications & Tech Stack
 
-DepupOffice_v2.2.0 operates **completely offline**.
-- 🚫 **No Internet Permission**: `android.permission.INTERNET` is excluded from `AndroidManifest.xml`.
-- 🔐 **Zero Cloud Uploads**: All processing, OCR, encryption, text-to-speech, and printing happen 100% locally on your device.
+| Component | Technology / Library |
+| :--- | :--- |
+| **Language** | 100% Kotlin |
+| **Min SDK / Target SDK** | Android 10 (API 29) / Android 14 (API 34) |
+| **UI Framework** | Jetpack Compose + Material 3, AppCompat |
+| **Computer Vision Engine** | OpenCV Android SDK (`com.quickbirdstudios:opencv:4.5.3.0`) |
+| **Camera Engine** | CameraX 1.3.4 (Lifecycle & Camera2) |
+| **OCR & Barcode** | Google ML Kit Text Recognition 16.0.1 & ZXing Core 3.5.3 |
+| **PDF Generation** | Native Android `PdfDocument` & `PdfRenderer` |
 
 ---
 
@@ -62,8 +65,8 @@ DepupOffice_v2.2.0 operates **completely offline**.
 
 | File Name | Description | Target Platform |
 | :--- | :--- | :--- |
-| `DepupOffice_v2.2.0.apk` | Universal Signed APK (~64.7 MB) | Direct Installation |
-| `DepupOffice_v2.2.0.aab` | Signed Android App Bundle (~30.0 MB) | Google Play Console |
+| `DepupOffice_v2.3.0.apk` | Universal Signed APK (~67.5 MB) | Direct Installation |
+| `DepupOffice_v2.3.0.aab` | Signed Android App Bundle (~32.0 MB) | Google Play Console |
 
 ---
 
@@ -82,4 +85,4 @@ cd DepupOffice
 ```
 
 The compiled release APK will be located at:
-`app/build/outputs/apk/release/DepupOffice_v2.2.0.apk`
+`app/build/outputs/apk/release/DepupOffice_v2.3.0.apk`

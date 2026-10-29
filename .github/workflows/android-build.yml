@@ -37,8 +37,8 @@ jobs:
       - name: Rename Release Binaries
         run: |
           mkdir -p build/outputs/release
-          cp app/build/outputs/apk/release/*.apk build/outputs/release/DepupOffice_v2.2.0.apk || true
-          cp app/build/outputs/bundle/release/*.aab build/outputs/release/DepupOffice_v2.2.0.aab || true
+          cp app/build/outputs/apk/release/*.apk build/outputs/release/DepupOffice_v2.3.0.apk || true
+          cp app/build/outputs/bundle/release/*.aab build/outputs/release/DepupOffice_v2.3.0.aab || true
 
       - name: Upload APK Artifact to Actions
         uses: actions/upload-artifact@v4
@@ -59,8 +59,8 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Depup Office ${{ github.ref_name }}
           files: |
-            build/outputs/release/DepupOffice_v2.2.0.apk
-            build/outputs/release/DepupOffice_v2.2.0.aab
+            build/outputs/release/DepupOffice_v2.3.0.apk
+            build/outputs/release/DepupOffice_v2.3.0.aab
             app/build/outputs/apk/release/*.apk
             app/build/outputs/bundle/release/*.aab
           body_path: RELEASE_NOTES_V2.md
