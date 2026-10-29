@@ -1,9 +1,9 @@
 package cloud.depup.office
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
-import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
@@ -32,6 +32,13 @@ object DocumentScanner {
         }
     }
 
+    /** Memutar bitmap berdasarkan derajat (-90, 90, 180, dll) */
+    fun rotateBitmap(bitmap: Bitmap, degrees: Float): Bitmap {
+        if (degrees == 0f) return bitmap
+        val matrix = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
+
     /**
      * Mendeteksi 4 sudut kertas HVS / dokumen dari Bitmap.
      * Mengembalikan koordinat 4 titik yang sudah ternormalisasi (0.0 .. 1.0) dengan urutan:
@@ -48,7 +55,7 @@ object DocumentScanner {
             if (width <= 0 || height <= 0) return defaultCorners()
 
             // Scale down untuk akselerasi deteksi tepi
-            val scale = 500f / max(width, height)
+            val scale = 600f / max(width, height)
             val resizedW = (width * scale).toInt().coerceAtLeast(1)
             val resizedH = (height * scale).toInt().coerceAtLeast(1)
 
@@ -62,9 +69,9 @@ object DocumentScanner {
             Imgproc.GaussianBlur(gray, blur, Size(5.0, 5.0), 0.0)
 
             val canny = Mat()
-            Imgproc.Canny(blur, canny, 50.0, 150.0)
+            Imgproc.Canny(blur, canny, 30.0, 120.0)
 
-            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
             val dilated = Mat()
             Imgproc.dilate(canny, dilated, kernel)
 
@@ -75,7 +82,7 @@ object DocumentScanner {
             // Cari kontur terbesar berbentuk segi empat konveks
             var bestContour: MatOfPoint2f? = null
             var maxArea = 0.0
-            val minArea = (resizedW * resizedH) * 0.10 // Minimal 10% luas gambar
+            val minArea = (resizedW * resizedH) * 0.08 // Minimal 8% luas gambar
 
             for (c in contours) {
                 val c2f = MatOfPoint2f(*c.toArray())
@@ -90,6 +97,21 @@ object DocumentScanner {
                     if (Imgproc.isContourConvex(MatOfPoint(*approx.toArray()))) {
                         maxArea = area
                         bestContour = approx
+                    }
+                }
+            }
+
+            // Fallback: Gunakan minAreaRect jika approxPolyDP tidak menghasilkan 4 titik eksak
+            if (bestContour == null) {
+                for (c in contours) {
+                    val c2f = MatOfPoint2f(*c.toArray())
+                    val area = Imgproc.contourArea(c2f)
+                    if (area > minArea && area > maxArea) {
+                        maxArea = area
+                        val rect = Imgproc.minAreaRect(c2f)
+                        val rectMat = MatOfPoint2f()
+                        Imgproc.boxPoints(rect, rectMat)
+                        bestContour = rectMat
                     }
                 }
             }
@@ -113,7 +135,7 @@ object DocumentScanner {
         return defaultCorners()
     }
 
-    private fun defaultCorners(): List<ScannerPoint> {
+    fun defaultCorners(): List<ScannerPoint> {
         return listOf(
             ScannerPoint(0.05f, 0.05f), // Top-Left
             ScannerPoint(0.95f, 0.05f), // Top-Right
@@ -179,11 +201,11 @@ object DocumentScanner {
 
         val widthA = hypot(pBR.x - pBL.x, pBR.y - pBL.y)
         val widthB = hypot(pTR.x - pTL.x, pTR.y - pTL.y)
-        val targetWidth = max(widthA, widthB).toInt().coerceAtLeast(100)
+        val targetWidth = max(widthA, widthB).toInt().coerceAtLeast(200)
 
         val heightA = hypot(pTR.x - pBR.x, pTR.y - pBR.y)
         val heightB = hypot(pTL.x - pBL.x, pTL.y - pBL.y)
-        val targetHeight = max(heightA, heightB).toInt().coerceAtLeast(100)
+        val targetHeight = max(heightA, heightB).toInt().coerceAtLeast(200)
 
         val srcMat = MatOfPoint2f(pTL, pTR, pBR, pBL)
         val dstMat = MatOfPoint2f(
@@ -225,8 +247,8 @@ object DocumentScanner {
             FilterType.ORIGINAL -> return bitmap
 
             FilterType.MAGIC_COLOR -> {
-                // Magic Color: Tingkatkan kontras dan klarifikasi warna kertas
-                src.convertTo(dst, -1, 1.25, 10.0)
+                // Magic Color: Tingkatkan kontras dan pemutihan warna kertas
+                src.convertTo(dst, -1, 1.35, 18.0)
             }
 
             FilterType.BLACK_AND_WHITE -> {
@@ -239,8 +261,8 @@ object DocumentScanner {
                     255.0,
                     Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
                     Imgproc.THRESH_BINARY,
-                    15,
-                    12.0
+                    19,
+                    15.0
                 )
                 gray.release()
             }

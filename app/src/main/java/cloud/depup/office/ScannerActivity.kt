@@ -1,12 +1,9 @@
 package cloud.depup.office
 
 import android.Manifest
-import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -28,6 +25,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,16 +42,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Filter
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Print
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RotateLeft
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -91,7 +90,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -102,7 +100,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 data class ScannedPageData(
-    val originalBitmap: Bitmap,
+    var originalBitmap: Bitmap,
     var corners: List<ScannerPoint>,
     var warpedBitmap: Bitmap? = null,
     var filterType: FilterType = FilterType.MAGIC_COLOR,
@@ -286,6 +284,14 @@ fun CamScannerApp(onFinish: () -> Unit) {
                         val currentPage = scannedPages[activePageIndex]
                         CropAdjustmentScreen(
                             pageData = currentPage,
+                            onRotateLeft = {
+                                currentPage.originalBitmap = DocumentScanner.rotateBitmap(currentPage.originalBitmap, -90f)
+                                currentPage.corners = DocumentScanner.detectDocumentContour(currentPage.originalBitmap)
+                            },
+                            onRotateRight = {
+                                currentPage.originalBitmap = DocumentScanner.rotateBitmap(currentPage.originalBitmap, 90f)
+                                currentPage.corners = DocumentScanner.detectDocumentContour(currentPage.originalBitmap)
+                            },
                             onCornersUpdated = { newCorners ->
                                 currentPage.corners = newCorners
                             },
@@ -543,20 +549,22 @@ fun CameraViewfinderScreen(
 @Composable
 fun CropAdjustmentScreen(
     pageData: ScannedPageData,
+    onRotateLeft: () -> Unit,
+    onRotateRight: () -> Unit,
     onCornersUpdated: (List<ScannerPoint>) -> Unit,
     onAutoDetect: () -> Unit,
     onResetFull: () -> Unit,
     onApplyCrop: () -> Unit
 ) {
-    var corners by remember { mutableStateOf(pageData.corners) }
+    var corners by remember(pageData.originalBitmap) { mutableStateOf(pageData.corners) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0F172A))
-            .padding(16.dp)
+            .padding(12.dp)
     ) {
-        // Option Bar
+        // Top Bar Options
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -564,27 +572,29 @@ fun CropAdjustmentScreen(
         ) {
             Button(
                 onClick = onAutoDetect,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF38BDF8))
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Auto Detect", fontSize = 12.sp)
             }
 
             Button(
                 onClick = onResetFull,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White)
+                Icon(Icons.Default.CropFree, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Reset Penuh", fontSize = 12.sp)
+                Text("Semua (Full)", fontSize = 12.sp)
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Draggable 4-Corner Overlay Canvas
-        Box(
+        // Exact Canvas Crop View
+        BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
@@ -592,7 +602,30 @@ fun CropAdjustmentScreen(
                 .clip(RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center
         ) {
+            val containerW = constraints.maxWidth.toFloat()
+            val containerH = constraints.maxHeight.toFloat()
+
             val bitmap = pageData.originalBitmap
+            val bitmapW = bitmap.width.toFloat()
+            val bitmapH = bitmap.height.toFloat()
+
+            val scale = Math.min(containerW / bitmapW, containerH / bitmapH)
+            val drawW = bitmapW * scale
+            val drawH = bitmapH * scale
+            val offsetX = (containerW - drawW) / 2f
+            val offsetY = (containerH - drawH) / 2f
+
+            fun normToScreen(p: ScannerPoint): Offset {
+                return Offset(offsetX + (p.x * drawW), offsetY + (p.y * drawH))
+            }
+
+            fun screenToNorm(sx: Float, sy: Float): ScannerPoint {
+                val nx = ((sx - offsetX) / drawW).coerceIn(0f, 1f)
+                val ny = ((sy - offsetY) / drawH).coerceIn(0f, 1f)
+                return ScannerPoint(nx, ny)
+            }
+
+            // Drawn Fitted Image
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = "Foto Asli",
@@ -600,111 +633,188 @@ fun CropAdjustmentScreen(
                 contentScale = ContentScale.Fit
             )
 
-            // Overlaid Polygon and Draggable Handles
+            // Overlaid Polygon & 8 Drag Handles
             Box(modifier = Modifier.fillMaxSize()) {
                 val ptTL = corners.getOrNull(0) ?: ScannerPoint(0.05f, 0.05f)
                 val ptTR = corners.getOrNull(1) ?: ScannerPoint(0.95f, 0.05f)
                 val ptBR = corners.getOrNull(2) ?: ScannerPoint(0.95f, 0.95f)
                 val ptBL = corners.getOrNull(3) ?: ScannerPoint(0.05f, 0.95f)
 
+                val sTL = normToScreen(ptTL)
+                val sTR = normToScreen(ptTR)
+                val sBR = normToScreen(ptBR)
+                val sBL = normToScreen(ptBL)
+
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val w = size.width
-                    val h = size.height
-
-                    val pTL = Offset(ptTL.x * w, ptTL.y * h)
-                    val pTR = Offset(ptTR.x * w, ptTR.y * h)
-                    val pBR = Offset(ptBR.x * w, ptBR.y * h)
-                    val pBL = Offset(ptBL.x * w, ptBL.y * h)
-
                     val path = Path().apply {
-                        moveTo(pTL.x, pTL.y)
-                        lineTo(pTR.x, pTR.y)
-                        lineTo(pBR.x, pBR.y)
-                        lineTo(pBL.x, pBL.y)
+                        moveTo(sTL.x, sTL.y)
+                        lineTo(sTR.x, sTR.y)
+                        lineTo(sBR.x, sBR.y)
+                        lineTo(sBL.x, sBL.y)
                         close()
                     }
 
-                    drawPath(path, Color(0xFF38BDF8).copy(alpha = 0.3f))
-                    drawPath(path, Color(0xFF38BDF8), style = Stroke(width = 4f))
+                    drawPath(path, Color(0xFF38BDF8).copy(alpha = 0.25f))
+                    drawPath(path, Color(0xFF38BDF8), style = Stroke(width = 5f))
+
+                    // Draw Quad Lines
+                    drawLine(Color(0xFF38BDF8), sTL, sTR, strokeWidth = 5f)
+                    drawLine(Color(0xFF38BDF8), sTR, sBR, strokeWidth = 5f)
+                    drawLine(Color(0xFF38BDF8), sBR, sBL, strokeWidth = 5f)
+                    drawLine(Color(0xFF38BDF8), sBL, sTL, strokeWidth = 5f)
                 }
 
-                // Draggable Handles
-                CornerHandle(
-                    point = ptTL,
+                // 4 Corner Handles (Red, Blue, Green, Orange)
+                ExactDragHandle(
+                    screenPos = sTL,
                     color = Color(0xFFEF4444),
-                    onDrag = { dx, dy, width, height ->
-                        val newTL = ScannerPoint(
-                            (ptTL.x + dx / width).coerceIn(0f, 1f),
-                            (ptTL.y + dy / height).coerceIn(0f, 1f)
-                        )
-                        corners = listOf(newTL, ptTR, ptBR, ptBL)
+                    onDragDelta = { dx, dy ->
+                        val updated = screenToNorm(sTL.x + dx, sTL.y + dy)
+                        corners = listOf(updated, ptTR, ptBR, ptBL)
                         onCornersUpdated(corners)
                     }
                 )
 
-                CornerHandle(
-                    point = ptTR,
+                ExactDragHandle(
+                    screenPos = sTR,
                     color = Color(0xFF3B82F6),
-                    onDrag = { dx, dy, width, height ->
-                        val newTR = ScannerPoint(
-                            (ptTR.x + dx / width).coerceIn(0f, 1f),
-                            (ptTR.y + dy / height).coerceIn(0f, 1f)
-                        )
-                        corners = listOf(ptTL, newTR, ptBR, ptBL)
+                    onDragDelta = { dx, dy ->
+                        val updated = screenToNorm(sTR.x + dx, sTR.y + dy)
+                        corners = listOf(ptTL, updated, ptBR, ptBL)
                         onCornersUpdated(corners)
                     }
                 )
 
-                CornerHandle(
-                    point = ptBR,
+                ExactDragHandle(
+                    screenPos = sBR,
                     color = Color(0xFF10B981),
-                    onDrag = { dx, dy, width, height ->
-                        val newBR = ScannerPoint(
-                            (ptBR.x + dx / width).coerceIn(0f, 1f),
-                            (ptBR.y + dy / height).coerceIn(0f, 1f)
-                        )
-                        corners = listOf(ptTL, ptTR, newBR, ptBL)
+                    onDragDelta = { dx, dy ->
+                        val updated = screenToNorm(sBR.x + dx, sBR.y + dy)
+                        corners = listOf(ptTL, ptTR, updated, ptBL)
                         onCornersUpdated(corners)
                     }
                 )
 
-                CornerHandle(
-                    point = ptBL,
+                ExactDragHandle(
+                    screenPos = sBL,
                     color = Color(0xFFF59E0B),
-                    onDrag = { dx, dy, width, height ->
-                        val newBL = ScannerPoint(
-                            (ptBL.x + dx / width).coerceIn(0f, 1f),
-                            (ptBL.y + dy / height).coerceIn(0f, 1f)
-                        )
-                        corners = listOf(ptTL, ptTR, ptBR, newBL)
+                    onDragDelta = { dx, dy ->
+                        val updated = screenToNorm(sBL.x + dx, sBL.y + dy)
+                        corners = listOf(ptTL, ptTR, ptBR, updated)
+                        onCornersUpdated(corners)
+                    }
+                )
+
+                // 4 Midpoint Edge Handles (CamScanner Style in Image 2)
+                val sTopMid = Offset((sTL.x + sTR.x) / 2f, (sTL.y + sTR.y) / 2f)
+                val sBottomMid = Offset((sBL.x + sBR.x) / 2f, (sBL.y + sBR.y) / 2f)
+                val sLeftMid = Offset((sTL.x + sBL.x) / 2f, (sTL.y + sBL.y) / 2f)
+                val sRightMid = Offset((sTR.x + sBR.x) / 2f, (sTR.y + sBR.y) / 2f)
+
+                ExactDragHandle(
+                    screenPos = sTopMid,
+                    color = Color.White,
+                    sizePx = 28f,
+                    onDragDelta = { _, dy ->
+                        val nTL = screenToNorm(sTL.x, sTL.y + dy)
+                        val nTR = screenToNorm(sTR.x, sTR.y + dy)
+                        corners = listOf(nTL, nTR, ptBR, ptBL)
+                        onCornersUpdated(corners)
+                    }
+                )
+
+                ExactDragHandle(
+                    screenPos = sBottomMid,
+                    color = Color.White,
+                    sizePx = 28f,
+                    onDragDelta = { _, dy ->
+                        val nBL = screenToNorm(sBL.x, sBL.y + dy)
+                        val nBR = screenToNorm(sBR.x, sBR.y + dy)
+                        corners = listOf(ptTL, ptTR, nBR, nBL)
+                        onCornersUpdated(corners)
+                    }
+                )
+
+                ExactDragHandle(
+                    screenPos = sLeftMid,
+                    color = Color.White,
+                    sizePx = 28f,
+                    onDragDelta = { dx, _ ->
+                        val nTL = screenToNorm(sTL.x + dx, sTL.y)
+                        val nBL = screenToNorm(sBL.x + dx, sBL.y)
+                        corners = listOf(nTL, ptTR, ptBR, nBL)
+                        onCornersUpdated(corners)
+                    }
+                )
+
+                ExactDragHandle(
+                    screenPos = sRightMid,
+                    color = Color.White,
+                    sizePx = 28f,
+                    onDragDelta = { dx, _ ->
+                        val nTR = screenToNorm(sTR.x + dx, sTR.y)
+                        val nBR = screenToNorm(sBR.x + dx, sBR.y)
+                        corners = listOf(ptTL, nTR, nBR, ptBL)
                         onCornersUpdated(corners)
                     }
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        Button(
-            onClick = onApplyCrop,
+        // CamScanner Bottom Controls (Image 2 & 3: Rotate Left, Rotate Right, Select All, Next)
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(50.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-            shape = RoundedCornerShape(12.dp)
+                .background(Color(0xFF1E293B), RoundedCornerShape(12.dp))
+                .padding(vertical = 8.dp, horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Default.Crop, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Potong & Ratakan Kertas (Perspective Warp)", fontWeight = FontWeight.Bold)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onRotateLeft() }
+            ) {
+                Icon(Icons.Default.RotateLeft, contentDescription = "Putar Kiri", tint = Color.White)
+                Text("Putar Kiri", color = Color.White, fontSize = 10.sp)
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onRotateRight() }
+            ) {
+                Icon(Icons.Default.RotateRight, contentDescription = "Putar Kanan", tint = Color.White)
+                Text("Putar Kanan", color = Color.White, fontSize = 10.sp)
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onResetFull() }
+            ) {
+                Icon(Icons.Default.CropFree, contentDescription = "Semua", tint = Color(0xFF38BDF8))
+                Text("Semua", color = Color(0xFF38BDF8), fontSize = 10.sp)
+            }
+
+            Button(
+                onClick = onApplyCrop,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Berikutnya", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
+            }
         }
     }
 }
 
 @Composable
-fun CornerHandle(
-    point: ScannerPoint,
+fun ExactDragHandle(
+    screenPos: Offset,
     color: Color,
-    onDrag: (dx: Float, dy: Float, width: Float, height: Float) -> Unit
+    sizePx: Float = 38f,
+    onDragDelta: (dx: Float, dy: Float) -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -712,16 +822,14 @@ fun CornerHandle(
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
                     change.consume()
-                    onDrag(dragAmount.x, dragAmount.y, size.width.toFloat(), size.height.toFloat())
+                    onDragDelta(dragAmount.x, dragAmount.y)
                 }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val cx = point.x * size.width
-            val cy = point.y * size.height
-
-            drawCircle(color, radius = 24f, center = Offset(cx, cy))
-            drawCircle(Color.White, radius = 12f, center = Offset(cx, cy))
+            drawCircle(color, radius = sizePx / 2f, center = screenPos)
+            drawCircle(Color.White, radius = sizePx / 4f, center = screenPos)
+            drawCircle(Color.Black.copy(alpha = 0.4f), radius = sizePx / 2f, center = screenPos, style = Stroke(width = 2f))
         }
     }
 }
