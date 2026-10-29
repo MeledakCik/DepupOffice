@@ -1992,19 +1992,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun batchConvertFlow() = pickFiles(arrayOf("image/*")) { uris ->
-        work("Konversi Massal ${uris.size} foto jadi PDF…", {
-            Pdf.batchImagesToIndividualPdf(this, uris)
-        }) { r ->
-            r.onSuccess { n ->
-                AlertDialog.Builder(this)
-                    .setTitle("Konversi Massal Selesai")
-                    .setMessage("✓ Berhasil mengonversi $n foto menjadi $n file PDF terpisah di folder sdcard/DepupOffice!")
-                    .setPositiveButton("Mengerti", null)
-                    .show()
-            }.onFailure { fail(it) }
-        }
-    }
+    private fun batchConvertFlow() = startActivity(Intent(this, ScannerActivity::class.java))
 
     private fun compressGalleryFlow() = pickFiles(arrayOf("image/*")) { uris ->
         val levels = listOf("Sedang (1920px · 80%)", "Tinggi (1280px · 70%)", "Maksimal (1080px · 55%)")
@@ -2303,7 +2291,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ================= KAMERA =================
-    private fun startScan() { camera.launch(Intent(this, CameraActivity::class.java)) }
+    private fun startScan() { startActivity(Intent(this, ScannerActivity::class.java)) }
 
     private fun textFlow() {
         val title = field("Judul (opsional)")
