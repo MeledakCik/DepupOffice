@@ -922,12 +922,12 @@ class MainActivity : AppCompatActivity() {
             p.add(c, top = 16)
         }
 
-        p.add(sectionTitle("Peralatan Utama PDF & Dokumen", "13 Alat Tersedia"), top = 22)
+        p.add(sectionTitle("Peralatan Utama PDF & Dokumen", "12 Alat Tersedia"), top = 22)
         p.add(twoCols(
-            tile(R.drawable.ic_camera, C.ACCENT, C.BLUE_BG, "CamScanner Auto-Crop", "Deteksi 4 sudut kertas HVS & Warp (OpenCV)",
-                "OpenCV AI", C.ACCENT, C.BLUE_BG) { startActivity(Intent(this, ScannerActivity::class.java)) },
             tile(R.drawable.ic_merge, C.INDIGO, C.INDIGO_BG, "Gabung PDF", "Satukan banyak dokumen PDF jadi satu, urutan bebas",
-                "Populer", C.ACCENT, C.BLUE_BG) { mergeFlow() }
+                "Populer", C.ACCENT, C.BLUE_BG) { mergeFlow() },
+            tile(R.drawable.ic_cut, C.INDIGO, C.INDIGO_BG, "Pisah PDF", "Pilah halaman atau pisahkan berkas sesuai rentang",
+                chev = true) { pickFile(arrayOf(PDF)) { splitFlow(it) } }
         ), top = 12)
         p.add(twoCols(
             tile(R.drawable.ic_crop, C.ACCENT, C.BLUE_BG, "Susun & Hapus PDF", "Atur urutan, putar 90°, atau buang halaman PDF",
@@ -1992,7 +1992,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun batchConvertFlow() = startActivity(Intent(this, ScannerActivity::class.java))
+    private fun batchConvertFlow() = pickFiles(arrayOf("image/*")) { uris ->
+        work("Konversi Massal ${uris.size} foto jadi PDF…", {
+            Pdf.batchImagesToIndividualPdf(this, uris)
+        }) { r ->
+            r.onSuccess { n ->
+                AlertDialog.Builder(this)
+                    .setTitle("Konversi Massal Selesai")
+                    .setMessage("✓ Berhasil mengonversi $n foto menjadi $n file PDF terpisah di folder sdcard/DepupOffice!")
+                    .setPositiveButton("Mengerti", null)
+                    .show()
+            }.onFailure { fail(it) }
+        }
+    }
 
     private fun compressGalleryFlow() = pickFiles(arrayOf("image/*")) { uris ->
         val levels = listOf("Sedang (1920px · 80%)", "Tinggi (1280px · 70%)", "Maksimal (1080px · 55%)")
@@ -2291,7 +2303,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ================= KAMERA =================
-    private fun startScan() { startActivity(Intent(this, ScannerActivity::class.java)) }
+    private fun startScan() { camera.launch(Intent(this, CameraActivity::class.java)) }
 
     private fun textFlow() {
         val title = field("Judul (opsional)")
