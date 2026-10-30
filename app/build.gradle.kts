@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,26 +7,33 @@ plugins {
 
 android {
     namespace = "cloud.depup.office"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "cloud.depup.office"
         minSdk = 29
-        targetSdk = 34
-        versionCode = 3
-        versionName = "2.2.0"
+        targetSdk = 36
+        versionCode = 4
+        versionName = "2.2.1"
     }
 
-    base.archivesName.set("DepupOffice_v2.2.0")
+    base.archivesName.set("DepupOffice_v2.2.1")
+
+    // Kredensial TIDAK boleh hardcode. Isi keystore.properties (di-gitignore) atau env var DEPUP_*.
+    val keystoreProps = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun cred(key: String, env: String): String? = keystoreProps.getProperty(key) ?: System.getenv(env)
 
     signingConfigs {
         create("release") {
-            val ksFile = rootProject.file("depup-office.jks")
-            if (ksFile.exists()) {
-                storeFile = ksFile
-                storePassword = "123456"
-                keyAlias = "depup"
-                keyPassword = "123456"
+            val path = cred("storeFile", "DEPUP_STORE_FILE")
+            if (path != null) {
+                storeFile = rootProject.file(path)
+                storePassword = cred("storePassword", "DEPUP_STORE_PASSWORD")
+                keyAlias = cred("keyAlias", "DEPUP_KEY_ALIAS")
+                keyPassword = cred("keyPassword", "DEPUP_KEY_PASSWORD")
             }
         }
     }
@@ -34,11 +43,11 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            val releaseConfig = signingConfigs.findByName("release")
-            if (releaseConfig != null && releaseConfig.storeFile?.exists() == true) {
+            val releaseConfig = signingConfigs.getByName("release")
+            if (releaseConfig.storeFile != null) {
                 signingConfig = releaseConfig
             } else {
-                signingConfig = signingConfigs.getByName("debug")
+                logger.warn("WARNING: keystore.properties tidak ada -> AAB release TIDAK ter-sign.")
             }
         }
     }
@@ -73,29 +82,6 @@ android {
                         fileLocation.parentFile?.mkdirs()
                         resolvedFile.copyTo(fileLocation, overwrite = true)
                     } catch (_: Exception) {}
-                }
-            }
-        }
-    }
-
-    signingConfigs.all {
-        val currentStoreFile = storeFile
-        if (currentStoreFile != null && !currentStoreFile.exists()) {
-            val rootFile = rootProject.file(currentStoreFile.name)
-            val projectFile = file(currentStoreFile.name)
-            val rootPathFile = rootProject.file(currentStoreFile.path)
-            val projectPathFile = file(currentStoreFile.path)
-
-            when {
-                rootFile.exists() -> storeFile = rootFile
-                projectFile.exists() -> storeFile = projectFile
-                rootPathFile.exists() -> storeFile = rootPathFile
-                projectPathFile.exists() -> storeFile = projectPathFile
-                else -> {
-                    val debugStore = signingConfigs.findByName("debug")?.storeFile
-                    if (debugStore != null && debugStore.exists()) {
-                        storeFile = debugStore
-                    }
                 }
             }
         }
