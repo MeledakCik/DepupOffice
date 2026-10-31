@@ -13,7 +13,7 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
+        versionCode = 5
         versionName = "2.2.1"
     }
 
@@ -95,7 +95,7 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     // Viewfinder kamera sendiri
-    val camerax = "1.3.4"
+    val camerax = "1.4.2"
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
