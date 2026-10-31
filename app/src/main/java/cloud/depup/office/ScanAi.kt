@@ -265,6 +265,17 @@ object ScanAi {
     }
 
     /**
+     * 4 sudut dokumen (KiriAtas, KananAtas, KananBawah, KiriBawah) sebagai pecahan 0..1 [x0,y0,...,x3,y3] untuk
+     * koreksi perspektif, atau null bila tidak yakin / dokumen sudah berupa persegi panjang sejajar bingkai
+     * (jalur [detectCrop] yang menangani). Logika ada di [DocQuad] (murni Kotlin, diuji di JVM).
+     */
+    fun detectQuad(src: Bitmap): FloatArray? {
+        val s = small(src)
+        val q = DocQuad.detect(s.g, s.w, s.h) ?: return null
+        return FloatArray(8) { if (it % 2 == 0) q[it] / s.w else q[it] / s.h }
+    }
+
+    /**
      * Sudut (derajat) yang harus dipakai pada Matrix.postRotate agar teks jadi lurus. Rentang -30..+30.
      * [area] = pecahan area dokumen (null = seluruh gambar).
      */

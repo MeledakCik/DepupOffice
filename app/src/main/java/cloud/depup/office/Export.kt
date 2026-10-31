@@ -110,7 +110,7 @@ object Export {
 
     /** Putar + straighten + potong + kecerahan + filter untuk satu halaman. */
     fun process(ctx: Context, pg: ScanPage, mode: Int, maxDim: Int, bright: Int, contrast: Int): Bitmap =
-        Pdf.applyMode(Pdf.renderScan(ctx, pg, maxDim, bright, contrast), mode)
+        Pdf.renderFiltered(ctx, pg, maxDim, mode, bright, contrast)
 
     /** Perkiraan byte untuk SATU halaman (halaman pertama dipakai sebagai contoh). */
     fun estimatePage(

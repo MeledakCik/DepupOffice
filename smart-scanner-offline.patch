@@ -1,0 +1,901 @@
+diff --git a/app/src/main/java/cloud/depup/office/DocFilter.kt b/app/src/main/java/cloud/depup/office/DocFilter.kt
+new file mode 100644
+index 0000000..7ddfa09
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/DocFilter.kt
+@@ -0,0 +1,144 @@
++package cloud.depup.office
++
++import kotlin.math.max
++import kotlin.math.min
++import kotlin.math.pow
++
++/**
++ * Filter "Magic Color" cerdas, murni Kotlin tanpa dependensi Android (bisa diuji di JVM), 100% offline.
++ *
++ * Berbeda dengan matriks warna statis, filter ini MENGUKUR terang kertas di tiap area gambar lalu menormalkannya:
++ * bayangan tangan/ponsel, gradasi lampu, dan sudut gelap hilang; kertas jadi putih bersih; tinta tetap pekat;
++ * warna (stempel, tanda tangan biru, logo) tetap hidup karena ketiga kanal dikali gain yang sama (rona terjaga).
++ */
++object DocFilter {
++
++    /** Ubah [px] (ARGB, [w]x[h]) di tempat. */
++    fun magic(px: IntArray, w: Int, h: Int) {
++        if (w < 8 || h < 8 || px.size < w * h) return
++        val cell = max(8, max(w, h) / 40)
++        val gw = (w + cell - 1) / cell
++        val gh = (h + cell - 1) / cell
++        val bg = paperMap(px, w, h, cell, gw, gh)
++
++        // Gain per sel = 255 / (96% terang kertas): kertas tepat jenuh jadi putih, bintik noise kertas terpangkas.
++        val gain = FloatArray(gw * gh) { 255f / (bg[it] * 0.96f) }
++
++        // LUT kurva: gamma ringan memperpekat tinta tanpa membuat warna pastel jadi kelabu.
++        val lut = IntArray(256) { (255.0 * (it / 255.0).pow(1.2)).toInt().coerceIn(0, 255) }
++
++        // Interpolasi bilinear gain antar pusat sel supaya tidak ada kotak-kotak.
++        val ix0 = IntArray(w); val ix1 = IntArray(w); val tx = FloatArray(w)
++        for (x in 0 until w) {
++            val f = (x + 0.5f) / cell - 0.5f
++            val i0 = f.toInt().let { if (f < 0f) 0 else it }
++            ix0[x] = i0.coerceIn(0, gw - 1)
++            ix1[x] = (i0 + 1).coerceIn(0, gw - 1)
++            tx[x] = (f - i0).coerceIn(0f, 1f).let { if (f < 0f) 0f else it }
++        }
++        val sat = 1.12f
++        for (y in 0 until h) {
++            val f = (y + 0.5f) / cell - 0.5f
++            val j0 = (if (f < 0f) 0 else f.toInt()).coerceIn(0, gh - 1)
++            val j1 = (j0 + 1).coerceIn(0, gh - 1)
++            val ty = if (f < 0f) 0f else (f - j0).coerceIn(0f, 1f)
++            val r0 = j0 * gw; val r1 = j1 * gw
++            val row = y * w
++            for (x in 0 until w) {
++                val a = ix0[x]; val b = ix1[x]; val t = tx[x]
++                val g0 = gain[r0 + a] * (1f - t) + gain[r0 + b] * t
++                val g1 = gain[r1 + a] * (1f - t) + gain[r1 + b] * t
++                val g = g0 * (1f - ty) + g1 * ty
++                val c = px[row + x]
++                val r = min(255f, ((c shr 16) and 255) * g)
++                val gr = min(255f, ((c shr 8) and 255) * g)
++                val bl = min(255f, (c and 255) * g)
++                // Naikkan saturasi sedikit di sekitar luminans (hanya kalau bukan sudah putih/abu).
++                val lum = r * 0.299f + gr * 0.587f + bl * 0.114f
++                val r2 = (lum + (r - lum) * sat).toInt().coerceIn(0, 255)
++                val g2 = (lum + (gr - lum) * sat).toInt().coerceIn(0, 255)
++                val b2 = (lum + (bl - lum) * sat).toInt().coerceIn(0, 255)
++                px[row + x] = (c and 0xFF000000.toInt()) or (lut[r2] shl 16) or (lut[g2] shl 8) or lut[b2]
++            }
++        }
++    }
++
++    /**
++     * Peta terang kertas per sel: persentil ke-90 luminans (tinta jarang >10% area sel) lalu dilasi 5x5 + blur
++     * supaya blok gelap besar (foto, logo, header tabel) tidak dianggap bayangan dan di-"putihkan".
++     */
++    private fun paperMap(px: IntArray, w: Int, h: Int, cell: Int, gw: Int, gh: Int): FloatArray {
++        val p90 = FloatArray(gw * gh)
++        val hist = IntArray(256)
++        val step = max(1, cell / 16)
++        for (cy in 0 until gh) for (cx in 0 until gw) {
++            java.util.Arrays.fill(hist, 0)
++            var n = 0
++            val x0 = cx * cell; val x1 = min(w, x0 + cell)
++            val y0 = cy * cell; val y1 = min(h, y0 + cell)
++            var y = y0
++            while (y < y1) {
++                var x = x0
++                while (x < x1) {
++                    val c = px[y * w + x]
++                    hist[(((c shr 16) and 255) * 299 + ((c shr 8) and 255) * 587 + (c and 255) * 114) / 1000]++
++                    n++; x += step
++                }
++                y += step
++            }
++            var acc = 0; var v = 255
++            val target = n * 0.9f
++            for (i in 0..255) { acc += hist[i]; if (acc >= target) { v = i; break } }
++            p90[cy * gw + cx] = max(8, v).toFloat()
++        }
++        // Closing (dilasi lalu erosi, jendela 9x9 sel): blok gelap sempit (foto, logo, header tabel) terisi nilai kertas
++        // di sekitarnya, tetapi gradasi bayangan yang mulus kembali PERSIS (closing pada tanjakan = identitas),
++        // jadi tidak ada bias naik seperti pada dilasi saja.
++        val clo = closing(p90, gw, gh, 4)
++        // Hanya "lubang" yang DALAM (>~40% lebih gelap dari sekitarnya) yang diisi. Bayangan tangan/ponsel biasanya
++        // lebih redup (10-30%) walau sempit dan tajam, jadi tetap dikoreksi apa adanya.
++        val adj = FloatArray(gw * gh)
++        for (i in adj.indices) {
++            val dip = (clo[i] - p90[i]) / clo[i]
++            val wgt = ((dip - 0.22f) / 0.18f).coerceIn(0f, 1f)
++            adj[i] = p90[i] + wgt * (clo[i] - p90[i])
++        }
++        val sm = adj   // tanpa blur: interpolasi bilinear antar pusat sel sudah cukup halus dan tepi bayangan tetap tajam
++        // Lantai: jangan menganggap kertas lebih gelap dari 55% terang kertas global (median). Blok gelap yang lebih
++        // lebar dari jendela closing tetap tidak terangkat lebih dari ~1,8x, jadi foto besar tidak "terbakar".
++        val sorted = sm.copyOf(); sorted.sort()
++        val median = sorted[sorted.size / 2]
++        val floor = max(8f, median * 0.55f)
++        for (i in sm.indices) sm[i] = max(sm[i], floor)
++        return sm
++    }
++
++    /** Closing persegi (2r+1)x(2r+1) pada peta [a] gw x gh; tepi direplikasi agar gradasi di pinggir tetap benar. */
++    private fun closing(a: FloatArray, gw: Int, gh: Int, r: Int): FloatArray {
++        val pw = gw + 2 * r; val ph = gh + 2 * r
++        var cur = FloatArray(pw * ph)
++        for (y in 0 until ph) for (x in 0 until pw) {
++            cur[y * pw + x] = a[(y - r).coerceIn(0, gh - 1) * gw + (x - r).coerceIn(0, gw - 1)]
++        }
++        fun pass(src: FloatArray, horiz: Boolean, takeMax: Boolean): FloatArray {
++            val o = FloatArray(pw * ph)
++            for (y in 0 until ph) for (x in 0 until pw) {
++                var v = if (takeMax) -1f else 1e9f
++                for (d in -r..r) {
++                    val xx = if (horiz) x + d else x
++                    val yy = if (horiz) y else y + d
++                    if (xx < 0 || yy < 0 || xx >= pw || yy >= ph) continue
++                    val q = src[yy * pw + xx]
++                    if (takeMax) { if (q > v) v = q } else { if (q < v) v = q }
++                }
++                o[y * pw + x] = v
++            }
++            return o
++        }
++        cur = pass(pass(cur, true, true), false, true)
++        cur = pass(pass(cur, true, false), false, false)
++        val out = FloatArray(gw * gh)
++        for (y in 0 until gh) for (x in 0 until gw) out[y * gw + x] = cur[(y + r) * pw + x + r]
++        return out
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/DocQuad.kt b/app/src/main/java/cloud/depup/office/DocQuad.kt
+new file mode 100644
+index 0000000..c95cb09
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/DocQuad.kt
+@@ -0,0 +1,315 @@
++package cloud.depup.office
++
++import kotlin.math.abs
++import kotlin.math.acos
++import kotlin.math.atan2
++import kotlin.math.max
++import kotlin.math.min
++import kotlin.math.sqrt
++
++/**
++ * Deteksi 4 SUDUT dokumen (untuk koreksi perspektif ala CamScanner). Murni Kotlin tanpa dependensi Android,
++ * jadi bisa diuji di JVM. 100% offline, tanpa model/AI berbayar.
++ *
++ * Cara kerja: wilayah kertas ditumbuhkan dari tengah gambar (tepi kertas = "dinding" kemiringan terang yang tajam),
++ * lubang diisi, lalu 4 sudut dicari sebagai segi-empat berluas maksimum di dalam cembung (convex hull) wilayah itu.
++ * Ini tahan terhadap dokumen yang miring/diputar, bukan hanya yang sejajar bingkai.
++ */
++object DocQuad {
++
++    /**
++     * [g] = gambar abu-abu kecil (±320 px, sudah di-blur ringan), [w]x[h].
++     * Mengembalikan 8 angka piksel (x,y) berurutan KIRI-ATAS, KANAN-ATAS, KANAN-BAWAH, KIRI-BAWAH,
++     * atau null bila tidak yakin ATAU dokumen praktis sudah berupa persegi panjang sejajar bingkai
++     * (biar jalur potong biasa yang menanganinya, tanpa resampling yang tak perlu).
++     */
++    fun detect(g: IntArray, w: Int, h: Int): FloatArray? {
++        if (w < 16 || h < 16 || g.size < w * h) return null
++        val closed = closeGray(g, w, h, 3)
++        val queue = IntArray(w * h + 8)
++        var best: FloatArray? = null
++        var bestScore = 0f
++
++        fun consider(mask: BooleanArray) {
++            val inside = BooleanArray(w * h)
++            val count = fillHoles(mask, inside, w, h, queue)
++            val q = quadOf(inside, w, h) ?: return
++            val qa = polyArea(q)
++            val area = qa / (w * h).toFloat()
++            if (area < 0.15f || area > 0.985f) return      // area ~1 = wilayah bocor menelan seluruh frame
++            val fill = count / qa
++            val fq = if (fill > 1f) 1f / fill else fill
++            if (fq < 0.80f) return                           // wilayah tidak mirip segi-empat
++            // Latar (meja) juga bisa tampak seperti segi-empat. Dokumen biasanya memuat titik tengah foto dan
++            // tidak menempel ke hampir seluruh pinggir bingkai, sedangkan latar sebaliknya.
++            var score = fq * fq * area
++            if (!inside[(h / 2) * w + w / 2]) score *= 0.6f
++            if (borderFraction(inside, w, h) > 0.5f) score *= 0.5f
++            if (score > bestScore) { bestScore = score; best = q }
++        }
++
++        val sl = slope(closed, w, h)
++        val seeds = arrayOf(0.5f to 0.5f, 0.38f to 0.38f, 0.62f to 0.38f, 0.38f to 0.62f, 0.62f to 0.62f)
++        for ((fx, fy) in seeds) {
++            val seed = (fy * h).toInt().coerceIn(0, h - 1) * w + (fx * w).toInt().coerceIn(0, w - 1)
++            for (ms in intArrayOf(10, 6, 4)) {
++                val m = grow(closed, sl, w, h, seed, ms, queue) ?: continue
++                consider(m)
++            }
++        }
++        if (best == null) otsuMask(g, w, h, queue)?.let { consider(it) }
++
++        val q = best ?: return null
++        // Lebarkan sedikit ke luar (wilayah tumbuh berhenti 1 piksel sebelum garis tepi kertas).
++        val cx = (q[0] + q[2] + q[4] + q[6]) / 4f
++        val cy = (q[1] + q[3] + q[5] + q[7]) / 4f
++        val o = FloatArray(8)
++        for (i in 0 until 4) {
++            val dx = q[2 * i] - cx; val dy = q[2 * i + 1] - cy
++            val d = max(1e-3f, sqrt(dx * dx + dy * dy))
++            o[2 * i] = (q[2 * i] + dx / d * 1.2f).coerceIn(0f, w.toFloat())
++            o[2 * i + 1] = (q[2 * i + 1] + dy / d * 1.2f).coerceIn(0f, h.toFloat())
++        }
++        return if (isTrivial(o, w, h)) null else o
++    }
++
++    /** Pecahan piksel pinggir bingkai yang termasuk wilayah. */
++    private fun borderFraction(inside: BooleanArray, w: Int, h: Int): Float {
++        var n = 0; var total = 0
++        for (x in 0 until w) { total += 2; if (inside[x]) n++; if (inside[(h - 1) * w + x]) n++ }
++        for (y in 1 until h - 1) { total += 2; if (inside[y * w]) n++; if (inside[y * w + w - 1]) n++ }
++        return n.toFloat() / total
++    }
++
++    /** Segi-empat yang praktis = persegi panjang sejajar bingkai (atau memenuhi bingkai): tak perlu perspektif. */
++    private fun isTrivial(q: FloatArray, w: Int, h: Int): Boolean {
++        val l = min(min(q[0], q[6]), min(q[2], q[4])); val r = max(max(q[0], q[6]), max(q[2], q[4]))
++        val t = min(min(q[1], q[3]), min(q[5], q[7])); val b = max(max(q[1], q[3]), max(q[5], q[7]))
++        val tx = 0.03f * w; val ty = 0.03f * h
++        val aligned = abs(q[0] - l) < tx && abs(q[1] - t) < ty &&
++            abs(q[2] - r) < tx && abs(q[3] - t) < ty &&
++            abs(q[4] - r) < tx && abs(q[5] - b) < ty &&
++            abs(q[6] - l) < tx && abs(q[7] - b) < ty
++        return aligned
++    }
++
++    // ---------------- morfologi / region growing ----------------
++
++    /** Penutupan abu-abu (dilasi lalu erosi, separabel): menghapus goresan teks gelap tipis di atas kertas terang. */
++    private fun closeGray(g: IntArray, w: Int, h: Int, r: Int): IntArray {
++        fun pass(src: IntArray, horiz: Boolean, takeMax: Boolean): IntArray {
++            val o = IntArray(w * h)
++            for (y in 0 until h) for (x in 0 until w) {
++                var v = if (takeMax) -1 else 256
++                for (d in -r..r) {
++                    val xx = if (horiz) x + d else x
++                    val yy = if (horiz) y else y + d
++                    if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue
++                    val q = src[yy * w + xx]
++                    if (takeMax) { if (q > v) v = q } else { if (q < v) v = q }
++                }
++                o[y * w + x] = v
++            }
++            return o
++        }
++        val dil = pass(pass(g, true, true), false, true)
++        return pass(pass(dil, true, false), false, false)
++    }
++
++    /** Kemiringan terang per piksel: tinggi di tepi kertas, ~0 di kertas halus. */
++    private fun slope(c: IntArray, w: Int, h: Int): IntArray {
++        val o = IntArray(w * h)
++        for (y in 1 until h - 1) for (x in 1 until w - 1) {
++            val i = y * w + x
++            o[i] = max(abs(c[i + 1] - c[i - 1]), abs(c[i + w] - c[i - w])) / 2
++        }
++        return o
++    }
++
++    /** Tumbuhkan wilayah dari [seed] selama kemiringan <= [maxSlope]; null bila seed sendiri di tepi tajam. */
++    private fun grow(c: IntArray, sl: IntArray, w: Int, h: Int, seed: Int, maxSlope: Int, queue: IntArray): BooleanArray? {
++        if (sl[seed] > maxSlope) return null
++        val tau = maxSlope * 3
++        val mask = BooleanArray(w * h)
++        var head = 0; var tail = 0
++        queue[tail++] = seed; mask[seed] = true
++        while (head < tail) {
++            val p = queue[head++]
++            val x = p % w; val y = p / w
++            val v = c[p]
++            if (x > 0 && !mask[p - 1] && sl[p - 1] <= maxSlope && abs(c[p - 1] - v) <= tau) { mask[p - 1] = true; queue[tail++] = p - 1 }
++            if (x < w - 1 && !mask[p + 1] && sl[p + 1] <= maxSlope && abs(c[p + 1] - v) <= tau) { mask[p + 1] = true; queue[tail++] = p + 1 }
++            if (y > 0 && !mask[p - w] && sl[p - w] <= maxSlope && abs(c[p - w] - v) <= tau) { mask[p - w] = true; queue[tail++] = p - w }
++            if (y < h - 1 && !mask[p + w] && sl[p + w] <= maxSlope && abs(c[p + w] - v) <= tau) { mask[p + w] = true; queue[tail++] = p + w }
++        }
++        return mask
++    }
++
++    /** Isi lubang: [inside] = piksel wilayah + piksel yang tidak terhubung ke pinggir gambar. Mengembalikan jumlahnya. */
++    private fun fillHoles(mask: BooleanArray, inside: BooleanArray, w: Int, h: Int, queue: IntArray): Int {
++        val outside = BooleanArray(w * h)
++        var head = 0; var tail = 0
++        fun push(i: Int) { if (!mask[i] && !outside[i]) { outside[i] = true; queue[tail++] = i } }
++        for (x in 0 until w) { push(x); push((h - 1) * w + x) }
++        for (y in 0 until h) { push(y * w); push(y * w + w - 1) }
++        while (head < tail) {
++            val p = queue[head++]
++            val x = p % w; val y = p / w
++            if (x > 0) push(p - 1); if (x < w - 1) push(p + 1)
++            if (y > 0) push(p - w); if (y < h - 1) push(p + w)
++        }
++        var n = 0
++        for (i in 0 until w * h) { val v = !outside[i]; inside[i] = v; if (v) n++ }
++        return n
++    }
++
++    /** Cadangan kontras tinggi: ambang Otsu + komponen terhubung terbesar. */
++    private fun otsuMask(g: IntArray, w: Int, h: Int, queue: IntArray): BooleanArray? {
++        val hist = IntArray(256)
++        for (i in 0 until w * h) hist[g[i].coerceIn(0, 255)]++
++        val total = w * h
++        var sumAll = 0L
++        for (i in 0..255) sumAll += i.toLong() * hist[i]
++        var wB = 0; var sumB = 0L; var bestV = 0.0; var thr = 128
++        for (t in 0..255) {
++            wB += hist[t]
++            if (wB == 0) continue
++            val wF = total - wB
++            if (wF == 0) break
++            sumB += t.toLong() * hist[t]
++            val mB = sumB.toDouble() / wB
++            val mF = (sumAll - sumB).toDouble() / wF
++            val v = wB.toDouble() * wF * (mB - mF) * (mB - mF)
++            if (v > bestV) { bestV = v; thr = t }
++        }
++        var borderBright = 0; var borderTotal = 0
++        fun cb(x: Int, y: Int) { borderTotal++; if (g[y * w + x] > thr) borderBright++ }
++        for (x in 0 until w) { cb(x, 0); cb(x, h - 1) }
++        for (y in 1 until h - 1) { cb(0, y); cb(w - 1, y) }
++        val docIsBright = borderBright * 2 < borderTotal
++        val fg = BooleanArray(w * h) { (g[it] > thr) == docIsBright }
++        val seen = BooleanArray(w * h)
++        var bestStart = -1; var bestSize = 0
++        for (s in 0 until w * h) {
++            if (!fg[s] || seen[s]) continue
++            var head = 0; var tail = 0
++            queue[tail++] = s; seen[s] = true
++            while (head < tail) {
++                val p = queue[head++]
++                val x = p % w; val y = p / w
++                if (x > 0 && fg[p - 1] && !seen[p - 1]) { seen[p - 1] = true; queue[tail++] = p - 1 }
++                if (x < w - 1 && fg[p + 1] && !seen[p + 1]) { seen[p + 1] = true; queue[tail++] = p + 1 }
++                if (y > 0 && fg[p - w] && !seen[p - w]) { seen[p - w] = true; queue[tail++] = p - w }
++                if (y < h - 1 && fg[p + w] && !seen[p + w]) { seen[p + w] = true; queue[tail++] = p + w }
++            }
++            if (tail > bestSize) { bestSize = tail; bestStart = s }
++        }
++        if (bestStart < 0) return null
++        // Ulangi flood dari komponen terbesar untuk membuat maskernya.
++        val mask = BooleanArray(w * h)
++        var head = 0; var tail = 0
++        queue[tail++] = bestStart; mask[bestStart] = true
++        while (head < tail) {
++            val p = queue[head++]
++            val x = p % w; val y = p / w
++            if (x > 0 && fg[p - 1] && !mask[p - 1]) { mask[p - 1] = true; queue[tail++] = p - 1 }
++            if (x < w - 1 && fg[p + 1] && !mask[p + 1]) { mask[p + 1] = true; queue[tail++] = p + 1 }
++            if (y > 0 && fg[p - w] && !mask[p - w]) { mask[p - w] = true; queue[tail++] = p - w }
++            if (y < h - 1 && fg[p + w] && !mask[p + w]) { mask[p + w] = true; queue[tail++] = p + w }
++        }
++        return mask
++    }
++
++    // ---------------- geometri: convex hull -> segi-empat luas maksimum ----------------
++
++    private class P(val x: Int, val y: Int)
++
++    private fun cross(o: P, a: P, b: P): Long =
++        (a.x - o.x).toLong() * (b.y - o.y) - (a.y - o.y).toLong() * (b.x - o.x)
++
++    private fun hull(pts: List<P>): List<P> {
++        val s = pts.sortedWith(compareBy<P>({ it.x }, { it.y }))
++        if (s.size < 3) return s
++        val lo = ArrayList<P>()
++        for (p in s) { while (lo.size >= 2 && cross(lo[lo.size - 2], lo[lo.size - 1], p) <= 0) lo.removeAt(lo.size - 1); lo.add(p) }
++        val up = ArrayList<P>()
++        for (p in s.asReversed()) { while (up.size >= 2 && cross(up[up.size - 2], up[up.size - 1], p) <= 0) up.removeAt(up.size - 1); up.add(p) }
++        lo.removeAt(lo.size - 1); up.removeAt(up.size - 1)
++        return lo + up
++    }
++
++    /** Buang titik hull yang paling "tidak penting" (segitiga terkecil) sampai tersisa [target]: sudut sejati tetap. */
++    private fun simplify(h: MutableList<P>, target: Int) {
++        while (h.size > target) {
++            var bi = 0; var ba = Long.MAX_VALUE
++            for (i in h.indices) {
++                val a = abs(cross(h[(i + h.size - 1) % h.size], h[i], h[(i + 1) % h.size]))
++                if (a < ba) { ba = a; bi = i }
++            }
++            h.removeAt(bi)
++        }
++    }
++
++    /** 4 sudut (urut KA, KanAtas, KanBawah, KiBawah; piksel) dari wilayah [inside], atau null. */
++    private fun quadOf(inside: BooleanArray, w: Int, h: Int): FloatArray? {
++        val pts = ArrayList<P>()
++        for (y in 0 until h) {
++            var l = -1; var r = -1
++            for (x in 0 until w) if (inside[y * w + x]) { if (l < 0) l = x; r = x }
++            if (l < 0) continue
++            pts.add(P(l, y)); pts.add(P(r + 1, y)); pts.add(P(l, y + 1)); pts.add(P(r + 1, y + 1))
++        }
++        if (pts.size < 8) return null
++        val hv = hull(pts).toMutableList()
++        if (hv.size < 4) return null
++        simplify(hv, 40)
++        val m = hv.size
++
++        var bi = -1; var bj = -1; var bk = -1; var bl = -1; var bt = -1L
++        for (i in 0 until m) for (k in i + 2 until m) {
++            var j1 = -1; var a1 = -1L
++            for (j in i + 1 until k) { val a = abs(cross(hv[i], hv[j], hv[k])); if (a > a1) { a1 = a; j1 = j } }
++            var l1 = -1; var a2 = -1L
++            for (l in k + 1 until m) { val a = abs(cross(hv[k], hv[l], hv[i])); if (a > a2) { a2 = a; l1 = l } }
++            for (l in 0 until i) { val a = abs(cross(hv[k], hv[l], hv[i])); if (a > a2) { a2 = a; l1 = l } }
++            if (j1 < 0 || l1 < 0) continue
++            if (a1 + a2 > bt) { bt = a1 + a2; bi = i; bj = j1; bk = k; bl = l1 }
++        }
++        if (bi < 0) return null
++        val c = listOf(hv[bi], hv[bj], hv[bk], hv[bl])
++
++        // Urutkan searah jarum jam di layar lalu mulai dari sudut kiri-atas (x+y terkecil).
++        val cx = c.sumOf { it.x } / 4.0; val cy = c.sumOf { it.y } / 4.0
++        val cw = c.sortedBy { atan2(it.y - cy, it.x - cx) }
++        var s = 0
++        for (i in 1 until 4) if (cw[i].x + cw[i].y < cw[s].x + cw[s].y) s = i
++        val o = FloatArray(8)
++        for (i in 0 until 4) { val p = cw[(s + i) % 4]; o[2 * i] = p.x.toFloat(); o[2 * i + 1] = p.y.toFloat() }
++        return if (validQuad(o, w, h)) o else null
++    }
++
++    private fun validQuad(q: FloatArray, w: Int, h: Int): Boolean {
++        val minEdge = 0.10f * max(w, h)
++        for (i in 0 until 4) {
++            val ax = q[2 * i]; val ay = q[2 * i + 1]
++            val bx = q[2 * ((i + 1) % 4)]; val by = q[2 * ((i + 1) % 4) + 1]
++            val px = q[2 * ((i + 3) % 4)]; val py = q[2 * ((i + 3) % 4) + 1]
++            val e1x = bx - ax; val e1y = by - ay; val e2x = px - ax; val e2y = py - ay
++            val l1 = sqrt(e1x * e1x + e1y * e1y); val l2 = sqrt(e2x * e2x + e2y * e2y)
++            if (l1 < minEdge || l2 < minEdge) return false
++            val cos = ((e1x * e2x + e1y * e2y) / (l1 * l2)).coerceIn(-1f, 1f)
++            val deg = Math.toDegrees(acos(cos).toDouble())
++            if (deg < 50.0 || deg > 130.0) return false
++        }
++        return true
++    }
++
++    private fun polyArea(q: FloatArray): Float {
++        var s = 0f
++        for (i in 0 until 4) {
++            val j = (i + 1) % 4
++            s += q[2 * i] * q[2 * j + 1] - q[2 * j] * q[2 * i + 1]
++        }
++        return abs(s) / 2f
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/Export.kt b/app/src/main/java/cloud/depup/office/Export.kt
+index 56fa8bc..c685fd5 100644
+--- a/app/src/main/java/cloud/depup/office/Export.kt
++++ b/app/src/main/java/cloud/depup/office/Export.kt
+@@ -110,7 +110,7 @@ object Export {
+ 
+     /** Putar + straighten + potong + kecerahan + filter untuk satu halaman. */
+     fun process(ctx: Context, pg: ScanPage, mode: Int, maxDim: Int, bright: Int, contrast: Int): Bitmap =
+-        Pdf.applyMode(Pdf.renderScan(ctx, pg, maxDim, bright, contrast), mode)
++        Pdf.renderFiltered(ctx, pg, maxDim, mode, bright, contrast)
+ 
+     /** Perkiraan byte untuk SATU halaman (halaman pertama dipakai sebagai contoh). */
+     fun estimatePage(
+diff --git a/app/src/main/java/cloud/depup/office/Pdf.kt b/app/src/main/java/cloud/depup/office/Pdf.kt
+index 7da953f..0d0e2aa 100644
+--- a/app/src/main/java/cloud/depup/office/Pdf.kt
++++ b/app/src/main/java/cloud/depup/office/Pdf.kt
+@@ -461,10 +461,13 @@ object Pdf {
+         try {
+             uris.forEachIndexed { idx, u ->
+                 val raw = decode(ctx, u, 1600)
+-                val bmp = if (mode == 2) toDocument(raw).also { raw.recycle() } else raw
++                val bmp = when (mode) {
++                    2 -> toDocument(raw).also { raw.recycle() }
++                    3 -> magicBitmap(raw).also { raw.recycle() }
++                    else -> raw
++                }
+                 val drawPaint = when (mode) {
+                     1 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) }) }
+-                    3 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(magicMatrix()) }
+                     else -> paint
+                 }
+                 val land = bmp.width > bmp.height
+@@ -509,19 +512,94 @@ object Pdf {
+     fun applyMode(raw: Bitmap, mode: Int): Bitmap {
+         if (mode == 2) return toDocument(raw).also { raw.recycle() }
+         if (mode == 0) return raw
++        if (mode == 3) return magicBitmap(raw).also { raw.recycle() }
+         val o = Bitmap.createBitmap(raw.width, raw.height, Bitmap.Config.ARGB_8888)
+-        val cm = if (mode == 1) ColorMatrix().apply { setSaturation(0f) } else magicMatrix()
++        val cm = ColorMatrix().apply { setSaturation(0f) }
+         Canvas(o).drawBitmap(raw, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(cm) })
+         raw.recycle()
+         return o
+     }
+ 
++    /**
++     * Magic Color cerdas (offline): terang kertas diukur per area lalu dinormalkan, jadi bayangan & gradasi lampu
++     * hilang dan kertas jadi putih bersih. Mengembalikan bitmap BARU; [src] tidak diubah (pemanggil yang me-recycle).
++     */
++    fun magicBitmap(src: Bitmap): Bitmap {
++        val w = src.width
++        val h = src.height
++        val px = IntArray(w * h)
++        src.getPixels(px, 0, w, 0, 0, w, h)
++        DocFilter.magic(px, w, h)
++        val o = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
++        o.setPixels(px, 0, w, 0, 0, w, h)
++        return o
++    }
++
++    /**
++     * Render satu halaman scan + filter. Untuk Magic Color, kecerahan/kontras dipasang SETELAH normalisasi
++     * (normalisasi justru meniadakan geseran kecerahan bila dipasang sebelumnya), dan urutan ini sama persis
++     * dengan pratinjau di editor.
++     */
++    fun renderFiltered(ctx: Context, pg: ScanPage, maxDim: Int, mode: Int, bright: Int, contrast: Int): Bitmap {
++        if (mode != 3) return applyMode(renderScan(ctx, pg, maxDim, bright, contrast), mode)
++        val raw = renderScan(ctx, pg, maxDim, 0, 0)
++        val m = magicBitmap(raw)
++        raw.recycle()
++        if (bright == 0 && contrast == 0) return m
++        val o = Bitmap.createBitmap(m.width, m.height, Bitmap.Config.ARGB_8888)
++        Canvas(o).drawBitmap(m, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(adjustMatrix(bright, contrast)) })
++        m.recycle()
++        return o
++    }
++
++    /**
++     * Koreksi perspektif: ambil 4 sudut dokumen [q] (pecahan 0..1 pada gambar SETELAH putar/balik; urutan KiriAtas,
++     * KananAtas, KananBawah, KiriBawah) dan "tegakkan" menjadi persegi panjang, lalu simpan sebagai JPEG di [out].
++     * Rasio hasil = sisi terpanjang dari tiap pasangan sisi berhadapan; bila hampir A4 / kartu ID-1, dipaskan persis.
++     */
++    fun warpQuad(ctx: Context, src: File, rot: Int, flip: Boolean, q: FloatArray, maxDim: Int, out: File) {
++        val raw = decode(ctx, Uri.fromFile(src), maxDim)
++        val o = orient(raw, rot, flip)
++        if (o !== raw) raw.recycle()
++        try {
++            val w = o.width.toFloat()
++            val h = o.height.toFloat()
++            val pts = FloatArray(8) { if (it % 2 == 0) q[it] * w else q[it] * h }
++            fun dist(i: Int, j: Int): Float {
++                val dx = pts[2 * i] - pts[2 * j]; val dy = pts[2 * i + 1] - pts[2 * j + 1]
++                return kotlin.math.sqrt(dx * dx + dy * dy)
++            }
++            var ow = max(dist(0, 1), dist(3, 2))
++            var oh = max(dist(0, 3), dist(1, 2))
++            if (ow < 16f || oh < 16f) throw IOException("Sudut dokumen tidak valid")
++            val ratio = max(ow, oh) / min(ow, oh)
++            for (std in floatArrayOf(297f / 210f, 85.6f / 54f)) {
++                if (kotlin.math.abs(ratio / std - 1f) < 0.04f) {
++                    if (ow >= oh) ow = oh * std else oh = ow * std
++                    break
++                }
++            }
++            val s = min(1f, maxDim / max(ow, oh))
++            val outW = (ow * s).toInt().coerceAtLeast(32)
++            val outH = (oh * s).toInt().coerceAtLeast(32)
++            val dst = floatArrayOf(0f, 0f, outW.toFloat(), 0f, outW.toFloat(), outH.toFloat(), 0f, outH.toFloat())
++            val m = Matrix()
++            if (!m.setPolyToPoly(pts, 0, dst, 0, 4)) throw IOException("Perspektif tidak bisa dihitung")
++            val res = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
++            res.eraseColor(Color.WHITE)
++            Canvas(res).drawBitmap(o, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
++            try {
++                FileOutputStream(out).use { res.compress(Bitmap.CompressFormat.JPEG, 95, it) }
++            } finally { res.recycle() }
++        } finally { o.recycle() }
++    }
++
+     /** Halaman scan -> JPG di Galeri (Pictures/Depup Office). Mengembalikan jumlah gambar. */
+     fun scansToJpg(ctx: Context, pages: List<ScanPage>, base: String, mode: Int, maxDim: Int, bright: Int, contrast: Int): Int {
+         var n = 0
+         val r = ctx.contentResolver
+         pages.forEachIndexed { idx, pg ->
+-            val bmp = applyMode(renderScan(ctx, pg, maxDim, bright, contrast), mode)
++            val bmp = renderFiltered(ctx, pg, maxDim, mode, bright, contrast)
+             try {
+                 val cv = ContentValues().apply {
+                     put(MediaStore.MediaColumns.DISPLAY_NAME, if (pages.size == 1) "$base.jpg" else "${base}_${idx + 1}.jpg")
+@@ -614,11 +692,13 @@ object Pdf {
+         val doc = PdfDocument()
+         try {
+             pages.forEachIndexed { idx, pg ->
+-                val raw = renderScan(ctx, pg, maxDim, bright, contrast)
+-                val bmp = if (mode == 2) toDocument(raw).also { raw.recycle() } else raw
++                // Magic Color: normalisasi dulu, baru kecerahan/kontras (sama persis dengan pratinjau editor).
++                val bmp = if (mode == 3) renderFiltered(ctx, pg, maxDim, 3, bright, contrast) else {
++                    val raw = renderScan(ctx, pg, maxDim, bright, contrast)
++                    if (mode == 2) toDocument(raw).also { raw.recycle() } else raw
++                }
+                 val drawPaint = when (mode) {
+                     1 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) }) }
+-                    3 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(magicMatrix()) }
+                     else -> paint
+                 }
+                 val land = bmp.width > bmp.height
+diff --git a/app/src/main/java/cloud/depup/office/ScanAi.kt b/app/src/main/java/cloud/depup/office/ScanAi.kt
+index 211b878..f833948 100644
+--- a/app/src/main/java/cloud/depup/office/ScanAi.kt
++++ b/app/src/main/java/cloud/depup/office/ScanAi.kt
+@@ -264,6 +264,17 @@ object ScanAi {
+         )
+     }
+ 
++    /**
++     * 4 sudut dokumen (KiriAtas, KananAtas, KananBawah, KiriBawah) sebagai pecahan 0..1 [x0,y0,...,x3,y3] untuk
++     * koreksi perspektif, atau null bila tidak yakin / dokumen sudah berupa persegi panjang sejajar bingkai
++     * (jalur [detectCrop] yang menangani). Logika ada di [DocQuad] (murni Kotlin, diuji di JVM).
++     */
++    fun detectQuad(src: Bitmap): FloatArray? {
++        val s = small(src)
++        val q = DocQuad.detect(s.g, s.w, s.h) ?: return null
++        return FloatArray(8) { if (it % 2 == 0) q[it] / s.w else q[it] / s.h }
++    }
++
+     /**
+      * Sudut (derajat) yang harus dipakai pada Matrix.postRotate agar teks jadi lurus. Rentang -30..+30.
+      * [area] = pecahan area dokumen (null = seluruh gambar).
+diff --git a/app/src/main/java/cloud/depup/office/ScanEditActivity.kt b/app/src/main/java/cloud/depup/office/ScanEditActivity.kt
+index 1bfd6fa..23c8492 100644
+--- a/app/src/main/java/cloud/depup/office/ScanEditActivity.kt
++++ b/app/src/main/java/cloud/depup/office/ScanEditActivity.kt
+@@ -41,7 +41,9 @@ class ScanPage(
+     var flip: Boolean = false,
+     var skew: Float = 0f,
+     val redactions: MutableList<RectF> = mutableListOf(),
+-    var watermark: String? = null
++    var watermark: String? = null,
++    /** Foto asli sebelum koreksi perspektif (null = belum pernah diluruskan). Dipakai untuk "Reset". */
++    var origFile: File? = null
+ )
+ 
+ /** Kanvas potong: gambar + 4 sudut + 4 sisi yang bisa digeser, area luar diredupkan. */
+@@ -68,6 +70,15 @@ class CropView(ctx: Context) : View(ctx) {
+     private var ly = 0f
+     private val minSize = 0.08f
+ 
++    // Pratinjau Magic Color yang SEBENARNYA (normalisasi bayangan) dihitung di thread latar; sementara itu dipakai
++    // pendekatan matriks warna supaya tidak ada kedipan. Urutan (filter lalu kecerahan/kontras) = sama dengan ekspor.
++    private var magicBmp: Bitmap? = null
++    private var magicGen = 0
++    private var magicStarted = -1
++    private var fMode = 0
++    private var fBright = 0
++    private var fContrast = 0
++
+     init { background = ctx.shape(0xFF283044.toInt(), 16) }
+ 
+     fun setBitmap(base: Bitmap, rot: Int, flip: Boolean, c: RectF, skew: Float = 0f) {
+@@ -75,16 +86,35 @@ class CropView(ctx: Context) : View(ctx) {
+         val d = Pdf.deskew(o, skew)
+         if (o !== base && o !== d) o.recycle()
+         shown = d
++        magicBmp = null
++        magicGen++
+         crop.set(c)
+         fit()
+         invalidate()
+     }
+ 
++    private fun startMagic() {
++        val src = shown ?: return
++        if (magicStarted == magicGen) return
++        magicStarted = magicGen
++        val gen = magicGen
++        Thread {
++            val out = try { Pdf.magicBitmap(src) } catch (_: Throwable) { null }
++            post {
++                if (out != null && gen == magicGen && shown === src) {
++                    magicBmp = out
++                    setFilter(fMode, fBright, fContrast)
++                }
++            }
++        }.start()
++    }
++
+     fun setFilter(mode: Int, bright: Int, contrast: Int) {
++        fMode = mode; fBright = bright; fContrast = contrast
+         val m = Pdf.adjustMatrix(bright, contrast)
+         when (mode) {
+             1 -> m.postConcat(ColorMatrix().apply { setSaturation(0f) })
+-            3 -> m.postConcat(Pdf.magicMatrix())
++            3 -> if (magicBmp == null) { m.postConcat(Pdf.magicMatrix()); startMagic() }
+             2 -> {
+                 m.postConcat(ColorMatrix().apply { setSaturation(0f) })
+                 m.postConcat(ColorMatrix(floatArrayOf(
+@@ -120,7 +150,7 @@ class CropView(ctx: Context) : View(ctx) {
+ 
+     override fun onDraw(c: Canvas) {
+         val b = shown ?: return
+-        c.drawBitmap(b, null, img, imgPaint)
++        c.drawBitmap(if (fMode == 3) (magicBmp ?: b) else b, null, img, imgPaint)
+         val r = cropPx()
+         c.drawRect(img.left, img.top, img.right, r.top, dim)
+         c.drawRect(img.left, r.bottom, img.right, img.bottom, dim)
+@@ -697,6 +727,12 @@ class ScanEditActivity : AppCompatActivity() {
+ 
+     private fun resetAll() {
+         val pg = pages[cur]
++        pg.origFile?.let { orig ->
++            previews.remove(pg.file.absolutePath)
++            pg.file.delete()
++            pg.file = orig
++            pg.origFile = null
++        }
+         pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.crop.set(0f, 0f, 1f, 1f)
+         show()
+     }
+@@ -704,7 +740,7 @@ class ScanEditActivity : AppCompatActivity() {
+     private fun removePage() {
+         if (pages.size == 1) { toast("Minimal harus ada satu halaman"); return }
+         confirm("Hapus halaman ${cur + 1}?", "Halaman ini dibuang dari hasil scan.", "Hapus") {
+-            pages.removeAt(cur).file.delete()
++            pages.removeAt(cur).let { it.file.delete(); it.origFile?.delete() }
+             show()
+         }
+     }
+@@ -870,6 +906,7 @@ class ScanEditActivity : AppCompatActivity() {
+             if (ok) {
+                 val pg = pages[cur]
+                 pg.file.delete()
++                pg.origFile?.delete(); pg.origFile = null
+                 previews.remove(pg.file.absolutePath)
+                 pg.file = f; pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.crop.set(0f, 0f, 1f, 1f)
+                 show()
+@@ -882,7 +919,7 @@ class ScanEditActivity : AppCompatActivity() {
+         confirm("Buang hasil scan?", "Semua halaman yang belum disimpan akan dihapus.", "Buang") { cleanup(); finish() }
+     }
+ 
+-    private fun cleanup() { pages.forEach { it.file.delete() } }
++    private fun cleanup() { pages.forEach { it.file.delete(); it.origFile?.delete() } }
+ 
+     // ================= AUTO-CROP AI / LURUSKAN / OCR =================
+     private class Auto(val crop: RectF?, val skew: Float)
+@@ -932,7 +969,64 @@ class ScanEditActivity : AppCompatActivity() {
+         }
+     }
+ 
+-    private fun autoCrop() = autoDetect(listOf(pages[cur]), crop = true, skew = false, announce = false)
++    /**
++     * Auto-crop AI ala CamScanner: cari 4 sudut dokumen; bila dokumen miring/berperspektif, foto "ditegakkan" jadi
++     * persegi panjang. Bila tidak (dokumen sudah lurus atau sudut tak yakin) jatuh ke potong kotak biasa.
++     */
++    private fun autoCrop() {
++        val pg = pages[cur]
++        work("Mendeteksi tepi dokumen…", { warpFor(pg) }) { r ->
++            r.onSuccess { f ->
++                if (f != null) { adoptWarped(pg, f); toast("Dokumen diluruskan (perspektif dikoreksi)") }
++                else autoDetect(listOf(pg), crop = true, skew = false, announce = false)
++            }.onFailure { autoDetect(listOf(pg), crop = true, skew = false, announce = false) }
++        }
++    }
++
++    /** Thread latar. Berkas JPEG baru hasil koreksi perspektif, atau null = tidak perlu / tidak yakin. */
++    private fun warpFor(pg: ScanPage): File? {
++        val base = Pdf.decode(this, Uri.fromFile(pg.file), 1000)
++        val o = Pdf.orient(base, pg.rot, pg.flip)
++        val found: FloatArray? = try { ScanAi.detectQuad(o) } finally {
++            if (o !== base) o.recycle()
++            base.recycle()
++        }
++        val q = found ?: return null
++        val out = newFile()
++        try {
++            Pdf.warpQuad(this, pg.file, pg.rot, pg.flip, q, 3000, out)
++        } catch (t: Throwable) { out.delete(); throw t }
++        return out
++    }
++
++    /**
++     * Nama berkas cerdas: OCR halaman pertama di latar (offline), kenali jenis dokumen (KTP, struk, surat, ...) atau
++     * pakai judul barisnya. Nama hanya diganti bila pengguna belum mengetik apa pun di kolomnya.
++     */
++    private fun suggestName(et: android.widget.EditText, default: String, stamp: String) {
++        val pg = pages.firstOrNull() ?: return
++        val m = mode; val b = bright; val c = contrast
++        Thread {
++            val name = try {
++                val bmp = Export.process(this, pg, m, Export.OCR_MIN_DIM, b, c)
++                val text = try { Ocr.run(bmp).text } finally { bmp.recycle() }
++                SmartDoc.suggestName(text, stamp)
++            } catch (_: Throwable) { null }
++            if (name != null) runOnUiThread {
++                if (!isFinishing && !isDestroyed && et.text.toString() == default) et.setText(name)
++            }
++        }.start()
++    }
++
++    /** Ganti foto halaman dengan hasil luruskan; foto ASLI pertama disimpan supaya "Reset" bisa memulihkannya. */
++    private fun adoptWarped(pg: ScanPage, f: File) {
++        previews.remove(pg.file.absolutePath)
++        if (pg.origFile == null) pg.origFile = pg.file else pg.file.delete()
++        pg.file = f
++        pg.rot = 0; pg.flip = false; pg.skew = 0f
++        pg.crop.set(0f, 0f, 1f, 1f)
++        show()
++    }
+ 
+     private fun straighten() = autoDetect(listOf(pages[cur]), crop = false, skew = true, announce = false)
+ 
+@@ -1087,6 +1181,7 @@ class ScanEditActivity : AppCompatActivity() {
+                 setPadding(dp(10), dp(12), dp(10), dp(12))
+                 setSelectAllOnFocus(true)
+             }
++            suggestName(et, "Scan_Dokumen_$stamp", stamp)
+             val optBox = vbox()
+             val optCards = mutableListOf<LinearLayout>()
+             val marks = mutableListOf<ImageView>()
+diff --git a/app/src/main/java/cloud/depup/office/SmartDoc.kt b/app/src/main/java/cloud/depup/office/SmartDoc.kt
+new file mode 100644
+index 0000000..ea29185
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/SmartDoc.kt
+@@ -0,0 +1,65 @@
++package cloud.depup.office
++
++/**
++ * Mengenali jenis dokumen & menyarankan nama berkas dari teks hasil OCR. Murni Kotlin, offline, tanpa model.
++ * Heuristik kata kunci (fokus dokumen Indonesia) — sengaja konservatif: lebih baik tidak menebak daripada salah menamai.
++ */
++object SmartDoc {
++
++    private class Rule(val label: String, val groups: List<List<String>>, val need: Int)
++
++    // Tiap grup = salah satu kata kunci cukup; `need` = berapa grup yang harus terpenuhi.
++    private val rules = listOf(
++        Rule("KTP", listOf(listOf("nik"), listOf("provinsi", "kabupaten", "kota"), listOf("berlaku hingga", "gol. darah", "gol darah", "kewarganegaraan", "agama")), 3),
++        Rule("Kartu_Keluarga", listOf(listOf("kartu keluarga"), listOf("no. kk", "no kk", "kepala keluarga")), 1),
++        Rule("NPWP", listOf(listOf("npwp", "nomor pokok wajib pajak")), 1),
++        Rule("SIM", listOf(listOf("surat izin mengemudi"), listOf("gol. sim", "sim a", "sim c", "sim b")), 1),
++        Rule("STNK", listOf(listOf("stnk", "surat tanda nomor kendaraan"), listOf("nomor rangka", "no. rangka", "nomor mesin")), 1),
++        Rule("Paspor", listOf(listOf("paspor", "passport", "republik indonesia"), listOf("tempat lahir", "place of birth", "date of expiry")), 2),
++        Rule("Ijazah", listOf(listOf("ijazah", "sttb", "surat tanda tamat belajar"), listOf("dengan ini menyatakan", "telah lulus", "lulus dari")), 1),
++        Rule("Transkrip_Nilai", listOf(listOf("transkrip", "kartu hasil studi", "indeks prestasi", "ipk", "khs"), listOf("sks", "mata kuliah", "semester")), 2),
++        Rule("Sertifikat", listOf(listOf("sertifikat", "certificate"), listOf("diberikan kepada", "awarded to", "presented to", "diberikan atas")), 2),
++        Rule("Slip_Gaji", listOf(listOf("slip gaji", "payslip", "pay slip"), listOf("gaji pokok", "tunjangan", "potongan", "basic salary")), 1),
++        Rule("Kwitansi", listOf(listOf("kwitansi", "kuitansi", "telah terima dari", "sudah terima dari")), 1),
++        Rule("Invoice", listOf(listOf("invoice", "faktur", "tagihan"), listOf("jatuh tempo", "due date", "subtotal", "ppn", "total")), 2),
++        Rule("Struk", listOf(listOf("total", "jumlah", "subtotal"), listOf("tunai", "kembali", "kembalian", "cash", "change", "debit", "qris"), listOf("terima kasih", "thank you", "struk", "kasir", "ppn")), 3),
++        Rule("Kontrak", listOf(listOf("perjanjian", "kontrak", "agreement"), listOf("pihak pertama", "pihak kedua", "para pihak", "first party")), 2),
++        Rule("Surat", listOf(listOf("perihal", "hal :", "hal:", "lampiran"), listOf("yth", "kepada yth", "dengan hormat", "hormat kami", "hormat saya")), 2),
++    )
++
++    /** Jenis dokumen (label siap jadi nama berkas) atau null bila tidak yakin. */
++    fun classify(text: String): String? {
++        if (text.isBlank()) return null
++        val t = text.lowercase()
++        var best: String? = null; var bestHit = 0
++        for (r in rules) {
++            var hit = 0
++            for (g in r.groups) if (g.any { t.contains(it) }) hit++
++            if (hit >= r.need && hit > bestHit) { best = r.label; bestHit = hit }
++        }
++        return best
++    }
++
++    /** Baris pertama yang masuk akal sebagai judul (bukan angka/noise), dibersihkan untuk nama berkas. */
++    fun titleOf(text: String): String? {
++        for (raw in text.lineSequence().take(12)) {
++            val line = raw.trim()
++            if (line.length < 4 || line.length > 70) continue
++            val letters = line.count { it.isLetter() }
++            if (letters < 4 || letters * 10 < line.length * 6) continue
++            val clean = line.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_')
++            if (clean.length < 4) continue
++            return clean.take(36).trim('_')
++        }
++        return null
++    }
++
++    /**
++     * Nama berkas (tanpa ekstensi) yang disarankan, mis. "KTP_20261031_1455"; null bila tak ada petunjuk.
++     * [stamp] = penanda waktu, supaya nama tetap unik.
++     */
++    fun suggestName(text: String, stamp: String): String? {
++        classify(text)?.let { return "${it}_$stamp" }
++        return titleOf(text)?.let { "${it}_$stamp" }
++    }
++}

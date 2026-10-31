@@ -461,10 +461,13 @@ object Pdf {
         try {
             uris.forEachIndexed { idx, u ->
                 val raw = decode(ctx, u, 1600)
-                val bmp = if (mode == 2) toDocument(raw).also { raw.recycle() } else raw
+                val bmp = when (mode) {
+                    2 -> toDocument(raw).also { raw.recycle() }
+                    3 -> magicBitmap(raw).also { raw.recycle() }
+                    else -> raw
+                }
                 val drawPaint = when (mode) {
                     1 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) }) }
-                    3 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(magicMatrix()) }
                     else -> paint
                 }
                 val land = bmp.width > bmp.height
@@ -509,11 +512,86 @@ object Pdf {
     fun applyMode(raw: Bitmap, mode: Int): Bitmap {
         if (mode == 2) return toDocument(raw).also { raw.recycle() }
         if (mode == 0) return raw
+        if (mode == 3) return magicBitmap(raw).also { raw.recycle() }
         val o = Bitmap.createBitmap(raw.width, raw.height, Bitmap.Config.ARGB_8888)
-        val cm = if (mode == 1) ColorMatrix().apply { setSaturation(0f) } else magicMatrix()
+        val cm = ColorMatrix().apply { setSaturation(0f) }
         Canvas(o).drawBitmap(raw, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(cm) })
         raw.recycle()
         return o
+    }
+
+    /**
+     * Magic Color cerdas (offline): terang kertas diukur per area lalu dinormalkan, jadi bayangan & gradasi lampu
+     * hilang dan kertas jadi putih bersih. Mengembalikan bitmap BARU; [src] tidak diubah (pemanggil yang me-recycle).
+     */
+    fun magicBitmap(src: Bitmap): Bitmap {
+        val w = src.width
+        val h = src.height
+        val px = IntArray(w * h)
+        src.getPixels(px, 0, w, 0, 0, w, h)
+        DocFilter.magic(px, w, h)
+        val o = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        o.setPixels(px, 0, w, 0, 0, w, h)
+        return o
+    }
+
+    /**
+     * Render satu halaman scan + filter. Untuk Magic Color, kecerahan/kontras dipasang SETELAH normalisasi
+     * (normalisasi justru meniadakan geseran kecerahan bila dipasang sebelumnya), dan urutan ini sama persis
+     * dengan pratinjau di editor.
+     */
+    fun renderFiltered(ctx: Context, pg: ScanPage, maxDim: Int, mode: Int, bright: Int, contrast: Int): Bitmap {
+        if (mode != 3) return applyMode(renderScan(ctx, pg, maxDim, bright, contrast), mode)
+        val raw = renderScan(ctx, pg, maxDim, 0, 0)
+        val m = magicBitmap(raw)
+        raw.recycle()
+        if (bright == 0 && contrast == 0) return m
+        val o = Bitmap.createBitmap(m.width, m.height, Bitmap.Config.ARGB_8888)
+        Canvas(o).drawBitmap(m, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(adjustMatrix(bright, contrast)) })
+        m.recycle()
+        return o
+    }
+
+    /**
+     * Koreksi perspektif: ambil 4 sudut dokumen [q] (pecahan 0..1 pada gambar SETELAH putar/balik; urutan KiriAtas,
+     * KananAtas, KananBawah, KiriBawah) dan "tegakkan" menjadi persegi panjang, lalu simpan sebagai JPEG di [out].
+     * Rasio hasil = sisi terpanjang dari tiap pasangan sisi berhadapan; bila hampir A4 / kartu ID-1, dipaskan persis.
+     */
+    fun warpQuad(ctx: Context, src: File, rot: Int, flip: Boolean, q: FloatArray, maxDim: Int, out: File) {
+        val raw = decode(ctx, Uri.fromFile(src), maxDim)
+        val o = orient(raw, rot, flip)
+        if (o !== raw) raw.recycle()
+        try {
+            val w = o.width.toFloat()
+            val h = o.height.toFloat()
+            val pts = FloatArray(8) { if (it % 2 == 0) q[it] * w else q[it] * h }
+            fun dist(i: Int, j: Int): Float {
+                val dx = pts[2 * i] - pts[2 * j]; val dy = pts[2 * i + 1] - pts[2 * j + 1]
+                return kotlin.math.sqrt(dx * dx + dy * dy)
+            }
+            var ow = max(dist(0, 1), dist(3, 2))
+            var oh = max(dist(0, 3), dist(1, 2))
+            if (ow < 16f || oh < 16f) throw IOException("Sudut dokumen tidak valid")
+            val ratio = max(ow, oh) / min(ow, oh)
+            for (std in floatArrayOf(297f / 210f, 85.6f / 54f)) {
+                if (kotlin.math.abs(ratio / std - 1f) < 0.04f) {
+                    if (ow >= oh) ow = oh * std else oh = ow * std
+                    break
+                }
+            }
+            val s = min(1f, maxDim / max(ow, oh))
+            val outW = (ow * s).toInt().coerceAtLeast(32)
+            val outH = (oh * s).toInt().coerceAtLeast(32)
+            val dst = floatArrayOf(0f, 0f, outW.toFloat(), 0f, outW.toFloat(), outH.toFloat(), 0f, outH.toFloat())
+            val m = Matrix()
+            if (!m.setPolyToPoly(pts, 0, dst, 0, 4)) throw IOException("Perspektif tidak bisa dihitung")
+            val res = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+            res.eraseColor(Color.WHITE)
+            Canvas(res).drawBitmap(o, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+            try {
+                FileOutputStream(out).use { res.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+            } finally { res.recycle() }
+        } finally { o.recycle() }
     }
 
     /** Halaman scan -> JPG di Galeri (Pictures/Depup Office). Mengembalikan jumlah gambar. */
@@ -521,7 +599,7 @@ object Pdf {
         var n = 0
         val r = ctx.contentResolver
         pages.forEachIndexed { idx, pg ->
-            val bmp = applyMode(renderScan(ctx, pg, maxDim, bright, contrast), mode)
+            val bmp = renderFiltered(ctx, pg, maxDim, mode, bright, contrast)
             try {
                 val cv = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, if (pages.size == 1) "$base.jpg" else "${base}_${idx + 1}.jpg")
@@ -614,11 +692,13 @@ object Pdf {
         val doc = PdfDocument()
         try {
             pages.forEachIndexed { idx, pg ->
-                val raw = renderScan(ctx, pg, maxDim, bright, contrast)
-                val bmp = if (mode == 2) toDocument(raw).also { raw.recycle() } else raw
+                // Magic Color: normalisasi dulu, baru kecerahan/kontras (sama persis dengan pratinjau editor).
+                val bmp = if (mode == 3) renderFiltered(ctx, pg, maxDim, 3, bright, contrast) else {
+                    val raw = renderScan(ctx, pg, maxDim, bright, contrast)
+                    if (mode == 2) toDocument(raw).also { raw.recycle() } else raw
+                }
                 val drawPaint = when (mode) {
                     1 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) }) }
-                    3 -> Paint(paint).apply { colorFilter = ColorMatrixColorFilter(magicMatrix()) }
                     else -> paint
                 }
                 val land = bmp.width > bmp.height

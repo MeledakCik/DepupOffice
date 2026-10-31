@@ -41,7 +41,9 @@ class ScanPage(
     var flip: Boolean = false,
     var skew: Float = 0f,
     val redactions: MutableList<RectF> = mutableListOf(),
-    var watermark: String? = null
+    var watermark: String? = null,
+    /** Foto asli sebelum koreksi perspektif (null = belum pernah diluruskan). Dipakai untuk "Reset". */
+    var origFile: File? = null
 )
 
 /** Kanvas potong: gambar + 4 sudut + 4 sisi yang bisa digeser, area luar diredupkan. */
@@ -68,6 +70,15 @@ class CropView(ctx: Context) : View(ctx) {
     private var ly = 0f
     private val minSize = 0.08f
 
+    // Pratinjau Magic Color yang SEBENARNYA (normalisasi bayangan) dihitung di thread latar; sementara itu dipakai
+    // pendekatan matriks warna supaya tidak ada kedipan. Urutan (filter lalu kecerahan/kontras) = sama dengan ekspor.
+    private var magicBmp: Bitmap? = null
+    private var magicGen = 0
+    private var magicStarted = -1
+    private var fMode = 0
+    private var fBright = 0
+    private var fContrast = 0
+
     init { background = ctx.shape(0xFF283044.toInt(), 16) }
 
     fun setBitmap(base: Bitmap, rot: Int, flip: Boolean, c: RectF, skew: Float = 0f) {
@@ -75,16 +86,35 @@ class CropView(ctx: Context) : View(ctx) {
         val d = Pdf.deskew(o, skew)
         if (o !== base && o !== d) o.recycle()
         shown = d
+        magicBmp = null
+        magicGen++
         crop.set(c)
         fit()
         invalidate()
     }
 
+    private fun startMagic() {
+        val src = shown ?: return
+        if (magicStarted == magicGen) return
+        magicStarted = magicGen
+        val gen = magicGen
+        Thread {
+            val out = try { Pdf.magicBitmap(src) } catch (_: Throwable) { null }
+            post {
+                if (out != null && gen == magicGen && shown === src) {
+                    magicBmp = out
+                    setFilter(fMode, fBright, fContrast)
+                }
+            }
+        }.start()
+    }
+
     fun setFilter(mode: Int, bright: Int, contrast: Int) {
+        fMode = mode; fBright = bright; fContrast = contrast
         val m = Pdf.adjustMatrix(bright, contrast)
         when (mode) {
             1 -> m.postConcat(ColorMatrix().apply { setSaturation(0f) })
-            3 -> m.postConcat(Pdf.magicMatrix())
+            3 -> if (magicBmp == null) { m.postConcat(Pdf.magicMatrix()); startMagic() }
             2 -> {
                 m.postConcat(ColorMatrix().apply { setSaturation(0f) })
                 m.postConcat(ColorMatrix(floatArrayOf(
@@ -120,7 +150,7 @@ class CropView(ctx: Context) : View(ctx) {
 
     override fun onDraw(c: Canvas) {
         val b = shown ?: return
-        c.drawBitmap(b, null, img, imgPaint)
+        c.drawBitmap(if (fMode == 3) (magicBmp ?: b) else b, null, img, imgPaint)
         val r = cropPx()
         c.drawRect(img.left, img.top, img.right, r.top, dim)
         c.drawRect(img.left, r.bottom, img.right, img.bottom, dim)
@@ -697,6 +727,12 @@ class ScanEditActivity : AppCompatActivity() {
 
     private fun resetAll() {
         val pg = pages[cur]
+        pg.origFile?.let { orig ->
+            previews.remove(pg.file.absolutePath)
+            pg.file.delete()
+            pg.file = orig
+            pg.origFile = null
+        }
         pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.crop.set(0f, 0f, 1f, 1f)
         show()
     }
@@ -704,7 +740,7 @@ class ScanEditActivity : AppCompatActivity() {
     private fun removePage() {
         if (pages.size == 1) { toast("Minimal harus ada satu halaman"); return }
         confirm("Hapus halaman ${cur + 1}?", "Halaman ini dibuang dari hasil scan.", "Hapus") {
-            pages.removeAt(cur).file.delete()
+            pages.removeAt(cur).let { it.file.delete(); it.origFile?.delete() }
             show()
         }
     }
@@ -870,6 +906,7 @@ class ScanEditActivity : AppCompatActivity() {
             if (ok) {
                 val pg = pages[cur]
                 pg.file.delete()
+                pg.origFile?.delete(); pg.origFile = null
                 previews.remove(pg.file.absolutePath)
                 pg.file = f; pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.crop.set(0f, 0f, 1f, 1f)
                 show()
@@ -882,7 +919,7 @@ class ScanEditActivity : AppCompatActivity() {
         confirm("Buang hasil scan?", "Semua halaman yang belum disimpan akan dihapus.", "Buang") { cleanup(); finish() }
     }
 
-    private fun cleanup() { pages.forEach { it.file.delete() } }
+    private fun cleanup() { pages.forEach { it.file.delete(); it.origFile?.delete() } }
 
     // ================= AUTO-CROP AI / LURUSKAN / OCR =================
     private class Auto(val crop: RectF?, val skew: Float)
@@ -932,7 +969,64 @@ class ScanEditActivity : AppCompatActivity() {
         }
     }
 
-    private fun autoCrop() = autoDetect(listOf(pages[cur]), crop = true, skew = false, announce = false)
+    /**
+     * Auto-crop AI ala CamScanner: cari 4 sudut dokumen; bila dokumen miring/berperspektif, foto "ditegakkan" jadi
+     * persegi panjang. Bila tidak (dokumen sudah lurus atau sudut tak yakin) jatuh ke potong kotak biasa.
+     */
+    private fun autoCrop() {
+        val pg = pages[cur]
+        work("Mendeteksi tepi dokumen…", { warpFor(pg) }) { r ->
+            r.onSuccess { f ->
+                if (f != null) { adoptWarped(pg, f); toast("Dokumen diluruskan (perspektif dikoreksi)") }
+                else autoDetect(listOf(pg), crop = true, skew = false, announce = false)
+            }.onFailure { autoDetect(listOf(pg), crop = true, skew = false, announce = false) }
+        }
+    }
+
+    /** Thread latar. Berkas JPEG baru hasil koreksi perspektif, atau null = tidak perlu / tidak yakin. */
+    private fun warpFor(pg: ScanPage): File? {
+        val base = Pdf.decode(this, Uri.fromFile(pg.file), 1000)
+        val o = Pdf.orient(base, pg.rot, pg.flip)
+        val found: FloatArray? = try { ScanAi.detectQuad(o) } finally {
+            if (o !== base) o.recycle()
+            base.recycle()
+        }
+        val q = found ?: return null
+        val out = newFile()
+        try {
+            Pdf.warpQuad(this, pg.file, pg.rot, pg.flip, q, 3000, out)
+        } catch (t: Throwable) { out.delete(); throw t }
+        return out
+    }
+
+    /**
+     * Nama berkas cerdas: OCR halaman pertama di latar (offline), kenali jenis dokumen (KTP, struk, surat, ...) atau
+     * pakai judul barisnya. Nama hanya diganti bila pengguna belum mengetik apa pun di kolomnya.
+     */
+    private fun suggestName(et: android.widget.EditText, default: String, stamp: String) {
+        val pg = pages.firstOrNull() ?: return
+        val m = mode; val b = bright; val c = contrast
+        Thread {
+            val name = try {
+                val bmp = Export.process(this, pg, m, Export.OCR_MIN_DIM, b, c)
+                val text = try { Ocr.run(bmp).text } finally { bmp.recycle() }
+                SmartDoc.suggestName(text, stamp)
+            } catch (_: Throwable) { null }
+            if (name != null) runOnUiThread {
+                if (!isFinishing && !isDestroyed && et.text.toString() == default) et.setText(name)
+            }
+        }.start()
+    }
+
+    /** Ganti foto halaman dengan hasil luruskan; foto ASLI pertama disimpan supaya "Reset" bisa memulihkannya. */
+    private fun adoptWarped(pg: ScanPage, f: File) {
+        previews.remove(pg.file.absolutePath)
+        if (pg.origFile == null) pg.origFile = pg.file else pg.file.delete()
+        pg.file = f
+        pg.rot = 0; pg.flip = false; pg.skew = 0f
+        pg.crop.set(0f, 0f, 1f, 1f)
+        show()
+    }
 
     private fun straighten() = autoDetect(listOf(pages[cur]), crop = false, skew = true, announce = false)
 
@@ -1087,6 +1181,7 @@ class ScanEditActivity : AppCompatActivity() {
                 setPadding(dp(10), dp(12), dp(10), dp(12))
                 setSelectAllOnFocus(true)
             }
+            suggestName(et, "Scan_Dokumen_$stamp", stamp)
             val optBox = vbox()
             val optCards = mutableListOf<LinearLayout>()
             val marks = mutableListOf<ImageView>()
