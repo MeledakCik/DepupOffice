@@ -624,24 +624,8 @@ class MainActivity : AppCompatActivity() {
             .filter { it.isNotBlank() }.joinToString(" • ")
     }
 
-    private fun showRenameFileDialog(uriStr: String, currentName: String) {
-        val et = field("Nama file baru").apply { setText(Files.baseName(currentName)) }
-        AlertDialog.Builder(this)
-            .setTitle("Ubah Nama Berkas")
-            .setView(vbox(16).apply { add(et) })
-            .setPositiveButton("Simpan Nama") { _, _ ->
-                val newName = et.text.toString().trim()
-                if (newName.isNotBlank()) {
-                    val renamedFile = Files.rename(this, Uri.parse(uriStr), newName)
-                    if (renamedFile != null) {
-                        toast("Nama file diubah ke ${renamedFile.name}")
-                        render()
-                    } else toast("Tidak dapat mengubah nama file ini")
-                }
-            }
-            .setNegativeButton("Batal", null)
-            .show()
-    }
+    private fun showRenameFileDialog(uriStr: String, currentName: String) =
+        renameFlow(Uri.parse(uriStr), currentName) { render() }
 
     private fun fileRow(e: List<String>): View {
         val (label, fg, bg) = typeOf(e[2], e[1])

@@ -15,6 +15,8 @@ import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
+import android.media.MediaScannerConnection
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
@@ -28,6 +30,9 @@ import java.util.Locale
 const val PDF = "application/pdf"
 const val DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 const val XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+/** Hasil rename/salin: URI baru + nama akhir (bisa beda dari yang diketik bila MediaStore menambah akhiran). */
+class Renamed(val uri: Uri, val name: String)
 
 object Files {
     fun nameOf(ctx: Context, uri: Uri): String {
@@ -96,33 +101,100 @@ object Files {
         return if (docs.exists()) docs else File(ctx.filesDir, "DepupOffice").apply { mkdirs() }
     }
 
-    fun rename(ctx: Context, uri: Uri, newName: String): File? {
-        val clean = newName.trim().replace(Regex("[\\/:*?\"<>|]+"), "_")
-        if (clean.isBlank()) return null
+    class RenameConflict(msg: String) : Exception(msg)
 
-        fun doRename(oldFile: File): File? {
-            val ext = oldFile.extension
-            val targetName = if (ext.isBlank() || clean.endsWith(".$ext", ignoreCase = true)) clean else "$clean.$ext"
-            val newFile = File(oldFile.parentFile, targetName)
-            if (oldFile.renameTo(newFile)) {
-                val newUri = uriFor(ctx, newFile)
-                Recent.remove(ctx, uri.toString())
-                Recent.add(ctx, newUri, newFile.name, mimeOf(ctx, newUri))
-                return newFile
-            }
-            return null
-        }
+    private fun cleanName(n: String) = n.trim().replace(Regex("[\\/:*?\"<>|]+"), "_").trim()
 
-        if (uri.scheme == "file") {
-            val f = File(uri.path ?: return null)
-            if (f.exists()) return doRename(f)
-        } else if (uri.scheme == "content") {
-            val f = outDir(ctx).listFiles()?.find { uriFor(ctx, it) == uri }
-                ?: outDir(ctx).walkTopDown().find { uriFor(ctx, it) == uri }
-                ?: ctx.filesDir.walkTopDown().find { uriFor(ctx, it) == uri }
-            if (f != null && f.exists()) return doRename(f)
+    private fun withExt(clean: String, oldName: String): String {
+        val ext = oldName.substringAfterLast('.', "")
+        return if (ext.isBlank() || clean.endsWith(".$ext", ignoreCase = true)) clean else "$clean.$ext"
+    }
+
+    /** File lokal di balik URI file:// atau FileProvider milik app ini; null bila bukan. */
+    private fun localFileOf(ctx: Context, uri: Uri): File? {
+        if (uri.scheme == "file") return uri.path?.let { File(it) }
+        if (uri.scheme == "content" && uri.authority == ctx.packageName + ".fileprovider") {
+            val seg = uri.pathSegments
+            if (seg.size < 2) return null
+            val root = when (seg[0]) {
+                "files" -> ctx.filesDir
+                "cache" -> ctx.cacheDir
+                "external_sd" -> Environment.getExternalStorageDirectory()
+                "external_files" -> ctx.getExternalFilesDir(null)
+                else -> null
+            } ?: return null
+            return File(root, seg.drop(1).joinToString("/"))
         }
         return null
+    }
+
+    /**
+     * Ubah nama berkas ASLI (bukan salinan cache) dan pastikan file manager ikut berubah:
+     *  - file lokal / FileProvider app : File.renameTo + MediaScanner (hapus entri lama, daftarkan yang baru)
+     *  - MediaStore (Gambar/Unduhan)   : update DISPLAY_NAME
+     *  - dokumen SAF (file manager)    : DocumentsContract.renameDocument
+     * Null = tidak bisa (mis. izin hanya-baca) -> pemanggil menawarkan [saveCopy].
+     * Melempar [RenameConflict] bila nama sudah dipakai file lain.
+     */
+    fun rename(ctx: Context, uri: Uri, newName: String): Renamed? {
+        val clean = cleanName(newName)
+        if (clean.isBlank()) return null
+        val target = withExt(clean, nameOf(ctx, uri))
+        try {
+            val local = localFileOf(ctx, uri)
+            if (local != null) {
+                if (!local.exists()) return null
+                val dest = File(local.parentFile, target)
+                if (dest.exists() && dest.canonicalPath != local.canonicalPath) throw RenameConflict("Sudah ada file bernama $target di folder ini")
+                if (dest.canonicalPath != local.canonicalPath && !local.renameTo(dest)) return null
+                // Beri tahu MediaStore: path lama dihapus dari indeks, path baru didaftarkan.
+                MediaScannerConnection.scanFile(ctx, arrayOf(local.path, dest.path), null, null)
+                val newUri = if (uri.scheme == "file") Uri.fromFile(dest) else uriFor(ctx, dest)
+                Recent.replace(ctx, uri.toString(), newUri, dest.name, mimeOf(ctx, newUri))
+                return Renamed(newUri, dest.name)
+            }
+            if (uri.scheme == "content") {
+                if (uri.authority == MediaStore.AUTHORITY) {
+                    val cv = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, target) }
+                    if (ctx.contentResolver.update(uri, cv, null, null) > 0) {
+                        val n = nameOf(ctx, uri)
+                        Recent.replace(ctx, uri.toString(), uri, n, mimeOf(ctx, uri))
+                        return Renamed(uri, n)
+                    }
+                    return null
+                }
+                if (DocumentsContract.isDocumentUri(ctx, uri)) {
+                    val nu = DocumentsContract.renameDocument(ctx.contentResolver, uri, target)
+                    if (nu != null) {
+                        val n = nameOf(ctx, nu)
+                        Recent.replace(ctx, uri.toString(), nu, n, mimeOf(ctx, nu))
+                        return Renamed(nu, n)
+                    }
+                }
+            }
+        } catch (e: RenameConflict) {
+            throw e
+        } catch (_: Exception) {
+            // SecurityException (tanpa izin tulis), UnsupportedOperationException, dll.
+        }
+        return null
+    }
+
+    /** Cadangan bila file asli tidak bisa di-rename: simpan salinan bernama baru di Unduhan/Depup Office (terlihat di file manager). */
+    fun saveCopy(ctx: Context, src: Uri, newName: String, nameForExt: String): Renamed {
+        val target = withExt(cleanName(newName).ifBlank { "dokumen" }, nameForExt)
+        val mime = byName(target).let { if (it == "application/octet-stream") mimeOf(ctx, src) else it }
+        val r = ctx.contentResolver
+        val cv = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, target)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Depup Office")
+        }
+        val dst = r.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: throw IOException("Gagal membuat file di Unduhan")
+        r.openInputStream(src)!!.use { i -> r.openOutputStream(dst)!!.use { o -> i.copyTo(o) } }
+        val n = nameOf(ctx, dst)
+        Recent.add(ctx, dst, n, mime)
+        return Renamed(dst, n)
     }
 
     fun newOut(ctx: Context, base: String, ext: String): File {
@@ -279,6 +351,15 @@ object Recent {
     }
 
     fun remove(ctx: Context, uri: String) = save(ctx, load(ctx).filter { it[0] != uri })
+
+    /** Ganti entri lama di tempatnya (waktu dipertahankan); tidak menambah bila berkas tidak ada di riwayat. */
+    fun replace(ctx: Context, old: String, uri: Uri, name: String, mime: String) {
+        val list = load(ctx).toMutableList()
+        val i = list.indexOfFirst { it[0] == old }
+        if (i < 0) return
+        list[i] = listOf(uri.toString(), name.replace("\t", " ").replace("\n", " "), mime, list[i][3])
+        save(ctx, list)
+    }
 
     private fun save(ctx: Context, list: List<List<String>>) {
         sp(ctx).edit().putString("recent", list.joinToString("\n") { it.joinToString("\t") }).apply()

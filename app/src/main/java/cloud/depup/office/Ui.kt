@@ -564,3 +564,44 @@ fun <T> AppCompatActivity.work(msg: String, job: () -> T, done: (Result<T>) -> U
         }
     }.start()
 }
+
+
+/**
+ * Dialog ubah nama yang dipakai Beranda & Viewer. Mengubah berkas ASLI; bila tidak diizinkan
+ * (mis. file manager hanya memberi akses baca), menawarkan simpan salinan bernama baru di Unduhan/Depup Office.
+ * [copySource] = sumber isi untuk salinan (boleh salinan cache yang sudah terbaca penuh).
+ */
+fun AppCompatActivity.renameFlow(origin: android.net.Uri, currentName: String, copySource: android.net.Uri = origin, onDone: (Renamed) -> Unit) {
+    val et = field("Nama file baru").apply { setText(currentName.substringBeforeLast('.')) }
+    AlertDialog.Builder(this)
+        .setTitle("Ubah Nama Berkas")
+        .setView(vbox(16).apply { add(et) })
+        .setPositiveButton("Simpan Nama") { _, _ ->
+            val newName = et.text.toString().trim()
+            if (newName.isBlank()) return@setPositiveButton
+            val res = try {
+                Files.rename(this, origin, newName)
+            } catch (e: Files.RenameConflict) {
+                toast(e.message ?: "Nama sudah dipakai"); return@setPositiveButton
+            }
+            if (res != null) {
+                toast("Nama file diubah ke ${res.name}")
+                onDone(res)
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Tidak bisa mengubah file asli")
+                    .setMessage("Aplikasi file manager hanya memberi akses baca untuk file ini, jadi namanya tidak bisa diubah di tempat asalnya. Simpan salinan bernama \"$newName\" ke Unduhan/Depup Office?")
+                    .setPositiveButton("Simpan Salinan") { _, _ ->
+                        try {
+                            val c = Files.saveCopy(this, copySource, newName, currentName)
+                            toast("Salinan disimpan di Unduhan/Depup Office: ${c.name}")
+                            onDone(c)
+                        } catch (t: Throwable) { fail(t) }
+                    }
+                    .setNegativeButton("Batal", null)
+                    .show()
+            }
+        }
+        .setNegativeButton("Batal", null)
+        .show()
+}

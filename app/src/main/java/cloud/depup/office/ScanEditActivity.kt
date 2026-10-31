@@ -908,17 +908,24 @@ class ScanEditActivity : AppCompatActivity() {
     private fun autoDetect(list: List<ScanPage>, crop: Boolean, skew: Boolean, announce: Boolean) {
         work("Mendeteksi tepi dokumen…", { list.map { detectFor(it, crop, skew) } }) { r ->
             r.onSuccess { res ->
-                var found = 0; var fixed = 0
+                var found = 0; var fixed = 0; var full = 0
                 list.forEachIndexed { i, pg ->
                     val a = res[i]
                     if (skew && kotlin.math.abs(a.skew - pg.skew) > 0.05f) { pg.skew = a.skew; fixed++ }
-                    if (crop) a.crop?.let { pg.crop.set(it); found++ }
+                    if (crop) a.crop?.let { c ->
+                        pg.crop.set(c)
+                        if (c.width() * c.height() < 0.97f) found++ else full++
+                    }
                 }
                 if (pages.isNotEmpty()) show()
                 if (announce) {
                     if (found > 0) toast("Tepi terdeteksi di $found halaman" + if (fixed > 0) " · $fixed diluruskan" else "")
+                    else if (fixed > 0) toast("$fixed halaman diluruskan")
                 } else {
-                    if (crop && found == 0) toast("Tepi dokumen tidak terdeteksi. Atur bingkai secara manual.")
+                    if (crop && found == 0) toast(
+                        if (full > 0) "Dokumen sudah memenuhi bingkai." else "Tepi dokumen tidak terdeteksi. Atur bingkai secara manual."
+                    )
+                    if (crop && found > 0) toast("Tepi dokumen terdeteksi")
                     if (!crop && skew) toast(if (fixed > 0) "Halaman diluruskan" else "Halaman sudah lurus")
                 }
             }.onFailure { fail(it) }

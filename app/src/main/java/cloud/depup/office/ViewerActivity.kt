@@ -121,7 +121,7 @@ class ViewerActivity : AppCompatActivity() {
         if (rawUri == null) { finish(); return }
         val uri = Files.cacheCopy(this, rawUri)
 
-        val name = Files.nameOf(this, uri)
+        val name = Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
         val mime = intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
         mimeStr = mime
         paperTheme = PdfSettings.readerTheme(this)
@@ -206,7 +206,7 @@ class ViewerActivity : AppCompatActivity() {
                             2 -> PrintHelper.printPdf(this@ViewerActivity, uri, name)
                             8 -> startVoiceReaderForPdf(uri, name)
                             3 -> showPdfEditDialog(uri, name)
-                            4 -> showRenameDialog(uri, name)
+                            4 -> showRenameDialog(rawUri, uri, name)
                             5 -> showJumpPageDialog()
                             6 -> showPdfSettingsSheet()
                             else -> {
@@ -555,26 +555,11 @@ class ViewerActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showRenameDialog(currentUri: android.net.Uri, currentName: String) {
-        val et = field("Nama file baru").apply { setText(Files.baseName(currentName)) }
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Ubah Nama Berkas")
-            .setView(vbox(16).apply { add(et) })
-            .setPositiveButton("Simpan Nama") { _, _ ->
-                val newName = et.text.toString().trim()
-                if (newName.isNotBlank()) {
-                    val renamedFile = Files.rename(this, currentUri, newName)
-                    if (renamedFile != null) {
-                        val newUri = Files.uriFor(this, renamedFile)
-                        toast("Nama file diubah ke ${renamedFile.name}")
-                        Files.open(this, newUri, mimeStr)
-                        finish()
-                    } else toast("Tidak dapat mengubah nama file ini")
-                }
-            }
-            .setNegativeButton("Batal", null)
-            .show()
-    }
+    private fun showRenameDialog(origin: android.net.Uri, copySource: android.net.Uri, currentName: String) =
+        renameFlow(origin, currentName, copySource) { r ->
+            Files.open(this, r.uri, mimeStr)
+            finish()
+        }
 
     private fun showPdfEditDialog(currentUri: android.net.Uri, currentName: String) {
         val pad = SignatureView(this)

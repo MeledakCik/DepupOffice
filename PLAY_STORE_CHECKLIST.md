@@ -24,3 +24,13 @@ Pastikan versionCode (4) > versionCode terakhir yang pernah di-upload.
 ## Policy flags (cek manual)
 - Link donasi Saweria di MainActivity: cek Payments policy; aman kalau cuma tip/donasi sukarela tanpa unlock fitur.
 - ViewerActivity intent-filter `*/*` + BROWSABLE: boleh, tapi review kalau Play bertanya.
+
+## Library native (16 KB page size, wajib untuk target API 35+)
+- com.google.mlkit:text-recognition:16.0.1  -> sudah 16 KB
+- com.google.mlkit:barcode-scanning:17.3.0  -> sudah 16 KB (17.2.0 sebelumnya TIDAK)
+- Verifikasi di Android Studio: Build > Analyze APK > lib/arm64-v8a/*.so (alignment 16 KB), atau lihat warning saat build.
+
+## Uji manual sebelum upload (belum bisa diuji dari sisi AI)
+- Scan dokumen > Auto-crop AI / Luruskan / Teks (OCR) pada foto asli (meja gelap, meja terang, bayangan)
+- Ubah nama: (a) PDF dibuka dari file manager, (b) file hasil scan, (c) JPG di Pictures/Depup Office; cek nama di file manager berubah
+- Layar Kamera/Editor di Android 15/16 (edge-to-edge): konten tidak tertimpa status bar/nav bar

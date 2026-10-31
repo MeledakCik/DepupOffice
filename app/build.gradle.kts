@@ -102,7 +102,7 @@ dependencies {
     implementation("androidx.camera:camera-view:$camerax")
     // OCR offline & QR Code Scanner
     implementation("com.google.mlkit:text-recognition:16.0.1")
-    implementation("com.google.mlkit:barcode-scanning:17.2.0")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.android.gms:play-services-tasks:18.2.0")
     // Encoder QR asli (ringan, murni Java) + fallback decoder foto.
     implementation("com.google.zxing:core:3.5.3")
