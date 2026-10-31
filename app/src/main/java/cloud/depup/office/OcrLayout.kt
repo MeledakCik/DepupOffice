@@ -240,7 +240,12 @@ object OcrLayout {
             if (gh.size < 2 || gv.size < 2) continue
             val xs = cluster(gv.map { it.pos }, tol * 2)
             val ys = cluster(gh.map { it.pos }, tol * 2)
-            if (xs.size < 2 || ys.size < 2 || (xs.size - 1) * (ys.size - 1) < 2) continue
+            if (xs.size < 3 || ys.size < 3) continue // minimal 2 kolom x 2 baris
+            if (ys.size > 12 && xs.size <= 3) { // banyak garis horizontal rapat + sedikit garis tegak = kertas bergaris
+                val gaps = ys.zipWithNext { a, b -> b - a }.sorted()
+                val med = gaps[gaps.size / 2].toFloat()
+                if (gaps.count { abs(it - med) <= 0.25f * med } >= 0.7f * gaps.size) continue
+            }
             val cols = xs.size - 1; val rows = ys.size - 1
 
             val hasV = Array(rows) { r ->
@@ -434,15 +439,24 @@ object OcrLayout {
             return Table(rows, cols, cells, g.bordered, g.box.t, colW, frac)
         }
 
-        for (g in grids0) {
-            val got = takeInto(g)
-            tableFrom(g, got.map { it.second })?.let { tables.add(it) }
+        // Tabel hanya dipakai bila masuk akal; kalau tidak (mis. garis buku tulis), kata dikembalikan ke paragraf.
+        fun plausible(t: Table): Boolean {
+            if (t.rows < 2 || t.cols < 2) return false
+            val total = t.rows * t.cols
+            val filled = t.cells.count { it.paras.isNotEmpty() }
+            if (total > 4 && filled < 0.35f * total) return false
+            // kolom yang selalu kosong semua -> bukan tabel
+            val colsUsed = t.cells.filter { it.paras.isNotEmpty() }.map { it.c }.toSet().size
+            return colsUsed >= 2
         }
+        fun accept(g: Grid) {
+            val got = takeInto(g)
+            val t = tableFrom(g, got.map { it.second })
+            if (t != null && plausible(t)) tables.add(t) else got.forEach { used[it.first] = false }
+        }
+        for (g in grids0) accept(g)
         val rest0 = words.indices.filter { !used[it] }.map { words[it] }
-        for (g in detectLoose(rest0)) {
-            val got = takeInto(g)
-            tableFrom(g, got.map { it.second })?.let { tables.add(it) }
-        }
+        for (g in detectLoose(rest0)) accept(g)
 
         // paragraf dari kata yang tersisa, mengikuti blok & baris ML Kit
         val paras = ArrayList<Block>()

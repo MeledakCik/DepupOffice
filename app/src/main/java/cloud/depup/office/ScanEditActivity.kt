@@ -984,7 +984,7 @@ class ScanEditActivity : AppCompatActivity() {
 
             // Deteksi Struk / Nota Keuangan
             val receipt = Pdf.parseReceipt(res.text)
-            if (receipt.total != "Rp 0" || receipt.merchant != "Toko / Merchant") {
+            if (receipt.total != "Rp 0") {
                 val rCard = card(12, 12).apply { background = shape(0xFFE0F2FE.toInt(), 12, 0xFF0284C7.toInt(), 1) }
                 val rCol = vbox()
                 rCol.add(tv("🧾 DETEKSI STRUK / NOTA KEUANGAN", 12f, 0xFF0284C7.toInt(), true))
