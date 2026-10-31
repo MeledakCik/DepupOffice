@@ -272,10 +272,37 @@ object ScanAi {
      * (jalur [detectCrop] yang menangani). Logika ada di [DocQuad] (murni Kotlin, diuji di JVM).
      */
     fun detectQuad(src: Bitmap): FloatArray? {
+        lastSplit = false
         val s = small(src)
         // Garis tepi (Hough) dulu: mengikuti tepi kertas yang miring/berperspektif; wilayah-tumbuh (DocQuad) sebagai cadangan.
-        val q = LineQuad.detect(s.g, s.w, s.h) ?: DocQuad.detect(s.g, s.w, s.h) ?: return null
-        return FloatArray(8) { if (it % 2 == 0) q[it] / s.w else q[it] / s.h }
+        var q: FloatArray? = LineQuad.detect(s.g, s.w, s.h) ?: DocQuad.detect(s.g, s.w, s.h)
+        var fromRect = false
+        if (q == null) {
+            // Dokumen sejajar bingkai: pakai kotak potong biasa sebagai segi-empat, supaya tetap bisa dicek 2 halaman.
+            val r = detectCrop(src) ?: return null
+            q = floatArrayOf(
+                r.left * s.w, r.top * s.h, r.right * s.w, r.top * s.h,
+                r.right * s.w, r.bottom * s.h, r.left * s.w, r.bottom * s.h
+            )
+            fromRect = true
+        }
+        // Buku terbuka 2 halaman: bila satu sisi kosong, ambil sisi yang berisi saja.
+        val split = try { SpreadSplit.apply(s.g, s.w, s.h, q) } catch (_: Throwable) { null }
+        val out: FloatArray
+        if (split != null) { out = split; lastSplit = true }
+        else if (fromRect) return null          // tidak ada yang perlu diluruskan: biar jalur potong kotak yang bekerja
+        else out = q
+        val ins = inset(out, 0.005f)
+        return FloatArray(8) { if (it % 2 == 0) ins[it] / s.w else ins[it] / s.h }
+    }
+
+    /** true bila deteksi terakhir memilih 1 dari 2 halaman (untuk pemberitahuan ke pengguna). */
+    @Volatile var lastSplit = false
+
+    /** Geser tiap sudut [f] (pecahan) ke arah pusat: membuang pinggir kertas yang bergradasi gelap / bayangan tepi. */
+    private fun inset(q: FloatArray, f: Float): FloatArray {
+        val cx = (q[0] + q[2] + q[4] + q[6]) / 4f; val cy = (q[1] + q[3] + q[5] + q[7]) / 4f
+        return FloatArray(8) { i -> if (i % 2 == 0) q[i] + (cx - q[i]) * f * 2f else q[i] + (cy - q[i]) * f * 2f }
     }
 
     /**

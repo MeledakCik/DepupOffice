@@ -977,7 +977,7 @@ class ScanEditActivity : AppCompatActivity() {
         val pg = pages[cur]
         work("Mendeteksi tepi dokumen…", { warpFor(pg) }) { r ->
             r.onSuccess { f ->
-                if (f != null) { adoptWarped(pg, f); toast("Dokumen diluruskan (perspektif dikoreksi)") }
+                if (f != null) { adoptWarped(pg, f); toast(if (ScanAi.lastSplit) "2 halaman terdeteksi, diambil 1 halaman yang berisi (Reset untuk batal)" else "Dokumen diluruskan (perspektif dikoreksi)") }
                 else autoDetect(listOf(pg), crop = true, skew = false, announce = false)
             }.onFailure { autoDetect(listOf(pg), crop = true, skew = false, announce = false) }
         }
