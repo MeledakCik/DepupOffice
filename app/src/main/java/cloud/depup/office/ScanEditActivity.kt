@@ -377,7 +377,7 @@ class ScanEditActivity : AppCompatActivity() {
                             work("Membaca teks dari gambar scan…", {
                                 val pg = pages.getOrNull(cur)
                                 if (pg != null) {
-                                    val bmp = try { Export.process(this@ScanEditActivity, pg, mode, 1800, 0, 0) } catch (_: Exception) { null }
+                                    val bmp = try { Export.process(this@ScanEditActivity, pg, mode, Export.ocrDim(pg), 0, 0) } catch (_: Throwable) { null }
                                     if (bmp != null) Ocr.run(bmp).text else ""
                                 } else ""
                             }) { res ->
@@ -950,6 +950,9 @@ class ScanEditActivity : AppCompatActivity() {
         if (res.text.isBlank()) {
             pad.add(tv("Tidak ada teks yang terbaca. Coba gunakan filter Magic Color atau B&W Dokumen, dan pastikan pencahayaan foto tajam.", 13f, C.MUTED))
         } else {
+            if (res.conf < Ocr.LOW_CONF) {
+                pad.add(tv("⚠️ OCR kurang yakin (${(res.conf * 100).toInt()}%). Biasanya karena tulisan tangan atau foto buram — OCR offline hanya andal untuk teks cetak. Untuk hasil terbaik: foto lebih dekat & terang (ketuk layar untuk fokus), atau simpan sebagai PDF/Foto.", 12f, C.RED))
+            }
             val t = tv(res.text, 14f, C.TEXT).apply {
                 setTextIsSelectable(true)
                 background = shape(C.SURFACE2, 12)

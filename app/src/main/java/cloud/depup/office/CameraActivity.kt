@@ -20,7 +20,19 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import android.annotation.SuppressLint
+import android.hardware.camera2.CaptureRequest
+import android.util.Size
+import android.view.GestureDetector
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -350,27 +362,87 @@ class CameraActivity : AppCompatActivity() {
         capture?.flashMode = flashConst()
     }
 
+    /**
+     * Konfigurasi kamera "natural++": resolusi ±12 MP rasio 4:3, JPEG kualitas 100, fokus otomatis terus-menerus,
+     * pengurangan noise & ketajaman (edge) kualitas tinggi, tanpa efek/filter warna dari kamera,
+     * ketuk untuk fokus, cubit untuk zoom.
+     */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     private fun startCamera() {
         val fut = ProcessCameraProvider.getInstance(this)
         fut.addListener({
             try {
                 val provider = fut.get()
-                val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-                val cap = ImageCapture.Builder()
+                val ratio = AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
+                val hiRes = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(ratio)
+                    .setResolutionStrategy(ResolutionStrategy(Size(4000, 3000), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                    .build()
+                val ratioOnly = ResolutionSelector.Builder().setAspectRatioStrategy(ratio).build()
+
+                val pb = Preview.Builder().setResolutionSelector(ratioOnly)
+                val cb = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                    .setFlashMode(flashConst()).build()
+                    .setResolutionSelector(hiRes)
+                    .setJpegQuality(100)
+                    .setFlashMode(flashConst())
+                for (ext in listOf(Camera2Interop.Extender(pb), Camera2Interop.Extender(cb))) {
+                    ext.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    ext.setCaptureRequestOption(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                    ext.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                }
+                val ext = Camera2Interop.Extender(cb)
+                ext.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+                ext.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+                ext.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
+
+                val preview = pb.build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                val cap = cb.build()
                 capture = cap
                 val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(ratioOnly)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 analysis.setAnalyzer(analyzer) { img -> analyze(img) }
                 provider.unbindAll()
                 camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, cap, analysis)
+                setupFocusAndZoom()
             } catch (e: Exception) {
                 toast("Kamera tidak bisa dibuka: ${e.message}")
                 finish()
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupFocusAndZoom() {
+        val scale = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                val cam = camera ?: return true
+                val z = cam.cameraInfo.zoomState.value ?: return true
+                val target = (z.zoomRatio * d.scaleFactor).coerceIn(z.minZoomRatio, minOf(z.maxZoomRatio, 6f))
+                cam.cameraControl.setZoomRatio(target)
+                return true
+            }
+        })
+        val tap = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+            override fun onSingleTapUp(e: MotionEvent): Boolean { focusAt(e.x, e.y); return true }
+        })
+        previewView.setOnTouchListener { _, ev ->
+            scale.onTouchEvent(ev)
+            if (!scale.isInProgress) tap.onTouchEvent(ev)
+            true
+        }
+    }
+
+    /** Ketuk layar: fokus + ukur cahaya di titik itu (berguna untuk tulisan kecil / tabel). */
+    private fun focusAt(x: Float, y: Float) {
+        val cam = camera ?: return
+        val pt = previewView.meteringPointFactory.createPoint(x, y)
+        val act = FocusMeteringAction.Builder(pt, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(4, java.util.concurrent.TimeUnit.SECONDS).build()
+        cam.cameraControl.startFocusAndMetering(act)
     }
 
     private fun snap() {

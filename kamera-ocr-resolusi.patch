@@ -1,0 +1,234 @@
+diff --git a/app/src/main/java/cloud/depup/office/CameraActivity.kt b/app/src/main/java/cloud/depup/office/CameraActivity.kt
+index cbe8cfe..c4a3f6c 100644
+--- a/app/src/main/java/cloud/depup/office/CameraActivity.kt
++++ b/app/src/main/java/cloud/depup/office/CameraActivity.kt
+@@ -20,7 +20,19 @@ import android.widget.TextView
+ import androidx.activity.OnBackPressedCallback
+ import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.appcompat.app.AppCompatActivity
++import android.annotation.SuppressLint
++import android.hardware.camera2.CaptureRequest
++import android.util.Size
++import android.view.GestureDetector
++import android.view.MotionEvent
++import android.view.ScaleGestureDetector
++import androidx.camera.camera2.interop.Camera2Interop
++import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+ import androidx.camera.core.Camera
++import androidx.camera.core.FocusMeteringAction
++import androidx.camera.core.resolutionselector.AspectRatioStrategy
++import androidx.camera.core.resolutionselector.ResolutionSelector
++import androidx.camera.core.resolutionselector.ResolutionStrategy
+ import androidx.camera.core.CameraSelector
+ import androidx.camera.core.ImageAnalysis
+ import androidx.camera.core.ImageCapture
+@@ -350,22 +362,51 @@ class CameraActivity : AppCompatActivity() {
+         capture?.flashMode = flashConst()
+     }
+ 
++    /**
++     * Konfigurasi kamera "natural++": resolusi ±12 MP rasio 4:3, JPEG kualitas 100, fokus otomatis terus-menerus,
++     * pengurangan noise & ketajaman (edge) kualitas tinggi, tanpa efek/filter warna dari kamera,
++     * ketuk untuk fokus, cubit untuk zoom.
++     */
++    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+     private fun startCamera() {
+         val fut = ProcessCameraProvider.getInstance(this)
+         fut.addListener({
+             try {
+                 val provider = fut.get()
+-                val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+-                val cap = ImageCapture.Builder()
++                val ratio = AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
++                val hiRes = ResolutionSelector.Builder()
++                    .setAspectRatioStrategy(ratio)
++                    .setResolutionStrategy(ResolutionStrategy(Size(4000, 3000), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
++                    .build()
++                val ratioOnly = ResolutionSelector.Builder().setAspectRatioStrategy(ratio).build()
++
++                val pb = Preview.Builder().setResolutionSelector(ratioOnly)
++                val cb = ImageCapture.Builder()
+                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+-                    .setFlashMode(flashConst()).build()
++                    .setResolutionSelector(hiRes)
++                    .setJpegQuality(100)
++                    .setFlashMode(flashConst())
++                for (ext in listOf(Camera2Interop.Extender(pb), Camera2Interop.Extender(cb))) {
++                    ext.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
++                    ext.setCaptureRequestOption(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
++                    ext.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
++                }
++                val ext = Camera2Interop.Extender(cb)
++                ext.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
++                ext.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
++                ext.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
++
++                val preview = pb.build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
++                val cap = cb.build()
+                 capture = cap
+                 val analysis = ImageAnalysis.Builder()
++                    .setResolutionSelector(ratioOnly)
+                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                     .build()
+                 analysis.setAnalyzer(analyzer) { img -> analyze(img) }
+                 provider.unbindAll()
+                 camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, cap, analysis)
++                setupFocusAndZoom()
+             } catch (e: Exception) {
+                 toast("Kamera tidak bisa dibuka: ${e.message}")
+                 finish()
+@@ -373,6 +414,37 @@ class CameraActivity : AppCompatActivity() {
+         }, ContextCompat.getMainExecutor(this))
+     }
+ 
++    @SuppressLint("ClickableViewAccessibility")
++    private fun setupFocusAndZoom() {
++        val scale = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
++            override fun onScale(d: ScaleGestureDetector): Boolean {
++                val cam = camera ?: return true
++                val z = cam.cameraInfo.zoomState.value ?: return true
++                val target = (z.zoomRatio * d.scaleFactor).coerceIn(z.minZoomRatio, minOf(z.maxZoomRatio, 6f))
++                cam.cameraControl.setZoomRatio(target)
++                return true
++            }
++        })
++        val tap = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
++            override fun onDown(e: MotionEvent) = true
++            override fun onSingleTapUp(e: MotionEvent): Boolean { focusAt(e.x, e.y); return true }
++        })
++        previewView.setOnTouchListener { _, ev ->
++            scale.onTouchEvent(ev)
++            if (!scale.isInProgress) tap.onTouchEvent(ev)
++            true
++        }
++    }
++
++    /** Ketuk layar: fokus + ukur cahaya di titik itu (berguna untuk tulisan kecil / tabel). */
++    private fun focusAt(x: Float, y: Float) {
++        val cam = camera ?: return
++        val pt = previewView.meteringPointFactory.createPoint(x, y)
++        val act = FocusMeteringAction.Builder(pt, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
++            .setAutoCancelDuration(4, java.util.concurrent.TimeUnit.SECONDS).build()
++        cam.cameraControl.startFocusAndMetering(act)
++    }
++
+     private fun snap() {
+         val cap = capture ?: return
+         if (busyShot) return
+diff --git a/app/src/main/java/cloud/depup/office/Export.kt b/app/src/main/java/cloud/depup/office/Export.kt
+index 33c0685..56fa8bc 100644
+--- a/app/src/main/java/cloud/depup/office/Export.kt
++++ b/app/src/main/java/cloud/depup/office/Export.kt
+@@ -94,6 +94,20 @@ object Export {
+         return bos.toByteArray()
+     }
+ 
++    /**
++     * Dimensi dekode untuk OCR. Foto didekode dulu baru dipotong, jadi kalau halaman hanya sebagian kecil foto,
++     * resolusinya jatuh. Di sini dimensi dinaikkan supaya area potongan tetap ±2400 px (maks 3600 demi memori).
++     */
++    fun ocrDim(pg: ScanPage, base: Int = 2400, cap: Int = 3600): Int {
++        val f = max(pg.crop.right - pg.crop.left, pg.crop.bottom - pg.crop.top).coerceIn(0.2f, 1f)
++        return min(cap, (base / f).toInt()).coerceAtLeast(base)
++    }
++
++    /** OCR dengan resolusi tinggi; kalau memori tidak cukup, ulangi dengan resolusi biasa. */
++    private fun ocrRender(ctx: Context, pg: ScanPage, mode: Int, bright: Int, contrast: Int): Bitmap =
++        try { process(ctx, pg, mode, ocrDim(pg), bright, contrast) }
++        catch (_: OutOfMemoryError) { process(ctx, pg, mode, 2000, bright, contrast) }
++
+     /** Putar + straighten + potong + kecerahan + filter untuk satu halaman. */
+     fun process(ctx: Context, pg: ScanPage, mode: Int, maxDim: Int, bright: Int, contrast: Int): Bitmap =
+         Pdf.applyMode(Pdf.renderScan(ctx, pg, maxDim, bright, contrast), mode)
+@@ -144,8 +158,13 @@ object Export {
+                     val lay = layout(process(ctx, pg, mode, WORD_IMG_DIM, bright, contrast), a)
+                     try { d.image(jpeg(lay.bmp, WORD_IMG_Q), lay.bmp.width, lay.bmp.height) } finally { lay.recycle() }
+                 } else {
+-                    val bmp = process(ctx, pg, mode, 2000, bright, contrast)
++                    val bmp = ocrRender(ctx, pg, mode, bright, contrast)
+                     val res = try { Ocr.run(bmp) } finally { bmp.recycle() }
++                    if (res.conf < Ocr.LOW_CONF) {
++                        d.note("⚠ OCR kurang yakin di halaman ${i + 1} (kemungkinan tulisan tangan atau foto buram). Foto halaman disertakan agar isinya tidak hilang.")
++                        val lay = layout(process(ctx, pg, mode, WORD_IMG_DIM, bright, contrast), a)
++                        try { d.image(jpeg(lay.bmp, WORD_IMG_Q), lay.bmp.width, lay.bmp.height) } finally { lay.recycle() }
++                    }
+                     if (res.blocks.isEmpty()) d.note("(Tidak ada teks terdeteksi di halaman ${i + 1})")
+                     else for (b in res.blocks) when (b) {
+                         is Para -> d.runsParagraph(b.runs)
+@@ -180,7 +199,7 @@ object Export {
+ 
+     /** OCR satu halaman untuk tombol "Teks" di editor. */
+     fun ocrPage(ctx: Context, pg: ScanPage, mode: Int, bright: Int, contrast: Int): OcrPage {
+-        val bmp = process(ctx, pg, mode, 2000, bright, contrast)
++        val bmp = ocrRender(ctx, pg, mode, bright, contrast)
+         try { return Ocr.run(bmp) } finally { bmp.recycle() }
+     }
+ }
+diff --git a/app/src/main/java/cloud/depup/office/Ocr.kt b/app/src/main/java/cloud/depup/office/Ocr.kt
+index 476e434..f2cd474 100644
+--- a/app/src/main/java/cloud/depup/office/Ocr.kt
++++ b/app/src/main/java/cloud/depup/office/Ocr.kt
+@@ -21,17 +21,22 @@ class OcrLine(val text: String, val box: Rect)
+  */
+ class OcrPage(
+     val text: String, val paras: List<String>, val lines: List<OcrLine>, val w: Int, val h: Int,
+-    val blocks: List<Block> = emptyList(), val html: String = ""
++    val blocks: List<Block> = emptyList(), val html: String = "",
++    /** Rata-rata keyakinan ML Kit (0..1). Rendah = biasanya tulisan tangan / foto buram. */
++    val conf: Float = 1f
+ )
+ 
+ /** OCR offline memakai ML Kit (model Latin sudah ikut di dalam APK, tanpa internet). Panggil dari thread latar. */
+ object Ocr {
++    const val LOW_CONF = 0.6f
++
+     fun run(bmp: Bitmap): OcrPage {
+         val rec = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+         try {
+             val res = Tasks.await(rec.process(InputImage.fromBitmap(bmp, 0)), 90, TimeUnit.SECONDS)
+             val lines = ArrayList<OcrLine>()
+             val words = ArrayList<LWord>()
++            var confSum = 0f; var confN = 0
+             res.textBlocks.forEachIndexed { bi, b ->
+                 b.lines.forEachIndexed { li, l ->
+                     val box = l.boundingBox
+@@ -39,6 +44,7 @@ object Ocr {
+                     for (e in l.elements) {
+                         val eb = e.boundingBox ?: continue
+                         if (e.text.isBlank()) continue
++                        confSum += e.confidence * e.text.length; confN += e.text.length
+                         val syms = e.symbols.mapNotNull { s ->
+                             val sb = s.boundingBox ?: return@mapNotNull null
+                             LSym(s.text, LBox(sb.left, sb.top, sb.right, sb.bottom))
+@@ -58,7 +64,7 @@ object Ocr {
+             }
+             val rich = OcrLayout.toText(blocks).ifBlank { res.text.trim() }
+             val paras = blocks.filterIsInstance<Para>().map { OcrLayout.plain(it.runs) }
+-            return OcrPage(rich, paras, lines, bmp.width, bmp.height, blocks, OcrLayout.toHtml(blocks))
++            return OcrPage(rich, paras, lines, bmp.width, bmp.height, blocks, OcrLayout.toHtml(blocks), if (confN > 0) confSum / confN else 1f)
+         } finally {
+             rec.close()
+         }
+diff --git a/app/src/main/java/cloud/depup/office/ScanEditActivity.kt b/app/src/main/java/cloud/depup/office/ScanEditActivity.kt
+index 26fe197..996edc1 100644
+--- a/app/src/main/java/cloud/depup/office/ScanEditActivity.kt
++++ b/app/src/main/java/cloud/depup/office/ScanEditActivity.kt
+@@ -377,7 +377,7 @@ class ScanEditActivity : AppCompatActivity() {
+                             work("Membaca teks dari gambar scan…", {
+                                 val pg = pages.getOrNull(cur)
+                                 if (pg != null) {
+-                                    val bmp = try { Export.process(this@ScanEditActivity, pg, mode, 1800, 0, 0) } catch (_: Exception) { null }
++                                    val bmp = try { Export.process(this@ScanEditActivity, pg, mode, Export.ocrDim(pg), 0, 0) } catch (_: Throwable) { null }
+                                     if (bmp != null) Ocr.run(bmp).text else ""
+                                 } else ""
+                             }) { res ->
+@@ -950,6 +950,9 @@ class ScanEditActivity : AppCompatActivity() {
+         if (res.text.isBlank()) {
+             pad.add(tv("Tidak ada teks yang terbaca. Coba gunakan filter Magic Color atau B&W Dokumen, dan pastikan pencahayaan foto tajam.", 13f, C.MUTED))
+         } else {
++            if (res.conf < Ocr.LOW_CONF) {
++                pad.add(tv("⚠️ OCR kurang yakin (${(res.conf * 100).toInt()}%). Biasanya karena tulisan tangan atau foto buram — OCR offline hanya andal untuk teks cetak. Untuk hasil terbaik: foto lebih dekat & terang (ketuk layar untuk fokus), atau simpan sebagai PDF/Foto.", 12f, C.RED))
++            }
+             val t = tv(res.text, 14f, C.TEXT).apply {
+                 setTextIsSelectable(true)
+                 background = shape(C.SURFACE2, 12)

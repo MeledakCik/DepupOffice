@@ -94,6 +94,20 @@ object Export {
         return bos.toByteArray()
     }
 
+    /**
+     * Dimensi dekode untuk OCR. Foto didekode dulu baru dipotong, jadi kalau halaman hanya sebagian kecil foto,
+     * resolusinya jatuh. Di sini dimensi dinaikkan supaya area potongan tetap ±2400 px (maks 3600 demi memori).
+     */
+    fun ocrDim(pg: ScanPage, base: Int = 2400, cap: Int = 3600): Int {
+        val f = max(pg.crop.right - pg.crop.left, pg.crop.bottom - pg.crop.top).coerceIn(0.2f, 1f)
+        return min(cap, (base / f).toInt()).coerceAtLeast(base)
+    }
+
+    /** OCR dengan resolusi tinggi; kalau memori tidak cukup, ulangi dengan resolusi biasa. */
+    private fun ocrRender(ctx: Context, pg: ScanPage, mode: Int, bright: Int, contrast: Int): Bitmap =
+        try { process(ctx, pg, mode, ocrDim(pg), bright, contrast) }
+        catch (_: OutOfMemoryError) { process(ctx, pg, mode, 2000, bright, contrast) }
+
     /** Putar + straighten + potong + kecerahan + filter untuk satu halaman. */
     fun process(ctx: Context, pg: ScanPage, mode: Int, maxDim: Int, bright: Int, contrast: Int): Bitmap =
         Pdf.applyMode(Pdf.renderScan(ctx, pg, maxDim, bright, contrast), mode)
@@ -144,8 +158,13 @@ object Export {
                     val lay = layout(process(ctx, pg, mode, WORD_IMG_DIM, bright, contrast), a)
                     try { d.image(jpeg(lay.bmp, WORD_IMG_Q), lay.bmp.width, lay.bmp.height) } finally { lay.recycle() }
                 } else {
-                    val bmp = process(ctx, pg, mode, 2000, bright, contrast)
+                    val bmp = ocrRender(ctx, pg, mode, bright, contrast)
                     val res = try { Ocr.run(bmp) } finally { bmp.recycle() }
+                    if (res.conf < Ocr.LOW_CONF) {
+                        d.note("⚠ OCR kurang yakin di halaman ${i + 1} (kemungkinan tulisan tangan atau foto buram). Foto halaman disertakan agar isinya tidak hilang.")
+                        val lay = layout(process(ctx, pg, mode, WORD_IMG_DIM, bright, contrast), a)
+                        try { d.image(jpeg(lay.bmp, WORD_IMG_Q), lay.bmp.width, lay.bmp.height) } finally { lay.recycle() }
+                    }
                     if (res.blocks.isEmpty()) d.note("(Tidak ada teks terdeteksi di halaman ${i + 1})")
                     else for (b in res.blocks) when (b) {
                         is Para -> d.runsParagraph(b.runs)
@@ -180,7 +199,7 @@ object Export {
 
     /** OCR satu halaman untuk tombol "Teks" di editor. */
     fun ocrPage(ctx: Context, pg: ScanPage, mode: Int, bright: Int, contrast: Int): OcrPage {
-        val bmp = process(ctx, pg, mode, 2000, bright, contrast)
+        val bmp = ocrRender(ctx, pg, mode, bright, contrast)
         try { return Ocr.run(bmp) } finally { bmp.recycle() }
     }
 }

@@ -21,17 +21,22 @@ class OcrLine(val text: String, val box: Rect)
  */
 class OcrPage(
     val text: String, val paras: List<String>, val lines: List<OcrLine>, val w: Int, val h: Int,
-    val blocks: List<Block> = emptyList(), val html: String = ""
+    val blocks: List<Block> = emptyList(), val html: String = "",
+    /** Rata-rata keyakinan ML Kit (0..1). Rendah = biasanya tulisan tangan / foto buram. */
+    val conf: Float = 1f
 )
 
 /** OCR offline memakai ML Kit (model Latin sudah ikut di dalam APK, tanpa internet). Panggil dari thread latar. */
 object Ocr {
+    const val LOW_CONF = 0.6f
+
     fun run(bmp: Bitmap): OcrPage {
         val rec = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         try {
             val res = Tasks.await(rec.process(InputImage.fromBitmap(bmp, 0)), 90, TimeUnit.SECONDS)
             val lines = ArrayList<OcrLine>()
             val words = ArrayList<LWord>()
+            var confSum = 0f; var confN = 0
             res.textBlocks.forEachIndexed { bi, b ->
                 b.lines.forEachIndexed { li, l ->
                     val box = l.boundingBox
@@ -39,6 +44,7 @@ object Ocr {
                     for (e in l.elements) {
                         val eb = e.boundingBox ?: continue
                         if (e.text.isBlank()) continue
+                        confSum += e.confidence * e.text.length; confN += e.text.length
                         val syms = e.symbols.mapNotNull { s ->
                             val sb = s.boundingBox ?: return@mapNotNull null
                             LSym(s.text, LBox(sb.left, sb.top, sb.right, sb.bottom))
@@ -58,7 +64,7 @@ object Ocr {
             }
             val rich = OcrLayout.toText(blocks).ifBlank { res.text.trim() }
             val paras = blocks.filterIsInstance<Para>().map { OcrLayout.plain(it.runs) }
-            return OcrPage(rich, paras, lines, bmp.width, bmp.height, blocks, OcrLayout.toHtml(blocks))
+            return OcrPage(rich, paras, lines, bmp.width, bmp.height, blocks, OcrLayout.toHtml(blocks), if (confN > 0) confSum / confN else 1f)
         } finally {
             rec.close()
         }
