@@ -1,0 +1,213 @@
+diff --git a/app/src/main/java/cloud/depup/office/LineQuad.kt b/app/src/main/java/cloud/depup/office/LineQuad.kt
+new file mode 100644
+index 0000000..1733e53
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/LineQuad.kt
+@@ -0,0 +1,193 @@
++package cloud.depup.office
++
++import kotlin.math.PI
++import kotlin.math.abs
++import kotlin.math.acos
++import kotlin.math.cos
++import kotlin.math.max
++import kotlin.math.min
++import kotlin.math.roundToInt
++import kotlin.math.sin
++import kotlin.math.sqrt
++
++/**
++ * Deteksi 4 sudut dokumen ala CamScanner lewat GARIS TEPI (transformasi Hough), murni Kotlin & offline.
++ *
++ *  1. Piksel tepi = gradien kuat (persentil 90). Tiap piksel memilih garis yang tegak lurus arah gradiennya.
++ *  2. Puncak akumulator Hough = kandidat garis tepi kertas (atas/bawah ~ mendatar, kiri/kanan ~ tegak).
++ *  3. Setiap kombinasi 2 garis mendatar x 2 garis tegak membentuk segi-empat. Bingkai foto ikut jadi garis maya,
++ *     jadi kertas yang terpotong di tepi foto tetap bisa dipakai (sudutnya jatuh di bingkai).
++ *  4. Skor = dukungan tepi sepanjang keempat sisi (arah gradien harus searah) x akar luas. Terbaik menang.
++ *
++ * Masukan [g] = gambar abu-abu kecil (+-320 px, sudah di-blur ringan). Keluaran 8 angka piksel
++ * KiriAtas, KananAtas, KananBawah, KiriBawah; null bila tak yakin atau dokumen sudah sejajar bingkai
++ * (jalur potong kotak yang menangani).
++ */
++object LineQuad {
++    private class Ln(val t: Int, val r: Float, val virt: Boolean)
++
++    private const val VIRT_SUPPORT = 0.55f
++
++    fun detect(g: IntArray, w: Int, h: Int): FloatArray? {
++        if (w < 32 || h < 32 || g.size < w * h) return null
++        val gx = IntArray(w * h); val gy = IntArray(w * h); val mag = FloatArray(w * h)
++        val hist = IntArray(1024)
++        for (y in 1 until h - 1) for (x in 1 until w - 1) {
++            val i = y * w + x
++            val dx = g[i + 1] - g[i - 1]; val dy = g[i + w] - g[i - w]
++            gx[i] = dx; gy[i] = dy
++            val m = sqrt((dx * dx + dy * dy).toFloat())
++            mag[i] = m
++            hist[min(1023, m.toInt())]++
++        }
++        val total = (w - 2) * (h - 2)
++        var acc0 = 0; var p90 = 0
++        for (v in 0 until 1024) { acc0 += hist[v]; if (acc0 >= total * 0.90f) { p90 = v; break } }
++        val thr = max(14f, p90.toFloat())
++
++        // ---- Hough ----
++        val diag = sqrt((w * w + h * h).toFloat())
++        val R = diag.toInt() + 2
++        val W = 2 * R + 1
++        val acc = IntArray(180 * W)
++        val ct = FloatArray(180) { cos(it * PI / 180.0).toFloat() }
++        val st = FloatArray(180) { sin(it * PI / 180.0).toFloat() }
++        for (y in 1 until h - 1) for (x in 1 until w - 1) {
++            val i = y * w + x
++            if (mag[i] <= thr) continue
++            var a = Math.toDegrees(Math.atan2(gy[i].toDouble(), gx[i].toDouble())).toInt() % 180
++            if (a < 0) a += 180
++            for (d in -5..5) {
++                val tt = (a + d + 180) % 180
++                val r = (x * ct[tt] + y * st[tt]).roundToInt()
++                val idx = tt * W + r + R
++                if (idx >= tt * W && idx < (tt + 1) * W) acc[idx]++
++            }
++        }
++        val minVotes = (0.22f * min(w, h)).toInt()
++        val hs = ArrayList<Ln>(); val vs = ArrayList<Ln>()
++        for (n in 0 until 24) {
++            var bi = -1; var bv = 0
++            for (i in acc.indices) if (acc[i] > bv) { bv = acc[i]; bi = i }
++            if (bi < 0 || bv < minVotes) break
++            val t = bi / W; val r = bi % W - R
++            if (abs(t - 90) <= 35) { if (hs.size < 10) hs.add(Ln(t, r.toFloat(), false)) }
++            else if (t <= 35 || t >= 145) { if (vs.size < 10) vs.add(Ln(t, r.toFloat(), false)) }
++            for (dt in -8..8) {
++                val tt = (t + dt + 180) % 180
++                for (rr in max(0, r + R - 8)..min(W - 1, r + R + 8)) acc[tt * W + rr] = 0
++            }
++        }
++        hs.add(Ln(90, 0f, true)); hs.add(Ln(90, h - 1f, true))
++        vs.add(Ln(0, 0f, true)); vs.add(Ln(0, w - 1f, true))
++
++        // ---- kombinasi segi-empat ----
++        var best: FloatArray? = null; var bestScore = 0f
++        val minEdge = 0.15f * max(w, h)
++        for (i in 0 until hs.size) for (j in i + 1 until hs.size) for (k in 0 until vs.size) for (l in k + 1 until vs.size) {
++            val a = hs[i]; val b = hs[j]; val c = vs[k]; val d = vs[l]
++            if (a.virt && b.virt && c.virt && d.virt) continue
++            val p0 = cross(a, c) ?: continue; val p1 = cross(a, d) ?: continue
++            val p2 = cross(b, c) ?: continue; val p3 = cross(b, d) ?: continue
++            // atas = baris dengan y rata-rata lebih kecil; kiri = x lebih kecil
++            var top = a; var bot = b; var r0 = p0; var r1 = p1; var s0 = p2; var s1 = p3
++            if (p0[1] + p1[1] > p2[1] + p3[1]) { top = b; bot = a; r0 = p2; r1 = p3; s0 = p0; s1 = p1 }
++            var left = c; var right = d
++            if (r0[0] > r1[0]) { left = d; right = c; val t0 = r0; r0 = r1; r1 = t0; val t1 = s0; s0 = s1; s1 = t1 }
++            val q = floatArrayOf(r0[0], r0[1], r1[0], r1[1], s1[0], s1[1], s0[0], s0[1])   // KA, KaA, KaB, KiB
++            var out = false
++            for (n in 0 until 4) {
++                val x = q[2 * n]; val y = q[2 * n + 1]
++                if (x < -0.15f * w || x > 1.15f * w || y < -0.15f * h || y > 1.15f * h) out = true
++            }
++            if (out) continue
++            val area = polyArea(q) / (w * h)
++            if (area < 0.15f || area > 1.1f) continue
++            if (!anglesOk(q, minEdge)) continue
++            val sup = floatArrayOf(
++                side(q[0], q[1], q[2], q[3], top, mag, gx, gy, thr, w, h),
++                side(q[2], q[3], q[4], q[5], right, mag, gx, gy, thr, w, h),
++                side(q[6], q[7], q[4], q[5], bot, mag, gx, gy, thr, w, h),
++                side(q[0], q[1], q[6], q[7], left, mag, gx, gy, thr, w, h)
++            )
++            val mn = minOf(minOf(sup[0], sup[1]), minOf(sup[2], sup[3])); val mean = (sup[0] + sup[1] + sup[2] + sup[3]) / 4f
++            if (mn < 0.5f) continue
++            val score = (0.5f * mn + 0.5f * mean) * sqrt(min(area, 1f))
++            if (score > bestScore) { bestScore = score; best = q }
++        }
++        val q = best ?: return null
++        if (bestScore < 0.5f) return null
++        val o = FloatArray(8)
++        for (n in 0 until 4) {
++            o[2 * n] = q[2 * n].coerceIn(0f, w.toFloat())
++            o[2 * n + 1] = q[2 * n + 1].coerceIn(0f, h.toFloat())
++        }
++        return if (aligned(o, w, h)) null else o
++    }
++
++    private fun cross(a: Ln, b: Ln): FloatArray? {
++        val c1 = cos(a.t * PI / 180.0).toFloat(); val s1 = sin(a.t * PI / 180.0).toFloat()
++        val c2 = cos(b.t * PI / 180.0).toFloat(); val s2 = sin(b.t * PI / 180.0).toFloat()
++        val det = c1 * s2 - s1 * c2
++        if (abs(det) < 0.2f) return null
++        return floatArrayOf((a.r * s2 - s1 * b.r) / det, (c1 * b.r - c2 * a.r) / det)
++    }
++
++    /** Pecahan titik sepanjang sisi (x0,y0)-(x1,y1) yang punya piksel tepi searah garis [ln]. Garis maya = netral. */
++    private fun side(
++        x0: Float, y0: Float, x1: Float, y1: Float, ln: Ln,
++        mag: FloatArray, gx: IntArray, gy: IntArray, thr: Float, w: Int, h: Int
++    ): Float {
++        if (ln.virt) return VIRT_SUPPORT
++        val nx = cos(ln.t * PI / 180.0).toFloat(); val ny = sin(ln.t * PI / 180.0).toFloat()
++        val len = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0))
++        val n = max(8, (len / 2f).toInt())
++        var ok = 0f
++        for (k in 0..n) {
++            val x = x0 + (x1 - x0) * k / n; val y = y0 + (y1 - y0) * k / n
++            if (x < 1f || y < 1f || x >= w - 1f || y >= h - 1f) { ok += 0.6f; continue }
++            var hit = false
++            for (d in -2..2) {
++                val xx = (x + nx * d).roundToInt(); val yy = (y + ny * d).roundToInt()
++                if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue
++                val i = yy * w + xx
++                if (mag[i] > thr) {
++                    val c = abs((gx[i] * nx + gy[i] * ny) / (mag[i] + 1e-6f))
++                    if (c > 0.8f) { hit = true; break }
++                }
++            }
++            if (hit) ok += 1f
++        }
++        return ok / (n + 1)
++    }
++
++    private fun anglesOk(q: FloatArray, minEdge: Float): Boolean {
++        for (i in 0 until 4) {
++            val ax = q[2 * i]; val ay = q[2 * i + 1]
++            val bx = q[2 * ((i + 1) % 4)]; val by = q[2 * ((i + 1) % 4) + 1]
++            val px = q[2 * ((i + 3) % 4)]; val py = q[2 * ((i + 3) % 4) + 1]
++            val e1x = bx - ax; val e1y = by - ay; val e2x = px - ax; val e2y = py - ay
++            val l1 = sqrt(e1x * e1x + e1y * e1y); val l2 = sqrt(e2x * e2x + e2y * e2y)
++            if (l1 < minEdge || l2 < minEdge) return false
++            val cs = ((e1x * e2x + e1y * e2y) / (l1 * l2)).coerceIn(-1f, 1f)
++            val deg = Math.toDegrees(acos(cs).toDouble())
++            if (deg < 60.0 || deg > 120.0) return false
++        }
++        return true
++    }
++
++    private fun polyArea(q: FloatArray): Float {
++        var s = 0f
++        for (i in 0 until 4) {
++            val j = (i + 1) % 4
++            s += q[2 * i] * q[2 * j + 1] - q[2 * j] * q[2 * i + 1]
++        }
++        return abs(s) / 2f
++    }
++
++    /** Praktis persegi panjang sejajar bingkai: tak perlu perspektif, biar jalur potong kotak yang bekerja. */
++    private fun aligned(q: FloatArray, w: Int, h: Int): Boolean {
++        val tx = 0.03f * w; val ty = 0.03f * h
++        return abs(q[0] - q[6]) < tx && abs(q[2] - q[4]) < tx && abs(q[1] - q[3]) < ty && abs(q[7] - q[5]) < ty
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/ScanAi.kt b/app/src/main/java/cloud/depup/office/ScanAi.kt
+index 519c9aa..3169ef0 100644
+--- a/app/src/main/java/cloud/depup/office/ScanAi.kt
++++ b/app/src/main/java/cloud/depup/office/ScanAi.kt
+@@ -273,7 +273,8 @@ object ScanAi {
+      */
+     fun detectQuad(src: Bitmap): FloatArray? {
+         val s = small(src)
+-        val q = DocQuad.detect(s.g, s.w, s.h) ?: return null
++        // Garis tepi (Hough) dulu: mengikuti tepi kertas yang miring/berperspektif; wilayah-tumbuh (DocQuad) sebagai cadangan.
++        val q = LineQuad.detect(s.g, s.w, s.h) ?: DocQuad.detect(s.g, s.w, s.h) ?: return null
+         return FloatArray(8) { if (it % 2 == 0) q[it] / s.w else q[it] / s.h }
+     }
+ 

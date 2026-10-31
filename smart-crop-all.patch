@@ -1,0 +1,490 @@
+diff --git a/app/src/main/java/cloud/depup/office/CropTrim.kt b/app/src/main/java/cloud/depup/office/CropTrim.kt
+new file mode 100644
+index 0000000..411711e
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/CropTrim.kt
+@@ -0,0 +1,51 @@
++package cloud.depup.office
++
++/**
++ * Pangkas sisi kotak dokumen yang ternyata BUKAN kertas (benda gelap, meja, tangan, ponsel di pinggir foto).
++ * Murni Kotlin, bekerja di gambar abu-abu kecil yang sudah "closed" (goresan teks hilang), jadi tulisan tangan
++ * tidak ikut menurunkan rata-rata terang. Dipanggil dari ScanAi.detectCrop.
++ *
++ * Ide: baris/kolom di tepi kotak yang rata-rata terangnya jauh di bawah kertas (median) dibuang sampai ketemu kertas.
++ * Bila harus membuang terlalu banyak (>35% satu sisi) berarti dokumennya memang gelap -> kotak dibiarkan.
++ */
++object CropTrim {
++    private const val DARK = 0.78f      // < 78% terang kertas = bukan kertas
++    private const val MAX_SIDE = 0.35f  // batas pangkas per sisi
++    private const val MIN_KEEP = 10
++
++    /** [box] = [l, t, r, b] inklusif (piksel gambar kecil). Mengembalikan kotak baru (atau [box] bila tak perlu). */
++    fun trimDark(g: IntArray, w: Int, h: Int, box: IntArray): IntArray {
++        var l = box[0]; var t = box[1]; var r = box[2]; var b = box[3]
++        if (r - l < 20 || b - t < 20 || g.size < w * h) return box
++
++        // --- baris (atas / bawah) ---
++        val bw = r - l + 1
++        val rows = FloatArray(h)
++        for (y in t..b) { var s = 0L; for (x in l..r) s += g[y * w + x]; rows[y] = s.toFloat() / bw }
++        val thrR = median(rows, t, b) * DARK
++        val maxR = ((b - t + 1) * MAX_SIDE).toInt()
++        var n = 0
++        while (t < b - MIN_KEEP && rows[t] < thrR) { t++; if (++n > maxR) return box }
++        n = 0
++        while (b > t + MIN_KEEP && rows[b] < thrR) { b--; if (++n > maxR) return box }
++
++        // --- kolom (kiri / kanan), dihitung ulang di baris yang tersisa ---
++        val bh = b - t + 1
++        val cols = FloatArray(w)
++        for (x in l..r) { var s = 0L; for (y in t..b) s += g[y * w + x]; cols[x] = s.toFloat() / bh }
++        val thrC = median(cols, l, r) * DARK
++        val maxC = ((r - l + 1) * MAX_SIDE).toInt()
++        n = 0
++        while (l < r - MIN_KEEP && cols[l] < thrC) { l++; if (++n > maxC) return box }
++        n = 0
++        while (r > l + MIN_KEEP && cols[r] < thrC) { r--; if (++n > maxC) return box }
++
++        return intArrayOf(l, t, r, b)
++    }
++
++    private fun median(a: FloatArray, from: Int, to: Int): Float {
++        val s = a.copyOfRange(from, to + 1)
++        s.sort()
++        return s[s.size / 2]
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/LineQuad.kt b/app/src/main/java/cloud/depup/office/LineQuad.kt
+new file mode 100644
+index 0000000..1733e53
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/LineQuad.kt
+@@ -0,0 +1,193 @@
++package cloud.depup.office
++
++import kotlin.math.PI
++import kotlin.math.abs
++import kotlin.math.acos
++import kotlin.math.cos
++import kotlin.math.max
++import kotlin.math.min
++import kotlin.math.roundToInt
++import kotlin.math.sin
++import kotlin.math.sqrt
++
++/**
++ * Deteksi 4 sudut dokumen ala CamScanner lewat GARIS TEPI (transformasi Hough), murni Kotlin & offline.
++ *
++ *  1. Piksel tepi = gradien kuat (persentil 90). Tiap piksel memilih garis yang tegak lurus arah gradiennya.
++ *  2. Puncak akumulator Hough = kandidat garis tepi kertas (atas/bawah ~ mendatar, kiri/kanan ~ tegak).
++ *  3. Setiap kombinasi 2 garis mendatar x 2 garis tegak membentuk segi-empat. Bingkai foto ikut jadi garis maya,
++ *     jadi kertas yang terpotong di tepi foto tetap bisa dipakai (sudutnya jatuh di bingkai).
++ *  4. Skor = dukungan tepi sepanjang keempat sisi (arah gradien harus searah) x akar luas. Terbaik menang.
++ *
++ * Masukan [g] = gambar abu-abu kecil (+-320 px, sudah di-blur ringan). Keluaran 8 angka piksel
++ * KiriAtas, KananAtas, KananBawah, KiriBawah; null bila tak yakin atau dokumen sudah sejajar bingkai
++ * (jalur potong kotak yang menangani).
++ */
++object LineQuad {
++    private class Ln(val t: Int, val r: Float, val virt: Boolean)
++
++    private const val VIRT_SUPPORT = 0.55f
++
++    fun detect(g: IntArray, w: Int, h: Int): FloatArray? {
++        if (w < 32 || h < 32 || g.size < w * h) return null
++        val gx = IntArray(w * h); val gy = IntArray(w * h); val mag = FloatArray(w * h)
++        val hist = IntArray(1024)
++        for (y in 1 until h - 1) for (x in 1 until w - 1) {
++            val i = y * w + x
++            val dx = g[i + 1] - g[i - 1]; val dy = g[i + w] - g[i - w]
++            gx[i] = dx; gy[i] = dy
++            val m = sqrt((dx * dx + dy * dy).toFloat())
++            mag[i] = m
++            hist[min(1023, m.toInt())]++
++        }
++        val total = (w - 2) * (h - 2)
++        var acc0 = 0; var p90 = 0
++        for (v in 0 until 1024) { acc0 += hist[v]; if (acc0 >= total * 0.90f) { p90 = v; break } }
++        val thr = max(14f, p90.toFloat())
++
++        // ---- Hough ----
++        val diag = sqrt((w * w + h * h).toFloat())
++        val R = diag.toInt() + 2
++        val W = 2 * R + 1
++        val acc = IntArray(180 * W)
++        val ct = FloatArray(180) { cos(it * PI / 180.0).toFloat() }
++        val st = FloatArray(180) { sin(it * PI / 180.0).toFloat() }
++        for (y in 1 until h - 1) for (x in 1 until w - 1) {
++            val i = y * w + x
++            if (mag[i] <= thr) continue
++            var a = Math.toDegrees(Math.atan2(gy[i].toDouble(), gx[i].toDouble())).toInt() % 180
++            if (a < 0) a += 180
++            for (d in -5..5) {
++                val tt = (a + d + 180) % 180
++                val r = (x * ct[tt] + y * st[tt]).roundToInt()
++                val idx = tt * W + r + R
++                if (idx >= tt * W && idx < (tt + 1) * W) acc[idx]++
++            }
++        }
++        val minVotes = (0.22f * min(w, h)).toInt()
++        val hs = ArrayList<Ln>(); val vs = ArrayList<Ln>()
++        for (n in 0 until 24) {
++            var bi = -1; var bv = 0
++            for (i in acc.indices) if (acc[i] > bv) { bv = acc[i]; bi = i }
++            if (bi < 0 || bv < minVotes) break
++            val t = bi / W; val r = bi % W - R
++            if (abs(t - 90) <= 35) { if (hs.size < 10) hs.add(Ln(t, r.toFloat(), false)) }
++            else if (t <= 35 || t >= 145) { if (vs.size < 10) vs.add(Ln(t, r.toFloat(), false)) }
++            for (dt in -8..8) {
++                val tt = (t + dt + 180) % 180
++                for (rr in max(0, r + R - 8)..min(W - 1, r + R + 8)) acc[tt * W + rr] = 0
++            }
++        }
++        hs.add(Ln(90, 0f, true)); hs.add(Ln(90, h - 1f, true))
++        vs.add(Ln(0, 0f, true)); vs.add(Ln(0, w - 1f, true))
++
++        // ---- kombinasi segi-empat ----
++        var best: FloatArray? = null; var bestScore = 0f
++        val minEdge = 0.15f * max(w, h)
++        for (i in 0 until hs.size) for (j in i + 1 until hs.size) for (k in 0 until vs.size) for (l in k + 1 until vs.size) {
++            val a = hs[i]; val b = hs[j]; val c = vs[k]; val d = vs[l]
++            if (a.virt && b.virt && c.virt && d.virt) continue
++            val p0 = cross(a, c) ?: continue; val p1 = cross(a, d) ?: continue
++            val p2 = cross(b, c) ?: continue; val p3 = cross(b, d) ?: continue
++            // atas = baris dengan y rata-rata lebih kecil; kiri = x lebih kecil
++            var top = a; var bot = b; var r0 = p0; var r1 = p1; var s0 = p2; var s1 = p3
++            if (p0[1] + p1[1] > p2[1] + p3[1]) { top = b; bot = a; r0 = p2; r1 = p3; s0 = p0; s1 = p1 }
++            var left = c; var right = d
++            if (r0[0] > r1[0]) { left = d; right = c; val t0 = r0; r0 = r1; r1 = t0; val t1 = s0; s0 = s1; s1 = t1 }
++            val q = floatArrayOf(r0[0], r0[1], r1[0], r1[1], s1[0], s1[1], s0[0], s0[1])   // KA, KaA, KaB, KiB
++            var out = false
++            for (n in 0 until 4) {
++                val x = q[2 * n]; val y = q[2 * n + 1]
++                if (x < -0.15f * w || x > 1.15f * w || y < -0.15f * h || y > 1.15f * h) out = true
++            }
++            if (out) continue
++            val area = polyArea(q) / (w * h)
++            if (area < 0.15f || area > 1.1f) continue
++            if (!anglesOk(q, minEdge)) continue
++            val sup = floatArrayOf(
++                side(q[0], q[1], q[2], q[3], top, mag, gx, gy, thr, w, h),
++                side(q[2], q[3], q[4], q[5], right, mag, gx, gy, thr, w, h),
++                side(q[6], q[7], q[4], q[5], bot, mag, gx, gy, thr, w, h),
++                side(q[0], q[1], q[6], q[7], left, mag, gx, gy, thr, w, h)
++            )
++            val mn = minOf(minOf(sup[0], sup[1]), minOf(sup[2], sup[3])); val mean = (sup[0] + sup[1] + sup[2] + sup[3]) / 4f
++            if (mn < 0.5f) continue
++            val score = (0.5f * mn + 0.5f * mean) * sqrt(min(area, 1f))
++            if (score > bestScore) { bestScore = score; best = q }
++        }
++        val q = best ?: return null
++        if (bestScore < 0.5f) return null
++        val o = FloatArray(8)
++        for (n in 0 until 4) {
++            o[2 * n] = q[2 * n].coerceIn(0f, w.toFloat())
++            o[2 * n + 1] = q[2 * n + 1].coerceIn(0f, h.toFloat())
++        }
++        return if (aligned(o, w, h)) null else o
++    }
++
++    private fun cross(a: Ln, b: Ln): FloatArray? {
++        val c1 = cos(a.t * PI / 180.0).toFloat(); val s1 = sin(a.t * PI / 180.0).toFloat()
++        val c2 = cos(b.t * PI / 180.0).toFloat(); val s2 = sin(b.t * PI / 180.0).toFloat()
++        val det = c1 * s2 - s1 * c2
++        if (abs(det) < 0.2f) return null
++        return floatArrayOf((a.r * s2 - s1 * b.r) / det, (c1 * b.r - c2 * a.r) / det)
++    }
++
++    /** Pecahan titik sepanjang sisi (x0,y0)-(x1,y1) yang punya piksel tepi searah garis [ln]. Garis maya = netral. */
++    private fun side(
++        x0: Float, y0: Float, x1: Float, y1: Float, ln: Ln,
++        mag: FloatArray, gx: IntArray, gy: IntArray, thr: Float, w: Int, h: Int
++    ): Float {
++        if (ln.virt) return VIRT_SUPPORT
++        val nx = cos(ln.t * PI / 180.0).toFloat(); val ny = sin(ln.t * PI / 180.0).toFloat()
++        val len = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0))
++        val n = max(8, (len / 2f).toInt())
++        var ok = 0f
++        for (k in 0..n) {
++            val x = x0 + (x1 - x0) * k / n; val y = y0 + (y1 - y0) * k / n
++            if (x < 1f || y < 1f || x >= w - 1f || y >= h - 1f) { ok += 0.6f; continue }
++            var hit = false
++            for (d in -2..2) {
++                val xx = (x + nx * d).roundToInt(); val yy = (y + ny * d).roundToInt()
++                if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue
++                val i = yy * w + xx
++                if (mag[i] > thr) {
++                    val c = abs((gx[i] * nx + gy[i] * ny) / (mag[i] + 1e-6f))
++                    if (c > 0.8f) { hit = true; break }
++                }
++            }
++            if (hit) ok += 1f
++        }
++        return ok / (n + 1)
++    }
++
++    private fun anglesOk(q: FloatArray, minEdge: Float): Boolean {
++        for (i in 0 until 4) {
++            val ax = q[2 * i]; val ay = q[2 * i + 1]
++            val bx = q[2 * ((i + 1) % 4)]; val by = q[2 * ((i + 1) % 4) + 1]
++            val px = q[2 * ((i + 3) % 4)]; val py = q[2 * ((i + 3) % 4) + 1]
++            val e1x = bx - ax; val e1y = by - ay; val e2x = px - ax; val e2y = py - ay
++            val l1 = sqrt(e1x * e1x + e1y * e1y); val l2 = sqrt(e2x * e2x + e2y * e2y)
++            if (l1 < minEdge || l2 < minEdge) return false
++            val cs = ((e1x * e2x + e1y * e2y) / (l1 * l2)).coerceIn(-1f, 1f)
++            val deg = Math.toDegrees(acos(cs).toDouble())
++            if (deg < 60.0 || deg > 120.0) return false
++        }
++        return true
++    }
++
++    private fun polyArea(q: FloatArray): Float {
++        var s = 0f
++        for (i in 0 until 4) {
++            val j = (i + 1) % 4
++            s += q[2 * i] * q[2 * j + 1] - q[2 * j] * q[2 * i + 1]
++        }
++        return abs(s) / 2f
++    }
++
++    /** Praktis persegi panjang sejajar bingkai: tak perlu perspektif, biar jalur potong kotak yang bekerja. */
++    private fun aligned(q: FloatArray, w: Int, h: Int): Boolean {
++        val tx = 0.03f * w; val ty = 0.03f * h
++        return abs(q[0] - q[6]) < tx && abs(q[2] - q[4]) < tx && abs(q[1] - q[3]) < ty && abs(q[7] - q[5]) < ty
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/Ocr.kt b/app/src/main/java/cloud/depup/office/Ocr.kt
+index f2cd474..bd35a0a 100644
+--- a/app/src/main/java/cloud/depup/office/Ocr.kt
++++ b/app/src/main/java/cloud/depup/office/Ocr.kt
+@@ -30,7 +30,25 @@ class OcrPage(
+ object Ocr {
+     const val LOW_CONF = 0.6f
+ 
++    /**
++     * OCR pintar: baca apa adanya dulu. Kalau keyakinan rendah (biasanya tulisan tangan / kertas bergaris),
++     * ulangi pada salinan yang garis bukunya sudah dibuang & tintanya dipekatkan, lalu pakai yang lebih meyakinkan.
++     * Semua pemanggil lama (Export, ScanEditActivity, ViewerActivity) otomatis ikut lebih pintar.
++     */
+     fun run(bmp: Bitmap): OcrPage {
++        val first = runOnce(bmp, bmp)
++        if (first.conf >= LOW_CONF) return first
++        val cleaned = OcrPre.handwriting(bmp) ?: return first
++        try {
++            val second = try { runOnce(cleaned, bmp) } catch (_: Throwable) { return first }
++            val enough = second.text.length * 2 >= first.text.length      // jangan pilih hasil yang hampir kosong
++            return if (enough && second.conf > first.conf + 0.03f) second else first
++        } finally { cleaned.recycle() }
++    }
++
++    /** [img] = gambar yang dibaca ML Kit; [gridSrc] = gambar asli untuk mencari garis tabel (garis tidak boleh dibuang di sini). */
++    private fun runOnce(img: Bitmap, gridSrc: Bitmap): OcrPage {
++        val bmp = img
+         val rec = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+         try {
+             val res = Tasks.await(rec.process(InputImage.fromBitmap(bmp, 0)), 90, TimeUnit.SECONDS)
+@@ -45,16 +63,17 @@ object Ocr {
+                         val eb = e.boundingBox ?: continue
+                         if (e.text.isBlank()) continue
+                         confSum += e.confidence * e.text.length; confN += e.text.length
++                        if (isGarbage(e.text, e.confidence)) continue     // sampah OCR (mis. "8e8|po", ">8TL") tidak dimasukkan
+                         val syms = e.symbols.mapNotNull { s ->
+                             val sb = s.boundingBox ?: return@mapNotNull null
+                             LSym(s.text, LBox(sb.left, sb.top, sb.right, sb.bottom))
+                         }
+-                        words.add(LWord(e.text, LBox(eb.left, eb.top, eb.right, eb.bottom), syms, bi, li))
++                        words.add(LWord(fixNumeric(e.text), LBox(eb.left, eb.top, eb.right, eb.bottom), syms, bi, li))
+                     }
+                 }
+             }
+             val blocks = try {
+-                OcrLayout.build(words, detectGrids(bmp), bmp.width)
++                OcrLayout.build(words, detectGrids(gridSrc), bmp.width)
+             } catch (_: Throwable) {
+                 // Jaga-jaga: kalau tata letak gagal, tetap kembalikan paragraf polos dari ML Kit.
+                 res.textBlocks.mapNotNull { b ->
+@@ -70,6 +89,33 @@ object Ocr {
+         }
+     }
+ 
++    /** Kata berkeyakinan sangat rendah yang tidak mirip kata/angka. Konservatif: kata cukup yakin selalu lolos. */
++    private fun isGarbage(t: String, conf: Float): Boolean {
++        val alnum = t.count { it.isLetterOrDigit() }
++        if (alnum == 0) return t.length > 1 && conf < 0.5f              // deretan simbol saja
++        if (conf >= 0.5f) return false
++        if (conf < 0.25f) return true
++        // keyakinan 0.25..0.5: buang bila campuran simbol/huruf/angka yang tidak wajar atau tanpa vokal (kecuali angka)
++        val symbols = t.length - alnum
++        val hasDigit = t.any { it.isDigit() }
++        val hasLetter = t.any { it.isLetter() }
++        if (symbols * 2 > t.length) return true
++        if (hasDigit && hasLetter && t.length <= 6) return true
++        if (hasLetter && !hasDigit && t.length >= 4 && t.none { it.lowercaseChar() in "aiueo" }) return true
++        return false
++    }
++
++    private val DIGIT_LOOKALIKE = mapOf('O' to '0', 'o' to '0', 'l' to '1', 'I' to '1', '|' to '1', 'S' to '5', 'B' to '8', 'Z' to '2')
++
++    /** Token yang jelas angka (mis. "1O5", "l2") diperbaiki huruf-mirip-angkanya; kata biasa tidak disentuh. */
++    private fun fixNumeric(t: String): String {
++        if (t.none { it.isDigit() }) return t
++        if (t.any { !it.isDigit() && it !in DIGIT_LOOKALIKE && it.isLetter() }) return t
++        val letters = t.count { it in DIGIT_LOOKALIKE }
++        if (letters * 10 > t.length * 4) return t
++        return buildString { for (c in t) append(DIGIT_LOOKALIKE[c] ?: c) }
++    }
++
+     /** Cari garis tabel di gambar (skala diperkecil supaya cepat), kembalikan kisi dalam koordinat gambar asli. */
+     private fun detectGrids(bmp: Bitmap): List<Grid> {
+         val sc = if (bmp.width > 1000) 1000f / bmp.width else 1f
+diff --git a/app/src/main/java/cloud/depup/office/OcrPre.kt b/app/src/main/java/cloud/depup/office/OcrPre.kt
+new file mode 100644
+index 0000000..8150ad0
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/OcrPre.kt
+@@ -0,0 +1,119 @@
++package cloud.depup.office
++
++import android.graphics.Bitmap
++import android.graphics.Color
++
++/**
++ * Pembersih gambar KHUSUS tulisan tangan di kertas bergaris, dipakai sebagai percobaan ke-2 OCR
++ * ketika keyakinan percobaan pertama rendah. Murni Kotlin, offline.
++ *
++ *  1. Peta terang kertas per sel (persentil 85) -> kertas rata walau ada bayangan.
++ *  2. Piksel tinta = jauh lebih gelap dari kertas sekitarnya.
++ *  3. Garis buku = deretan tinta horizontal panjang (toleran miring ±1 baris). Dibuang, KECUALI tempat goresan
++ *     huruf memotong garis (ada tinta di atas DAN di bawah pita garis) supaya huruf tidak putus.
++ *  4. Tinta dipekatkan, kertas diputihkan.
++ *
++ * Ukuran keluaran = ukuran masukan, jadi koordinat kotak OCR tetap cocok dengan gambar asli.
++ */
++object OcrPre {
++    private const val INK_RATIO = 0.84f      // tinta bila < 84% terang kertas lokal
++    private const val MIN_LINE_FRAC = 1f / 14f
++    private const val BAND_LOOK = 5          // jarak cek tinta di atas/bawah pita garis
++
++    fun handwriting(src: Bitmap): Bitmap? = try {
++        val w = src.width; val h = src.height
++        val lum = ByteArray(w * h)
++        val row = IntArray(w)
++        for (y in 0 until h) {
++            src.getPixels(row, 0, w, 0, y, w, 1)
++            for (x in 0 until w) {
++                val c = row[x]
++                lum[y * w + x] = ((Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000).toByte()
++            }
++        }
++        val out = clean(lum, w, h)
++        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
++        for (y in 0 until h) {
++            for (x in 0 until w) { val v = out[y * w + x].toInt() and 255; row[x] = Color.rgb(v, v, v) }
++            bmp.setPixels(row, 0, w, 0, y, w, 1)
++        }
++        bmp
++    } catch (_: Throwable) { null }   // termasuk OutOfMemoryError: percobaan ke-2 dilewati, hasil pertama dipakai
++
++    /** Murni array (bisa diuji di JVM). [lum] 0..255 sebagai byte tak bertanda. */
++    fun clean(lum: ByteArray, w: Int, h: Int): ByteArray {
++        fun L(i: Int) = lum[i].toInt() and 255
++
++        // 1) peta kertas
++        val cell = maxOf(12, w / 60)
++        val gw = (w + cell - 1) / cell; val gh = (h + cell - 1) / cell
++        val raw = FloatArray(gw * gh)
++        val hist = IntArray(256)
++        for (cy in 0 until gh) for (cx in 0 until gw) {
++            java.util.Arrays.fill(hist, 0)
++            var n = 0
++            for (y in cy * cell until minOf(h, (cy + 1) * cell)) for (x in cx * cell until minOf(w, (cx + 1) * cell)) { hist[L(y * w + x)]++; n++ }
++            var acc = 0; var p = 255
++            val target = (n * 0.15f).toInt()
++            for (v in 255 downTo 0) { acc += hist[v]; if (acc >= target) { p = v; break } }
++            raw[cy * gw + cx] = p.toFloat()
++        }
++        val paper = FloatArray(gw * gh)
++        for (cy in 0 until gh) for (cx in 0 until gw) {
++            var s = 0f; var c = 0
++            for (dy in -1..1) for (dx in -1..1) {
++                val xx = cx + dx; val yy = cy + dy
++                if (xx in 0 until gw && yy in 0 until gh) { s += raw[yy * gw + xx]; c++ }
++            }
++            paper[cy * gw + cx] = maxOf(60f, s / c)
++        }
++
++        // 2) tinta
++        val ink = BooleanArray(w * h)
++        for (y in 0 until h) for (x in 0 until w) {
++            val pp = paper[(y / cell) * gw + (x / cell)]
++            ink[y * w + x] = L(y * w + x) < pp * INK_RATIO
++        }
++
++        // 3) garis buku: run horizontal panjang pada tinta yang di-OR 3 baris (toleran miring)
++        val minRun = maxOf(40, (w * MIN_LINE_FRAC).toInt())
++        val line = BooleanArray(w * h)
++        for (y in 1 until h - 1) {
++            var x = 0
++            while (x < w) {
++                if (!(ink[y * w + x] || ink[(y - 1) * w + x] || ink[(y + 1) * w + x])) { x++; continue }
++                val s = x
++                var gap = 0
++                var e = x
++                while (e < w) {
++                    val on = ink[y * w + e] || ink[(y - 1) * w + e] || ink[(y + 1) * w + e]
++                    if (on) gap = 0 else { gap++; if (gap > 2) break }
++                    e++
++                }
++                val end = e - gap
++                if (end - s >= minRun) for (xx in s until end) if (ink[y * w + xx]) line[y * w + xx] = true
++                x = e + 1
++            }
++        }
++
++        // 4) keluaran
++        val out = ByteArray(w * h)
++        for (y in 0 until h) for (x in 0 until w) {
++            val i = y * w + x
++            var isInk = ink[i]
++            if (isInk && line[i]) {
++                // goresan huruf yang memotong garis: ada tinta non-garis di atas DAN di bawah pita
++                var up = false; var dn = false
++                var yy = y - 1
++                while (yy >= 0 && line[yy * w + x]) yy--
++                for (k in 0 until BAND_LOOK) { val q = yy - k; if (q >= 0 && ink[q * w + x] && !line[q * w + x]) { up = true; break } }
++                yy = y + 1
++                while (yy < h && line[yy * w + x]) yy++
++                for (k in 0 until BAND_LOOK) { val q = yy + k; if (q < h && ink[q * w + x] && !line[q * w + x]) { dn = true; break } }
++                if (!(up && dn)) isInk = false
++            }
++            out[i] = if (isInk) minOf(L(i), 80).toByte() else 255.toByte()
++        }
++        return out
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/ScanAi.kt b/app/src/main/java/cloud/depup/office/ScanAi.kt
+index f833948..3169ef0 100644
+--- a/app/src/main/java/cloud/depup/office/ScanAi.kt
++++ b/app/src/main/java/cloud/depup/office/ScanAi.kt
+@@ -218,7 +218,9 @@ object ScanAi {
+         val w = s.w; val h = s.h
+         val closed = closeGray(s.g, w, h, 3)
+ 
+-        val box = growBox(closed, w, h) ?: otsuBox(s) ?: return null
++        val box0 = growBox(closed, w, h) ?: otsuBox(s) ?: return null
++        // Buang sisi yang ternyata benda gelap / meja / tangan (bukan kertas) sebelum menghitung luas & menajamkan tepi.
++        val box = CropTrim.trimDark(closed, w, h, box0)
+         val l = box[0]; val t = box[1]; val r = box[2]; val b = box[3]
+         val area = (r - l + 1).toFloat() * (b - t + 1) / (w * h)
+         if (area < 0.15f) return null          // terlalu kecil: kemungkinan bukan dokumen
+@@ -271,7 +273,8 @@ object ScanAi {
+      */
+     fun detectQuad(src: Bitmap): FloatArray? {
+         val s = small(src)
+-        val q = DocQuad.detect(s.g, s.w, s.h) ?: return null
++        // Garis tepi (Hough) dulu: mengikuti tepi kertas yang miring/berperspektif; wilayah-tumbuh (DocQuad) sebagai cadangan.
++        val q = LineQuad.detect(s.g, s.w, s.h) ?: DocQuad.detect(s.g, s.w, s.h) ?: return null
+         return FloatArray(8) { if (it % 2 == 0) q[it] / s.w else q[it] / s.h }
+     }
+ 

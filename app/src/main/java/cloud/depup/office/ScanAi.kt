@@ -273,7 +273,8 @@ object ScanAi {
      */
     fun detectQuad(src: Bitmap): FloatArray? {
         val s = small(src)
-        val q = DocQuad.detect(s.g, s.w, s.h) ?: return null
+        // Garis tepi (Hough) dulu: mengikuti tepi kertas yang miring/berperspektif; wilayah-tumbuh (DocQuad) sebagai cadangan.
+        val q = LineQuad.detect(s.g, s.w, s.h) ?: DocQuad.detect(s.g, s.w, s.h) ?: return null
         return FloatArray(8) { if (it % 2 == 0) q[it] / s.w else q[it] / s.h }
     }
 
