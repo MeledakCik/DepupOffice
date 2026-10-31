@@ -218,7 +218,9 @@ object ScanAi {
         val w = s.w; val h = s.h
         val closed = closeGray(s.g, w, h, 3)
 
-        val box = growBox(closed, w, h) ?: otsuBox(s) ?: return null
+        val box0 = growBox(closed, w, h) ?: otsuBox(s) ?: return null
+        // Buang sisi yang ternyata benda gelap / meja / tangan (bukan kertas) sebelum menghitung luas & menajamkan tepi.
+        val box = CropTrim.trimDark(closed, w, h, box0)
         val l = box[0]; val t = box[1]; val r = box[2]; val b = box[3]
         val area = (r - l + 1).toFloat() * (b - t + 1) / (w * h)
         if (area < 0.15f) return null          // terlalu kecil: kemungkinan bukan dokumen

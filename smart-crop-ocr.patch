@@ -1,0 +1,281 @@
+diff --git a/app/src/main/java/cloud/depup/office/CropTrim.kt b/app/src/main/java/cloud/depup/office/CropTrim.kt
+new file mode 100644
+index 0000000..411711e
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/CropTrim.kt
+@@ -0,0 +1,51 @@
++package cloud.depup.office
++
++/**
++ * Pangkas sisi kotak dokumen yang ternyata BUKAN kertas (benda gelap, meja, tangan, ponsel di pinggir foto).
++ * Murni Kotlin, bekerja di gambar abu-abu kecil yang sudah "closed" (goresan teks hilang), jadi tulisan tangan
++ * tidak ikut menurunkan rata-rata terang. Dipanggil dari ScanAi.detectCrop.
++ *
++ * Ide: baris/kolom di tepi kotak yang rata-rata terangnya jauh di bawah kertas (median) dibuang sampai ketemu kertas.
++ * Bila harus membuang terlalu banyak (>35% satu sisi) berarti dokumennya memang gelap -> kotak dibiarkan.
++ */
++object CropTrim {
++    private const val DARK = 0.78f      // < 78% terang kertas = bukan kertas
++    private const val MAX_SIDE = 0.35f  // batas pangkas per sisi
++    private const val MIN_KEEP = 10
++
++    /** [box] = [l, t, r, b] inklusif (piksel gambar kecil). Mengembalikan kotak baru (atau [box] bila tak perlu). */
++    fun trimDark(g: IntArray, w: Int, h: Int, box: IntArray): IntArray {
++        var l = box[0]; var t = box[1]; var r = box[2]; var b = box[3]
++        if (r - l < 20 || b - t < 20 || g.size < w * h) return box
++
++        // --- baris (atas / bawah) ---
++        val bw = r - l + 1
++        val rows = FloatArray(h)
++        for (y in t..b) { var s = 0L; for (x in l..r) s += g[y * w + x]; rows[y] = s.toFloat() / bw }
++        val thrR = median(rows, t, b) * DARK
++        val maxR = ((b - t + 1) * MAX_SIDE).toInt()
++        var n = 0
++        while (t < b - MIN_KEEP && rows[t] < thrR) { t++; if (++n > maxR) return box }
++        n = 0
++        while (b > t + MIN_KEEP && rows[b] < thrR) { b--; if (++n > maxR) return box }
++
++        // --- kolom (kiri / kanan), dihitung ulang di baris yang tersisa ---
++        val bh = b - t + 1
++        val cols = FloatArray(w)
++        for (x in l..r) { var s = 0L; for (y in t..b) s += g[y * w + x]; cols[x] = s.toFloat() / bh }
++        val thrC = median(cols, l, r) * DARK
++        val maxC = ((r - l + 1) * MAX_SIDE).toInt()
++        n = 0
++        while (l < r - MIN_KEEP && cols[l] < thrC) { l++; if (++n > maxC) return box }
++        n = 0
++        while (r > l + MIN_KEEP && cols[r] < thrC) { r--; if (++n > maxC) return box }
++
++        return intArrayOf(l, t, r, b)
++    }
++
++    private fun median(a: FloatArray, from: Int, to: Int): Float {
++        val s = a.copyOfRange(from, to + 1)
++        s.sort()
++        return s[s.size / 2]
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/Ocr.kt b/app/src/main/java/cloud/depup/office/Ocr.kt
+index f2cd474..bd35a0a 100644
+--- a/app/src/main/java/cloud/depup/office/Ocr.kt
++++ b/app/src/main/java/cloud/depup/office/Ocr.kt
+@@ -30,7 +30,25 @@ class OcrPage(
+ object Ocr {
+     const val LOW_CONF = 0.6f
+ 
++    /**
++     * OCR pintar: baca apa adanya dulu. Kalau keyakinan rendah (biasanya tulisan tangan / kertas bergaris),
++     * ulangi pada salinan yang garis bukunya sudah dibuang & tintanya dipekatkan, lalu pakai yang lebih meyakinkan.
++     * Semua pemanggil lama (Export, ScanEditActivity, ViewerActivity) otomatis ikut lebih pintar.
++     */
+     fun run(bmp: Bitmap): OcrPage {
++        val first = runOnce(bmp, bmp)
++        if (first.conf >= LOW_CONF) return first
++        val cleaned = OcrPre.handwriting(bmp) ?: return first
++        try {
++            val second = try { runOnce(cleaned, bmp) } catch (_: Throwable) { return first }
++            val enough = second.text.length * 2 >= first.text.length      // jangan pilih hasil yang hampir kosong
++            return if (enough && second.conf > first.conf + 0.03f) second else first
++        } finally { cleaned.recycle() }
++    }
++
++    /** [img] = gambar yang dibaca ML Kit; [gridSrc] = gambar asli untuk mencari garis tabel (garis tidak boleh dibuang di sini). */
++    private fun runOnce(img: Bitmap, gridSrc: Bitmap): OcrPage {
++        val bmp = img
+         val rec = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+         try {
+             val res = Tasks.await(rec.process(InputImage.fromBitmap(bmp, 0)), 90, TimeUnit.SECONDS)
+@@ -45,16 +63,17 @@ object Ocr {
+                         val eb = e.boundingBox ?: continue
+                         if (e.text.isBlank()) continue
+                         confSum += e.confidence * e.text.length; confN += e.text.length
++                        if (isGarbage(e.text, e.confidence)) continue     // sampah OCR (mis. "8e8|po", ">8TL") tidak dimasukkan
+                         val syms = e.symbols.mapNotNull { s ->
+                             val sb = s.boundingBox ?: return@mapNotNull null
+                             LSym(s.text, LBox(sb.left, sb.top, sb.right, sb.bottom))
+                         }
+-                        words.add(LWord(e.text, LBox(eb.left, eb.top, eb.right, eb.bottom), syms, bi, li))
++                        words.add(LWord(fixNumeric(e.text), LBox(eb.left, eb.top, eb.right, eb.bottom), syms, bi, li))
+                     }
+                 }
+             }
+             val blocks = try {
+-                OcrLayout.build(words, detectGrids(bmp), bmp.width)
++                OcrLayout.build(words, detectGrids(gridSrc), bmp.width)
+             } catch (_: Throwable) {
+                 // Jaga-jaga: kalau tata letak gagal, tetap kembalikan paragraf polos dari ML Kit.
+                 res.textBlocks.mapNotNull { b ->
+@@ -70,6 +89,33 @@ object Ocr {
+         }
+     }
+ 
++    /** Kata berkeyakinan sangat rendah yang tidak mirip kata/angka. Konservatif: kata cukup yakin selalu lolos. */
++    private fun isGarbage(t: String, conf: Float): Boolean {
++        val alnum = t.count { it.isLetterOrDigit() }
++        if (alnum == 0) return t.length > 1 && conf < 0.5f              // deretan simbol saja
++        if (conf >= 0.5f) return false
++        if (conf < 0.25f) return true
++        // keyakinan 0.25..0.5: buang bila campuran simbol/huruf/angka yang tidak wajar atau tanpa vokal (kecuali angka)
++        val symbols = t.length - alnum
++        val hasDigit = t.any { it.isDigit() }
++        val hasLetter = t.any { it.isLetter() }
++        if (symbols * 2 > t.length) return true
++        if (hasDigit && hasLetter && t.length <= 6) return true
++        if (hasLetter && !hasDigit && t.length >= 4 && t.none { it.lowercaseChar() in "aiueo" }) return true
++        return false
++    }
++
++    private val DIGIT_LOOKALIKE = mapOf('O' to '0', 'o' to '0', 'l' to '1', 'I' to '1', '|' to '1', 'S' to '5', 'B' to '8', 'Z' to '2')
++
++    /** Token yang jelas angka (mis. "1O5", "l2") diperbaiki huruf-mirip-angkanya; kata biasa tidak disentuh. */
++    private fun fixNumeric(t: String): String {
++        if (t.none { it.isDigit() }) return t
++        if (t.any { !it.isDigit() && it !in DIGIT_LOOKALIKE && it.isLetter() }) return t
++        val letters = t.count { it in DIGIT_LOOKALIKE }
++        if (letters * 10 > t.length * 4) return t
++        return buildString { for (c in t) append(DIGIT_LOOKALIKE[c] ?: c) }
++    }
++
+     /** Cari garis tabel di gambar (skala diperkecil supaya cepat), kembalikan kisi dalam koordinat gambar asli. */
+     private fun detectGrids(bmp: Bitmap): List<Grid> {
+         val sc = if (bmp.width > 1000) 1000f / bmp.width else 1f
+diff --git a/app/src/main/java/cloud/depup/office/OcrPre.kt b/app/src/main/java/cloud/depup/office/OcrPre.kt
+new file mode 100644
+index 0000000..8150ad0
+--- /dev/null
++++ b/app/src/main/java/cloud/depup/office/OcrPre.kt
+@@ -0,0 +1,119 @@
++package cloud.depup.office
++
++import android.graphics.Bitmap
++import android.graphics.Color
++
++/**
++ * Pembersih gambar KHUSUS tulisan tangan di kertas bergaris, dipakai sebagai percobaan ke-2 OCR
++ * ketika keyakinan percobaan pertama rendah. Murni Kotlin, offline.
++ *
++ *  1. Peta terang kertas per sel (persentil 85) -> kertas rata walau ada bayangan.
++ *  2. Piksel tinta = jauh lebih gelap dari kertas sekitarnya.
++ *  3. Garis buku = deretan tinta horizontal panjang (toleran miring ±1 baris). Dibuang, KECUALI tempat goresan
++ *     huruf memotong garis (ada tinta di atas DAN di bawah pita garis) supaya huruf tidak putus.
++ *  4. Tinta dipekatkan, kertas diputihkan.
++ *
++ * Ukuran keluaran = ukuran masukan, jadi koordinat kotak OCR tetap cocok dengan gambar asli.
++ */
++object OcrPre {
++    private const val INK_RATIO = 0.84f      // tinta bila < 84% terang kertas lokal
++    private const val MIN_LINE_FRAC = 1f / 14f
++    private const val BAND_LOOK = 5          // jarak cek tinta di atas/bawah pita garis
++
++    fun handwriting(src: Bitmap): Bitmap? = try {
++        val w = src.width; val h = src.height
++        val lum = ByteArray(w * h)
++        val row = IntArray(w)
++        for (y in 0 until h) {
++            src.getPixels(row, 0, w, 0, y, w, 1)
++            for (x in 0 until w) {
++                val c = row[x]
++                lum[y * w + x] = ((Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000).toByte()
++            }
++        }
++        val out = clean(lum, w, h)
++        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
++        for (y in 0 until h) {
++            for (x in 0 until w) { val v = out[y * w + x].toInt() and 255; row[x] = Color.rgb(v, v, v) }
++            bmp.setPixels(row, 0, w, 0, y, w, 1)
++        }
++        bmp
++    } catch (_: Throwable) { null }   // termasuk OutOfMemoryError: percobaan ke-2 dilewati, hasil pertama dipakai
++
++    /** Murni array (bisa diuji di JVM). [lum] 0..255 sebagai byte tak bertanda. */
++    fun clean(lum: ByteArray, w: Int, h: Int): ByteArray {
++        fun L(i: Int) = lum[i].toInt() and 255
++
++        // 1) peta kertas
++        val cell = maxOf(12, w / 60)
++        val gw = (w + cell - 1) / cell; val gh = (h + cell - 1) / cell
++        val raw = FloatArray(gw * gh)
++        val hist = IntArray(256)
++        for (cy in 0 until gh) for (cx in 0 until gw) {
++            java.util.Arrays.fill(hist, 0)
++            var n = 0
++            for (y in cy * cell until minOf(h, (cy + 1) * cell)) for (x in cx * cell until minOf(w, (cx + 1) * cell)) { hist[L(y * w + x)]++; n++ }
++            var acc = 0; var p = 255
++            val target = (n * 0.15f).toInt()
++            for (v in 255 downTo 0) { acc += hist[v]; if (acc >= target) { p = v; break } }
++            raw[cy * gw + cx] = p.toFloat()
++        }
++        val paper = FloatArray(gw * gh)
++        for (cy in 0 until gh) for (cx in 0 until gw) {
++            var s = 0f; var c = 0
++            for (dy in -1..1) for (dx in -1..1) {
++                val xx = cx + dx; val yy = cy + dy
++                if (xx in 0 until gw && yy in 0 until gh) { s += raw[yy * gw + xx]; c++ }
++            }
++            paper[cy * gw + cx] = maxOf(60f, s / c)
++        }
++
++        // 2) tinta
++        val ink = BooleanArray(w * h)
++        for (y in 0 until h) for (x in 0 until w) {
++            val pp = paper[(y / cell) * gw + (x / cell)]
++            ink[y * w + x] = L(y * w + x) < pp * INK_RATIO
++        }
++
++        // 3) garis buku: run horizontal panjang pada tinta yang di-OR 3 baris (toleran miring)
++        val minRun = maxOf(40, (w * MIN_LINE_FRAC).toInt())
++        val line = BooleanArray(w * h)
++        for (y in 1 until h - 1) {
++            var x = 0
++            while (x < w) {
++                if (!(ink[y * w + x] || ink[(y - 1) * w + x] || ink[(y + 1) * w + x])) { x++; continue }
++                val s = x
++                var gap = 0
++                var e = x
++                while (e < w) {
++                    val on = ink[y * w + e] || ink[(y - 1) * w + e] || ink[(y + 1) * w + e]
++                    if (on) gap = 0 else { gap++; if (gap > 2) break }
++                    e++
++                }
++                val end = e - gap
++                if (end - s >= minRun) for (xx in s until end) if (ink[y * w + xx]) line[y * w + xx] = true
++                x = e + 1
++            }
++        }
++
++        // 4) keluaran
++        val out = ByteArray(w * h)
++        for (y in 0 until h) for (x in 0 until w) {
++            val i = y * w + x
++            var isInk = ink[i]
++            if (isInk && line[i]) {
++                // goresan huruf yang memotong garis: ada tinta non-garis di atas DAN di bawah pita
++                var up = false; var dn = false
++                var yy = y - 1
++                while (yy >= 0 && line[yy * w + x]) yy--
++                for (k in 0 until BAND_LOOK) { val q = yy - k; if (q >= 0 && ink[q * w + x] && !line[q * w + x]) { up = true; break } }
++                yy = y + 1
++                while (yy < h && line[yy * w + x]) yy++
++                for (k in 0 until BAND_LOOK) { val q = yy + k; if (q < h && ink[q * w + x] && !line[q * w + x]) { dn = true; break } }
++                if (!(up && dn)) isInk = false
++            }
++            out[i] = if (isInk) minOf(L(i), 80).toByte() else 255.toByte()
++        }
++        return out
++    }
++}
+diff --git a/app/src/main/java/cloud/depup/office/ScanAi.kt b/app/src/main/java/cloud/depup/office/ScanAi.kt
+index f833948..519c9aa 100644
+--- a/app/src/main/java/cloud/depup/office/ScanAi.kt
++++ b/app/src/main/java/cloud/depup/office/ScanAi.kt
+@@ -218,7 +218,9 @@ object ScanAi {
+         val w = s.w; val h = s.h
+         val closed = closeGray(s.g, w, h, 3)
+ 
+-        val box = growBox(closed, w, h) ?: otsuBox(s) ?: return null
++        val box0 = growBox(closed, w, h) ?: otsuBox(s) ?: return null
++        // Buang sisi yang ternyata benda gelap / meja / tangan (bukan kertas) sebelum menghitung luas & menajamkan tepi.
++        val box = CropTrim.trimDark(closed, w, h, box0)
+         val l = box[0]; val t = box[1]; val r = box[2]; val b = box[3]
+         val area = (r - l + 1).toFloat() * (b - t + 1) / (w * h)
+         if (area < 0.15f) return null          // terlalu kecil: kemungkinan bukan dokumen
