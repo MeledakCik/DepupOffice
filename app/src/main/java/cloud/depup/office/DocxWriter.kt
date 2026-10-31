@@ -95,6 +95,78 @@ class DocxWriter(
         body.append("</w:r></w:p>")
     }
 
+
+    private fun rPrXml(bold: Boolean, italic: Boolean, sup: Boolean, sub: Boolean): String = buildString {
+        if (fontFamily == 1) append("<w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\"/>")
+        if (bold) append("<w:b/>")
+        if (italic) append("<w:i/>")
+        append("<w:sz w:val=\"22\"/>")
+        if (sup) append("<w:vertAlign w:val=\"superscript\"/>")
+        if (sub) append("<w:vertAlign w:val=\"subscript\"/>")
+    }
+
+    private fun runsXml(runs: List<Run>): String {
+        val sb = StringBuilder()
+        for (r in runs) {
+            sb.append("<w:r><w:rPr>").append(rPrXml(false, false, r.sup, r.sub)).append("</w:rPr>")
+            appendRunText(sb, r.text)
+            sb.append("</w:r>")
+        }
+        return sb.toString()
+    }
+
+    /** Paragraf dengan pangkat (superscript) dan indeks (subscript) asli Word. */
+    fun runsParagraph(runs: List<Run>, align: Int = 0) {
+        val jc = when (align) { 1 -> "<w:jc w:val=\"center\"/>"; 2 -> "<w:jc w:val=\"right\"/>"; 3 -> "<w:jc w:val=\"both\"/>"; else -> "" }
+        body.append("<w:p><w:pPr><w:spacing w:after=\"120\" w:line=\"${(lineSpacing * 240).toInt()}\" w:lineRule=\"auto\"/>")
+            .append(jc).append("</w:pPr>").append(runsXml(runs)).append("</w:p>")
+    }
+
+    private fun textWidthDxa(): Int {
+        val pgW = when (pageSize) { "Letter" -> 12240; "F4" -> 11907; else -> 11906 }
+        val margin = when (marginMode) { 1 -> 680; 2 -> 2154; else -> 1417 }
+        return pgW - 2 * margin
+    }
+
+    /** Tabel Word sungguhan (gridSpan / vMerge untuk sel gabungan), lebar kolom mengikuti foto. */
+    fun table(t: Table) {
+        val total = (textWidthDxa() * t.widthFrac).toInt()
+        val sumW = t.colW.sum().coerceAtLeast(1)
+        val w = t.colW.map { (total.toLong() * it / sumW).toInt().coerceAtLeast(300) }
+        val bd = if (t.bordered) "<w:%s w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"000000\"/>" else "<w:%s w:val=\"nil\"/>"
+        val borders = listOf("top", "left", "bottom", "right", "insideH", "insideV").joinToString("") { bd.format(it) }
+        body.append("<w:tbl><w:tblPr><w:tblW w:w=\"${w.sum()}\" w:type=\"dxa\"/><w:tblBorders>").append(borders).append("</w:tblBorders>")
+            .append("<w:tblLayout w:type=\"fixed\"/><w:tblCellMar><w:top w:w=\"40\" w:type=\"dxa\"/><w:left w:w=\"80\" w:type=\"dxa\"/>")
+            .append("<w:bottom w:w=\"40\" w:type=\"dxa\"/><w:right w:w=\"80\" w:type=\"dxa\"/></w:tblCellMar></w:tblPr><w:tblGrid>")
+        w.forEach { body.append("<w:gridCol w:w=\"$it\"/>") }
+        body.append("</w:tblGrid>")
+        val grid = Array(t.rows) { arrayOfNulls<TCell>(t.cols) }
+        for (c in t.cells) for (r in c.r until minOf(t.rows, c.r + c.rs)) for (cc in c.c until minOf(t.cols, c.c + c.cs)) grid[r][cc] = c
+        for (r in 0 until t.rows) {
+            body.append("<w:tr><w:trPr><w:cantSplit/></w:trPr>")
+            var c = 0
+            while (c < t.cols) {
+                val cell = grid[r][c]
+                if (cell == null) { // kisi tidak lengkap: sel kosong
+                    body.append("<w:tc><w:tcPr><w:tcW w:w=\"${w[c]}\" w:type=\"dxa\"/></w:tcPr><w:p/></w:tc>"); c++; continue
+                }
+                val span = minOf(cell.cs, t.cols - cell.c)
+                val cw = (cell.c until cell.c + span).sumOf { w[it] }
+                body.append("<w:tc><w:tcPr><w:tcW w:w=\"$cw\" w:type=\"dxa\"/>")
+                if (span > 1) body.append("<w:gridSpan w:val=\"$span\"/>")
+                if (cell.rs > 1) body.append(if (cell.r == r) "<w:vMerge w:val=\"restart\"/>" else "<w:vMerge/>")
+                body.append("</w:tcPr>")
+                if (cell.r == r && cell.paras.isNotEmpty()) {
+                    for (p in cell.paras) body.append("<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr>").append(runsXml(p)).append("</w:p>")
+                } else body.append("<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr></w:p>")
+                body.append("</w:tc>")
+                c += span
+            }
+            body.append("</w:tr>")
+        }
+        body.append("</w:tbl><w:p><w:pPr><w:spacing w:after=\"60\"/></w:pPr></w:p>")
+    }
+
     fun note(text: String) {
         body.append("<w:p><w:pPr><w:spacing w:after=\"120\" w:line=\"${(lineSpacing * 240).toInt()}\" w:lineRule=\"auto\"/></w:pPr>")
             .append("<w:r><w:rPr><w:i/><w:color w:val=\"64748B\"/><w:sz w:val=\"20\"/></w:rPr>")

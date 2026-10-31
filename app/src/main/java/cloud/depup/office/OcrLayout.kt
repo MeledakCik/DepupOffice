@@ -1,0 +1,543 @@
+package cloud.depup.office
+
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+/*
+ * Mesin tata letak OCR (tanpa dependensi Android supaya mudah diuji).
+ * Tugasnya: mengubah kata+karakter berkoordinat dari ML Kit menjadi
+ *  - paragraf dengan run biasa / pangkat (superscript) / indeks (subscript)
+ *  - tabel sungguhan (berborder maupun tanpa border) lengkap dengan gabung sel
+ * Hasilnya dipakai untuk Word (.docx), salin ke clipboard (HTML + teks), dan tampilan teks OCR.
+ */
+
+class LBox(val l: Int, val t: Int, val r: Int, val b: Int) {
+    val w get() = r - l
+    val h get() = b - t
+    val cx get() = (l + r) / 2
+    val cy get() = (t + b) / 2
+}
+
+class LSym(val ch: String, val box: LBox)
+
+/** Satu kata hasil OCR. block/line = indeks blok & baris ML Kit (untuk menyusun paragraf). */
+class LWord(val text: String, val box: LBox, val syms: List<LSym>, val block: Int, val line: Int)
+
+class Run(val text: String, val sup: Boolean = false, val sub: Boolean = false)
+
+sealed class Block { abstract val top: Int }
+class Para(val runs: List<Run>, override val top: Int) : Block()
+class TCell(val r: Int, val c: Int, val rs: Int, val cs: Int, val paras: List<List<Run>>)
+class Table(
+    val rows: Int, val cols: Int, val cells: List<TCell>, val bordered: Boolean,
+    override val top: Int, val colW: List<Int>, val widthFrac: Float
+) : Block()
+
+/** Kisi tabel: batas kolom (xs) dan baris (ys) dalam piksel gambar. hasV/hasH = ada garis pemisah di batas dalam. */
+class Grid(
+    val xs: List<Int>, val ys: List<Int>, val bordered: Boolean,
+    val hasV: Array<BooleanArray>?, val hasH: Array<BooleanArray>?
+) {
+    val rows get() = ys.size - 1
+    val cols get() = xs.size - 1
+    val box = LBox(xs.first(), ys.first(), xs.last(), ys.last())
+    fun colOf(x: Int): Int = idx(xs, x)
+    fun rowOf(y: Int): Int = idx(ys, y)
+    private fun idx(a: List<Int>, v: Int): Int {
+        if (v < a.first() || v > a.last()) return -1
+        for (i in 0 until a.size - 1) if (v < a[i + 1]) return i
+        return a.size - 2
+    }
+}
+
+object OcrLayout {
+
+    // ------------------------------------------------------------------ pangkat / indeks
+
+    private const val SUP_FROM = "0123456789+-=()niabcdefghjklmoprstuvwxyz"
+    private const val SUP_TO = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱᵃᵇᶜᵈᵉᶠᵍʰʲᵏˡᵐᵒᵖʳˢᵗᵘᵛʷˣʸᶻ"
+    private const val SUB_FROM = "0123456789+-=()aehiklmnoprstux"
+    private const val SUB_TO = "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢₖₗₘₙₒₚᵣₛₜᵤₓ"
+
+    private val supMap: Map<Char, Char> = SUP_FROM.indices.associate { SUP_FROM[it] to SUP_TO[it] }
+    private val subMap: Map<Char, Char> = SUB_FROM.indices.associate { SUB_FROM[it] to SUB_TO[it] }
+    private val supRev: Map<Char, Char> = supMap.entries.associate { it.value to it.key }
+    private val subRev: Map<Char, Char> = subMap.entries.associate { it.value to it.key }
+
+    private fun isAlnum(s: String) = s.length == 1 && s[0].isLetterOrDigit()
+
+    /** Ubah satu baris (kumpulan kata) menjadi run; deteksi pangkat/indeks dari geometri karakter. */
+    fun runsFor(ws: List<LWord>): List<Run> {
+        class Tok(val ch: String, val box: LBox?, val space: Boolean)
+        val toks = ArrayList<Tok>()
+        for ((wi, w) in ws.withIndex()) {
+            val ok = w.syms.isNotEmpty() && w.syms.joinToString("") { it.ch } == w.text
+            if (ok) w.syms.forEachIndexed { i, s -> toks.add(Tok(s.ch, s.box, i == 0 && wi > 0)) }
+            else w.text.forEachIndexed { i, c -> toks.add(Tok(c.toString(), null, i == 0 && wi > 0)) }
+        }
+        if (toks.isEmpty()) return emptyList()
+
+        val mode = IntArray(toks.size) // 0 biasa, 1 sup, 2 sub
+        val heights = toks.filter { it.box != null && isAlnum(it.ch) }.map { it.box!!.h }.sorted()
+        if (heights.size >= 2) {
+            val refH = heights[((heights.size - 1) * 0.75f).toInt()].toFloat()
+            val tall = toks.filter { it.box != null && isAlnum(it.ch) && it.box.h >= 0.8f * refH }
+            val bottoms = (if (tall.isNotEmpty()) tall else toks.filter { it.box != null && isAlnum(it.ch) })
+                .map { it.box!!.b }.sorted()
+            val base = bottoms[bottoms.size / 2].toFloat()
+            // Lewat 1: huruf/angka/kurung yang kecil dan naik/turun dari garis dasar
+            for (i in 1 until toks.size) {
+                val t = toks[i]; val b = t.box ?: continue
+                val c = t.ch.singleOrNull() ?: continue
+                if (!(c.isLetterOrDigit() || c == '(' || c == ')')) continue
+                if (b.h >= 0.82f * refH) continue
+                if (b.b < base - 0.22f * refH && supMap.containsKey(c)) mode[i] = 1
+                else if (b.b > base + 0.18f * refH && subMap.containsKey(c)) mode[i] = 2
+            }
+            // Lewat 2: tanda + - = ikut naik hanya jika letaknya memang tinggi dan bertetangga dengan pangkat
+            for (i in 1 until toks.size) {
+                val t = toks[i]; val b = t.box ?: continue
+                if (t.ch != "+" && t.ch != "-" && t.ch != "=" && t.ch != "−") continue
+                val prevSup = i > 0 && mode[i - 1] == 1 && !t.space
+                val nextSup = i + 1 < toks.size && mode[i + 1] == 1 && !toks[i + 1].space
+                if ((prevSup || nextSup) && b.cy < base - 0.58f * refH) mode[i] = 1
+            }
+        }
+
+        val out = ArrayList<Run>()
+        var sb = StringBuilder(); var cur = 0
+        fun flush() { if (sb.isNotEmpty()) out.add(Run(sb.toString(), cur == 1, cur == 2)); sb = StringBuilder() }
+        for ((i, t) in toks.withIndex()) {
+            val m = mode[i]
+            if (t.space && sb.isNotEmpty() || (t.space && out.isNotEmpty())) {
+                val sm = if (i > 0 && mode[i - 1] == m) m else 0
+                if (sm != cur) { flush(); cur = sm }
+                sb.append(' ')
+            }
+            if (m != cur) { flush(); cur = m }
+            sb.append(t.ch)
+        }
+        flush()
+        return normalize(out)
+    }
+
+    /** Rapikan: ^2 / ^{n+1} -> pangkat, karakter ² ₃ unicode -> run pangkat/indeks asli, gabung run sejenis. */
+    fun normalize(runs: List<Run>): List<Run> {
+        val tmp = ArrayList<Run>()
+        val caret = Regex("\\^(\\{[^}]*\\}|[-+−]?[0-9A-Za-z]+)")
+        for (r in runs) {
+            if (r.sup || r.sub) { tmp.add(r); continue }
+            var last = 0
+            for (m in caret.findAll(r.text)) {
+                if (m.range.first > last) tmp.add(Run(r.text.substring(last, m.range.first)))
+                tmp.add(Run(m.groupValues[1].removePrefix("{").removeSuffix("}"), sup = true))
+                last = m.range.last + 1
+            }
+            if (last < r.text.length) tmp.add(Run(r.text.substring(last)))
+        }
+        val out = ArrayList<Run>()
+        fun add(text: String, sup: Boolean, sub: Boolean) {
+            if (text.isEmpty()) return
+            val l = out.lastOrNull()
+            if (l != null && l.sup == sup && l.sub == sub) out[out.size - 1] = Run(l.text + text, sup, sub)
+            else out.add(Run(text, sup, sub))
+        }
+        for (r in tmp) {
+            if (r.sup || r.sub) { add(r.text, r.sup, r.sub); continue }
+            for (c in r.text) {
+                when {
+                    supRev.containsKey(c) -> add(supRev[c].toString(), true, false)
+                    subRev.containsKey(c) -> add(subRev[c].toString(), false, true)
+                    else -> add(c.toString(), false, false)
+                }
+            }
+        }
+        return out
+    }
+
+    /** Teks polos yang tetap mirip saat disalin: ² ₃ bila tersedia, kalau tidak ^(..) / _(..). */
+    fun plain(runs: List<Run>): String {
+        val sb = StringBuilder()
+        for (r in runs) {
+            if (!r.sup && !r.sub) { sb.append(r.text); continue }
+            val map = if (r.sup) supMap else subMap
+            if (r.text.all { map.containsKey(it) }) r.text.forEach { sb.append(map[it]) }
+            else { sb.append(if (r.sup) "^" else "_"); sb.append(if (r.text.length > 1) "(${r.text})" else r.text) }
+        }
+        return sb.toString()
+    }
+
+    // ------------------------------------------------------------------ deteksi tabel berborder (garis)
+
+    private class LineSeg(var ymin: Int, var ymax: Int, var a: Int, var b: Int) {
+        val pos get() = (ymin + ymax) / 2
+    }
+
+    private fun findLines(dark: BooleanArray, w: Int, h: Int, horizontal: Boolean, minLen: Int, maxThick: Int): List<LineSeg> {
+        val n1 = if (horizontal) h else w
+        val n2 = if (horizontal) w else h
+        val done = ArrayList<LineSeg>()
+        var active = ArrayList<LineSeg>()
+        for (i in 0 until n1) {
+            val still = ArrayList<LineSeg>()
+            var j = 0
+            while (j < n2) {
+                val d = if (horizontal) dark[i * w + j] else dark[j * w + i]
+                if (!d) { j++; continue }
+                val s = j; var e = j; var gap = 0
+                j++
+                while (j < n2) {
+                    val dd = if (horizontal) dark[i * w + j] else dark[j * w + i]
+                    if (dd) { e = j; gap = 0 } else { gap++; if (gap > 2) break }
+                    j++
+                }
+                if (e - s + 1 < minLen) continue
+                var hit: LineSeg? = null
+                for (ls in active) {
+                    if (i - ls.ymax > 2) continue
+                    val ov = min(ls.b, e) - max(ls.a, s)
+                    if (ov >= 0.6f * min(ls.b - ls.a, e - s)) { hit = ls; break }
+                }
+                if (hit != null) { hit.ymax = i; hit.a = min(hit.a, s); hit.b = max(hit.b, e); still.add(hit) }
+                else still.add(LineSeg(i, i, s, e))
+            }
+            for (ls in active) if (i - ls.ymax > 2) done.add(ls) else if (!still.contains(ls)) still.add(ls)
+            active = still
+        }
+        done.addAll(active)
+        return done.filter { it.ymax - it.ymin + 1 <= maxThick }
+    }
+
+    /** lum = luminans 0..255 ukuran w*h. Hasil memakai koordinat yang sama dikali [scale]. */
+    fun detectGrids(lum: IntArray, w: Int, h: Int, scale: Float): List<Grid> {
+        if (w < 50 || h < 50) return emptyList()
+        var sum = 0L
+        for (v in lum) sum += v
+        val thr = ((sum.toDouble() / lum.size) * 0.72).toInt()
+        val dark = BooleanArray(lum.size) { lum[it] < thr }
+
+        val hs = findLines(dark, w, h, true, max(40, (w * 0.08f).toInt()), max(6, (h * 0.012f).toInt()))
+        val vs = findLines(dark, w, h, false, max(30, (h * 0.03f).toInt()), max(6, (w * 0.012f).toInt()))
+        if (hs.size < 2 || vs.size < 2) return emptyList()
+
+        val tol = max(4, (min(w, h) * 0.006f).toInt())
+        val n = hs.size + vs.size
+        val par = IntArray(n) { it }
+        fun find(x: Int): Int { var a = x; while (par[a] != a) { par[a] = par[par[a]]; a = par[a] }; return a }
+        for (i in hs.indices) for (j in vs.indices) {
+            val a = hs[i]; val b = vs[j]
+            if (b.pos >= a.a - tol && b.pos <= a.b + tol && a.pos >= b.a - tol && a.pos <= b.b + tol)
+                par[find(i)] = find(hs.size + j)
+        }
+        val groups = HashMap<Int, ArrayList<Int>>()
+        for (i in 0 until n) groups.getOrPut(find(i)) { ArrayList() }.add(i)
+
+        val out = ArrayList<Grid>()
+        for (g in groups.values) {
+            val gh = g.filter { it < hs.size }.map { hs[it] }
+            val gv = g.filter { it >= hs.size }.map { vs[it - hs.size] }
+            if (gh.size < 2 || gv.size < 2) continue
+            val xs = cluster(gv.map { it.pos }, tol * 2)
+            val ys = cluster(gh.map { it.pos }, tol * 2)
+            if (xs.size < 2 || ys.size < 2 || (xs.size - 1) * (ys.size - 1) < 2) continue
+            val cols = xs.size - 1; val rows = ys.size - 1
+
+            val hasV = Array(rows) { r ->
+                BooleanArray(xs.size) { i ->
+                    if (i == 0 || i == cols) true else {
+                        var cover = 0
+                        for (v in gv) if (abs(v.pos - xs[i]) <= tol * 2)
+                            cover += max(0, min(v.b, ys[r + 1]) - max(v.a, ys[r]))
+                        cover >= 0.5f * (ys[r + 1] - ys[r])
+                    }
+                }
+            }
+            val hasH = Array(ys.size) { j ->
+                BooleanArray(cols) { c ->
+                    if (j == 0 || j == rows) true else {
+                        var cover = 0
+                        for (l in gh) if (abs(l.pos - ys[j]) <= tol * 2)
+                            cover += max(0, min(l.b, xs[c + 1]) - max(l.a, xs[c]))
+                        cover >= 0.5f * (xs[c + 1] - xs[c])
+                    }
+                }
+            }
+            val sc = { v: Int -> (v * scale).toInt() }
+            out.add(Grid(xs.map(sc), ys.map(sc), true, hasV, hasH))
+        }
+        return out.sortedBy { it.box.t }
+    }
+
+    private fun cluster(v: List<Int>, tol: Int): List<Int> {
+        val s = v.sorted(); val out = ArrayList<Int>()
+        var acc = ArrayList<Int>()
+        for (x in s) {
+            if (acc.isNotEmpty() && x - acc.last() > tol) { out.add(acc.sum() / acc.size); acc = ArrayList() }
+            acc.add(x)
+        }
+        if (acc.isNotEmpty()) out.add(acc.sum() / acc.size)
+        return out
+    }
+
+    // ------------------------------------------------------------------ deteksi tabel tanpa border (perataan teks)
+
+    /** Kelompokkan kata menjadi baris visual berdasar tumpang-tindih vertikal. */
+    fun clusterRows(words: List<LWord>): List<List<LWord>> {
+        val sorted = words.sortedBy { it.box.cy }
+        val rows = ArrayList<ArrayList<LWord>>()
+        val bounds = ArrayList<IntArray>() // top, bottom
+        for (w in sorted) {
+            var placed = false
+            if (rows.isNotEmpty()) {
+                val bd = bounds.last()
+                val ov = min(w.box.b, bd[1]) - max(w.box.t, bd[0])
+                if (ov >= 0.5f * min(w.box.h, bd[1] - bd[0])) {
+                    rows.last().add(w); bd[0] = min(bd[0], w.box.t); bd[1] = max(bd[1], w.box.b); placed = true
+                }
+            }
+            if (!placed) { rows.add(arrayListOf(w)); bounds.add(intArrayOf(w.box.t, w.box.b)) }
+        }
+        return rows.map { r -> r.sortedBy { it.box.l } }
+    }
+
+    private fun medianH(ws: List<LWord>): Int {
+        val h = ws.map { it.box.h }.sorted()
+        return if (h.isEmpty()) 10 else h[h.size / 2]
+    }
+
+    private fun segments(row: List<LWord>): List<List<LWord>> {
+        val thr = medianH(row) * 1.1f
+        val segs = ArrayList<ArrayList<LWord>>()
+        for (w in row) {
+            if (segs.isNotEmpty() && w.box.l - segs.last().last().box.r <= thr) segs.last().add(w)
+            else segs.add(arrayListOf(w))
+        }
+        return segs
+    }
+
+    fun detectLoose(words: List<LWord>): List<Grid> {
+        if (words.size < 6) return emptyList()
+        val rows = clusterRows(words)
+        val out = ArrayList<Grid>()
+        var i = 0
+        while (i < rows.size) {
+            if (segments(rows[i]).size < 2) { i++; continue }
+            // kumpulkan baris berurutan yang berbentuk kolom
+            var j = i
+            val grp = arrayListOf(rows[i])
+            while (j + 1 < rows.size) {
+                val prev = grp.last(); val nxt = rows[j + 1]
+                val mh = medianH(prev)
+                val gap = nxt.minOf { it.box.t } - prev.maxOf { it.box.b }
+                if (gap > 1.8f * mh) break
+                if (segments(nxt).size >= 2) { grp.add(nxt); j++; continue }
+                // baris 1 segmen: ikut hanya bila diapit baris kolom & sejajar salah satu kolom
+                val lefts = grp.flatMap { segments(it).map { s -> s.first().box.l } }
+                val k = j + 2
+                val sl = nxt.first().box.l
+                if (k < rows.size && segments(rows[k]).size >= 2 && lefts.any { abs(it - sl) <= mh }) { grp.add(nxt); j++ } else break
+            }
+            val ok = if (grp.size >= 2) buildLoose(grp) else null
+            if (ok != null) out.add(ok)
+            i = if (ok != null) j + 1 else i + 1
+        }
+        return out
+    }
+
+    private fun buildLoose(grp: List<List<LWord>>): Grid? {
+        val mh = medianH(grp.flatten())
+        val allSegs = grp.flatMap { segments(it) }
+        val tabular = grp.count { segments(it).size >= 2 }
+        if (tabular < 2) return null
+        val avgChars = allSegs.map { s -> s.sumOf { it.text.length } + s.size - 1 }.average()
+        if (avgChars > 45) return null
+        val iv = allSegs.map { intArrayOf(it.first().box.l, it.last().box.r) }.sortedBy { it[0] }
+        val bands = ArrayList<IntArray>()
+        for (s in iv) {
+            if (bands.isNotEmpty() && s[0] <= bands.last()[1] + 0.8f * mh) bands.last()[1] = max(bands.last()[1], s[1])
+            else bands.add(intArrayOf(s[0], s[1]))
+        }
+        if (bands.size < 2) return null
+        val multi = grp.count { r -> segments(r).map { s -> bands.indexOfFirst { s.first().box.l >= it[0] - 2 && s.first().box.l <= it[1] + 2 } }.toSet().size >= 2 }
+        if (multi < max(2.0, grp.size * 0.6)) return null
+        if (grp.size < 3 && bands.size < 3) return null
+
+        val pad = max(2, mh / 3)
+        val xs = ArrayList<Int>()
+        xs.add(bands.first()[0] - pad)
+        for (k in 0 until bands.size - 1) xs.add((bands[k][1] + bands[k + 1][0]) / 2)
+        xs.add(bands.last()[1] + pad)
+        val ys = ArrayList<Int>()
+        ys.add(grp.first().minOf { it.box.t } - 2)
+        for (k in 0 until grp.size - 1) ys.add((grp[k].maxOf { it.box.b } + grp[k + 1].minOf { it.box.t }) / 2)
+        ys.add(grp.last().maxOf { it.box.b } + 2)
+        return Grid(xs, ys, false, null, null)
+    }
+
+    // ------------------------------------------------------------------ rakit blok dokumen
+
+    private val listStart = Regex("^(\\d+[.)]|[A-Za-z][.)]|[-•*–]|\\(\\w{1,3}\\))(\\s|$)")
+
+    fun build(words: List<LWord>, grids0: List<Grid>, pageW: Int): List<Block> {
+        val used = BooleanArray(words.size)
+        val tables = ArrayList<Block>()
+
+        fun takeInto(g: Grid): List<Pair<Int, LWord>> {
+            val res = ArrayList<Pair<Int, LWord>>()
+            val tolx = 2; val toly = 2
+            for ((i, w) in words.withIndex()) {
+                if (used[i]) continue
+                val cx = w.box.cx; val cy = w.box.cy
+                if (cx < g.box.l - tolx || cx > g.box.r + tolx || cy < g.box.t - toly || cy > g.box.b + toly) continue
+                used[i] = true
+                res.add(i to w)
+            }
+            return res
+        }
+
+        fun tableFrom(g: Grid, ws: List<LWord>): Table? {
+            val rows = g.rows; val cols = g.cols
+            val owner = IntArray(rows * cols) { -1 }
+            val spans = HashMap<Int, IntArray>()
+            for (r in 0 until rows) for (c in 0 until cols) {
+                if (owner[r * cols + c] != -1) continue
+                var cs = 1
+                if (g.hasV != null) while (c + cs < cols && !g.hasV[r][c + cs]) cs++
+                var rs = 1
+                if (g.hasH != null) {
+                    var stop = false
+                    while (!stop && r + rs < rows) {
+                        for (cc in c until c + cs) if (g.hasH[r + rs][cc] || owner[(r + rs) * cols + cc] != -1) { stop = true; break }
+                        if (!stop) rs++
+                    }
+                }
+                for (rr in r until r + rs) for (cc in c until c + cs) owner[rr * cols + cc] = r * cols + c
+                spans[r * cols + c] = intArrayOf(rs, cs)
+            }
+            val per = HashMap<Int, ArrayList<LWord>>()
+            for (w in ws) {
+                val r = g.rowOf(w.box.cy).coerceIn(0, rows - 1)
+                val c = g.colOf(w.box.cx).coerceIn(0, cols - 1)
+                per.getOrPut(owner[r * cols + c]) { ArrayList() }.add(w)
+            }
+            val cells = ArrayList<TCell>()
+            for ((key, sp) in spans) {
+                val lines = clusterRows(per[key] ?: emptyList())
+                val paras = lines.map { runsFor(it) }.filter { it.isNotEmpty() }
+                cells.add(TCell(key / cols, key % cols, sp[0], sp[1], paras))
+            }
+            cells.sortWith(compareBy({ it.r }, { it.c }))
+            if (cells.all { it.paras.isEmpty() }) return null
+            val colW = (0 until cols).map { g.xs[it + 1] - g.xs[it] }
+            val frac = if (pageW > 0) ((g.box.r - g.box.l).toFloat() / pageW).coerceIn(0.25f, 1f) else 1f
+            return Table(rows, cols, cells, g.bordered, g.box.t, colW, frac)
+        }
+
+        for (g in grids0) {
+            val got = takeInto(g)
+            tableFrom(g, got.map { it.second })?.let { tables.add(it) }
+        }
+        val rest0 = words.indices.filter { !used[it] }.map { words[it] }
+        for (g in detectLoose(rest0)) {
+            val got = takeInto(g)
+            tableFrom(g, got.map { it.second })?.let { tables.add(it) }
+        }
+
+        // paragraf dari kata yang tersisa, mengikuti blok & baris ML Kit
+        val paras = ArrayList<Block>()
+        val rest = words.indices.filter { !used[it] }.map { words[it] }
+        val byBlock = LinkedHashMap<Int, ArrayList<LWord>>()
+        for (w in rest) byBlock.getOrPut(w.block) { ArrayList() }.add(w)
+        for ((_, bw) in byBlock) {
+            val lines = LinkedHashMap<Int, ArrayList<LWord>>()
+            for (w in bw) lines.getOrPut(w.line) { ArrayList() }.add(w)
+            val ls = lines.values.map { l -> l.sortedBy { it.box.l } }
+            val blockRight = ls.maxOf { l -> l.maxOf { it.box.r } }
+            var curRuns = ArrayList<Run>(); var curTop = Int.MAX_VALUE
+            fun flushPara() {
+                if (curRuns.isNotEmpty()) paras.add(Para(normalize(curRuns), curTop))
+                curRuns = ArrayList(); curTop = Int.MAX_VALUE
+            }
+            for ((k, l) in ls.withIndex()) {
+                val runs = runsFor(l)
+                if (runs.isEmpty()) continue
+                val txt = plain(runs)
+                val startsList = listStart.containsMatchIn(txt)
+                if (curRuns.isNotEmpty() && startsList) flushPara()
+                if (curRuns.isNotEmpty()) curRuns.add(Run(" "))
+                curRuns.addAll(runs)
+                curTop = min(curTop, l.minOf { it.box.t })
+                val h = medianH(l)
+                val reachesEdge = l.maxOf { it.box.r } >= blockRight - 2.5f * h
+                val hasMath = txt.contains('=') || txt.contains('√') || runs.any { it.sup || it.sub }
+                if (k < ls.size - 1 && (!reachesEdge || hasMath)) flushPara()
+            }
+            flushPara()
+        }
+
+        val all = ArrayList<Block>()
+        all.addAll(paras); all.addAll(tables)
+        return all.sortedBy { it.top }
+    }
+
+    // ------------------------------------------------------------------ keluaran teks / HTML
+
+    private fun cellGrid(t: Table): Array<Array<TCell?>> {
+        val g = Array(t.rows) { arrayOfNulls<TCell>(t.cols) }
+        for (c in t.cells) for (r in c.r until min(t.rows, c.r + c.rs)) for (cc in c.c until min(t.cols, c.c + c.cs)) g[r][cc] = c
+        return g
+    }
+
+    fun toText(blocks: List<Block>): String {
+        val sb = StringBuilder()
+        for (b in blocks) {
+            if (sb.isNotEmpty()) sb.append('\n')
+            when (b) {
+                is Para -> sb.append(plain(b.runs).trim())
+                is Table -> {
+                    val g = cellGrid(b)
+                    for (r in 0 until b.rows) {
+                        val line = (0 until b.cols).joinToString("\t") { c ->
+                            val cell = g[r][c]
+                            if (cell != null && cell.r == r && cell.c == c) cell.paras.joinToString(" ") { plain(it) } else ""
+                        }
+                        sb.append(line)
+                        if (r < b.rows - 1) sb.append('\n')
+                    }
+                }
+            }
+        }
+        return sb.toString().trim()
+    }
+
+    private fun htmlEsc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    fun runsHtml(runs: List<Run>): String = runs.joinToString("") {
+        val t = htmlEsc(it.text)
+        if (it.sup) "<sup>$t</sup>" else if (it.sub) "<sub>$t</sub>" else t
+    }
+
+    fun toHtml(blocks: List<Block>): String {
+        val sb = StringBuilder()
+        for (b in blocks) when (b) {
+            is Para -> sb.append("<p>").append(runsHtml(b.runs)).append("</p>")
+            is Table -> {
+                val bd = if (b.bordered) "1px solid #000" else "none"
+                sb.append("<table style=\"border-collapse:collapse\">")
+                for (r in 0 until b.rows) {
+                    sb.append("<tr>")
+                    for (c in b.cells.filter { it.r == r }) {
+                        sb.append("<td style=\"border:$bd;padding:3px 6px;vertical-align:top\"")
+                        if (c.cs > 1) sb.append(" colspan=\"${c.cs}\"")
+                        if (c.rs > 1) sb.append(" rowspan=\"${c.rs}\"")
+                        sb.append(">").append(c.paras.joinToString("<br>") { runsHtml(it) }).append("</td>")
+                    }
+                    sb.append("</tr>")
+                }
+                sb.append("</table><p></p>")
+            }
+        }
+        return sb.toString()
+    }
+}

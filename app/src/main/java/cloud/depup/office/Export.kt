@@ -146,8 +146,11 @@ object Export {
                 } else {
                     val bmp = process(ctx, pg, mode, 2000, bright, contrast)
                     val res = try { Ocr.run(bmp) } finally { bmp.recycle() }
-                    if (res.paras.isEmpty()) d.note("(Tidak ada teks terdeteksi di halaman ${i + 1})")
-                    else res.paras.forEach { d.paragraph(it) }
+                    if (res.blocks.isEmpty()) d.note("(Tidak ada teks terdeteksi di halaman ${i + 1})")
+                    else for (b in res.blocks) when (b) {
+                        is Para -> d.runsParagraph(b.runs)
+                        is Table -> d.table(b)
+                    }
                 }
             }
             d.finish()

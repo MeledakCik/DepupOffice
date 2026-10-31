@@ -945,7 +945,7 @@ class ScanEditActivity : AppCompatActivity() {
     }
 
     private fun showOcr(res: OcrPage) = sheet { body, dismiss ->
-        sheetHeader(body, R.drawable.ic_note, C.ACCENT, C.BLUE_BG, "Teks Hasil OCR Dokumen", "Halaman ${cur + 1} · ${res.paras.size} paragraf terdeteksi", dismiss)
+        sheetHeader(body, R.drawable.ic_note, C.ACCENT, C.BLUE_BG, "Teks Hasil OCR Dokumen", "Halaman ${cur + 1} · ${res.paras.size} paragraf, ${res.blocks.count { it is Table }} tabel terdeteksi", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
         if (res.text.isBlank()) {
             pad.add(tv("Tidak ada teks yang terbaca. Coba gunakan filter Magic Color atau B&W Dokumen, dan pastikan pencahayaan foto tajam.", 13f, C.MUTED))
@@ -1022,8 +1022,12 @@ class ScanEditActivity : AppCompatActivity() {
 
             row2.add(btn("Salin Teks", true, C.ACCENT, R.drawable.ic_check) {
                 val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("OCR", t.text.toString()))
-                toast("Teks disalin ke clipboard")
+                // HTML + teks: Word/Google Docs menempel dengan pangkat, indeks, dan tabel asli; aplikasi lain dapat teks (tabel = TAB).
+                val clip = if (res.html.isNotBlank())
+                    android.content.ClipData.newHtmlText("OCR", t.text.toString(), res.html)
+                else android.content.ClipData.newPlainText("OCR", t.text.toString())
+                cm.setPrimaryClip(clip)
+                toast("Disalin — tempel ke Word untuk tabel & pangkat sesuai aslinya")
             }, w = 0, weight = 1f, side = 6)
             expGrid.add(row2, top = 8)
 
