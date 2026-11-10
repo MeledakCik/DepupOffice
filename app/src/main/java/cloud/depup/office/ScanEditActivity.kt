@@ -424,13 +424,15 @@ class ScanEditActivity : AppCompatActivity() {
     private lateinit var segFilter: TextView
     private val filterCards = mutableListOf<LinearLayout>()
     private val checks = mutableListOf<View>()
-    private val previews = LruCache<String, Bitmap>(4)
+    private val previews = LruCache<String, Bitmap>(Perf.previewSlots())
+    private val trimPreviews: () -> Unit = { runOnUiThread { previews.evictAll() } }
     private var onPic: ((Boolean) -> Unit)? = null
 
     private val takePic = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok -> onPic?.invoke(ok) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Perf.onTrim(trimPreviews)
         intent.getStringArrayListExtra("files")?.forEach { pages.add(ScanPage(File(it))) }
         if (pages.isEmpty()) { finish(); return }
         mode = intent.getIntExtra("mode", 3)
@@ -728,6 +730,11 @@ class ScanEditActivity : AppCompatActivity() {
     }
 
     private fun applyFilter() = cv.setFilter(mode, bright, contrast)
+
+    override fun onDestroy() {
+        Perf.removeTrim(trimPreviews)
+        super.onDestroy()
+    }
 
     private fun preview(pg: ScanPage): Bitmap? {
         val key = pg.file.absolutePath

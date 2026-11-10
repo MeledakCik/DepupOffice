@@ -98,7 +98,7 @@ object Export {
      * Dimensi dekode untuk OCR. Foto didekode dulu baru dipotong, jadi kalau halaman hanya sebagian kecil foto,
      * resolusinya jatuh. Di sini dimensi dinaikkan supaya area potongan tetap ±2400 px (maks 3600 demi memori).
      */
-    fun ocrDim(pg: ScanPage, base: Int = 2400, cap: Int = 3600): Int {
+    fun ocrDim(pg: ScanPage, base: Int = 2400, cap: Int = Perf.ocrCap()): Int {
         val f = max(pg.crop.right - pg.crop.left, pg.crop.bottom - pg.crop.top).coerceIn(0.2f, 1f)
         return min(cap, (base / f).toInt()).coerceAtLeast(base)
     }

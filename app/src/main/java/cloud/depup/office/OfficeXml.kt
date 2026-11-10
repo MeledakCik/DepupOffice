@@ -1,6 +1,10 @@
 package cloud.depup.office
 
 import java.io.ByteArrayInputStream
+import java.io.Closeable
+import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 /**
@@ -150,18 +154,51 @@ object XmlDom {
     }
 }
 
-/** Paket OOXML: isi zip + hubungan (rels) antar-bagian. */
-class OPackage(bytes: ByteArray) {
-    val files = HashMap<String, ByteArray>()
-    init {
-        ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
-            var e = z.nextEntry
-            while (e != null) {
-                if (!e.isDirectory) files[e.name.trimStart('/')] = z.readBytes()
-                e = z.nextEntry
+/**
+ * Paket OOXML: isi zip + hubungan (rels) antar-bagian.
+ *
+ * Dari [File] (jalur cepat untuk berkas besar): zip dibaca acak lewat [ZipFile] dan tiap bagian baru didekompresi
+ * saat diminta — gambar/media yang tidak dipakai tidak pernah dimuat ke RAM. Dari [ByteArray]: semua bagian
+ * diekstrak di awal (dipakai bila sumbernya bukan berkas lokal atau zip-nya tidak lazim).
+ */
+class OPackage private constructor(private val zip: ZipFile?, private val eager: Map<String, ByteArray>) : Closeable {
+    constructor(bytes: ByteArray) : this(null, unzipAll(bytes))
+    constructor(file: File) : this(ZipFile(file), emptyMap())
+
+    private val entries: Map<String, ZipEntry> = zip?.let { z ->
+        val m = HashMap<String, ZipEntry>()
+        for (e in z.entries()) if (!e.isDirectory) m[e.name.trimStart('/')] = e
+        m
+    } ?: emptyMap()
+
+    /** Akses isi bagian: `files["word/media/image1.png"]`. Didekompresi saat diminta (mode berkas). */
+    val files = Parts()
+
+    inner class Parts {
+        operator fun get(p: String): ByteArray? {
+            if (zip == null) return eager[p]
+            val e = entries[p] ?: return null
+            return try { zip.getInputStream(e).use { it.readBytes() } } catch (_: Exception) { null }
+        }
+        fun containsKey(p: String) = if (zip == null) eager.containsKey(p) else entries.containsKey(p)
+    }
+
+    override fun close() { try { zip?.close() } catch (_: Exception) {} }
+
+    private companion object {
+        fun unzipAll(bytes: ByteArray): Map<String, ByteArray> {
+            val files = HashMap<String, ByteArray>()
+            ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
+                var e = z.nextEntry
+                while (e != null) {
+                    if (!e.isDirectory) files[e.name.trimStart('/')] = z.readBytes()
+                    e = z.nextEntry
+                }
             }
+            return files
         }
     }
+
     private val domCache = HashMap<String, XNode?>()
     fun has(p: String) = files.containsKey(p)
     fun xml(p: String): XNode? = domCache.getOrPut(p) { files[p]?.let { try { XmlDom.parse(it) } catch (_: Throwable) { null } } }

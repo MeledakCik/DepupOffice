@@ -112,6 +112,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(mainView, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(root)
         select(tab)
+        freshlyBuilt = true
 
         if (savedInstanceState == null) {
             val splash = buildSplash()
@@ -148,8 +149,12 @@ class MainActivity : AppCompatActivity() {
         return splash
     }
 
+    /** Layar baru saja dibangun di onCreate -> onResume pertama tidak perlu membangun ulang semuanya. */
+    private var freshlyBuilt = false
+
     override fun onResume() {
         super.onResume()
+        if (freshlyBuilt) { freshlyBuilt = false; return }
         if (::content.isInitialized) render()
     }
 
@@ -779,7 +784,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         search.addTextChangedListener(object : TextWatcher {
-            override fun afterTextChanged(s: Editable?) { query = s?.toString().orEmpty(); refresh() }
+            // Tunda sebentar agar daftar tidak dibangun ulang di setiap ketukan huruf (berat di HP kelas bawah).
+            private val run = Runnable { refresh() }
+            override fun afterTextChanged(s: Editable?) {
+                query = s?.toString().orEmpty()
+                listBox.removeCallbacks(run)
+                listBox.postDelayed(run, if (Perf.low) 280L else 180L)
+            }
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
         })

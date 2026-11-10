@@ -14,6 +14,11 @@ import java.util.zip.ZipInputStream
  * Dipakai untuk pratinjau di Viewer dan untuk membuka berkas di editor.
  */
 object OfficeReader {
+    /** Batas data yang dimuat untuk pratinjau/editor (UI hanya menampilkan ratusan baris pertama). */
+    private const val CSV_MAX_CHARS = 4 * 1024 * 1024
+    private const val SHEET_MAX_ROWS = 1000
+    private const val SHEET_MAX_COLS = 256
+
 
     class Paragraph(
         val text: String,
@@ -208,6 +213,8 @@ object OfficeReader {
                         "row" -> {
                             row = p.getAttributeValue(null, "r")?.toIntOrNull()?.minus(1) ?: (row + 1)
                             col = -1
+                            // Baris sudah lebih dari yang bisa ditampilkan: hentikan, sisa lembar kerja tak perlu diurai.
+                            if (row >= SHEET_MAX_ROWS) break
                         }
                         "c" -> {
                             cellType = p.getAttributeValue(null, "t").orEmpty()
@@ -225,7 +232,7 @@ object OfficeReader {
                         "t" -> if (inInline) inValue = false
                         "is" -> inInline = false
                         "c" -> {
-                            if (row >= 0 && col >= 0) {
+                            if (row in 0 until SHEET_MAX_ROWS && col in 0 until SHEET_MAX_COLS) {
                                 var text = value.toString()
                                 if (cellType == "s") {
                                     text = shared.getOrNull(text.trim().toIntOrNull() ?: -1).orEmpty()
@@ -270,7 +277,17 @@ object OfficeReader {
 
     fun readCsv(ctx: Context, uri: Uri): Sheet {
         val text = try {
-            ctx.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }.orEmpty()
+            // Hanya ±4 MB pertama: pembaca & editor menampilkan maksimal ratusan baris, jadi CSV ratusan MB
+            // tidak perlu (dan tidak boleh — bisa kehabisan memori) dimuat seluruhnya.
+            ctx.contentResolver.openInputStream(uri)?.use { ins ->
+                val r = ins.bufferedReader()
+                val buf = CharArray(CSV_MAX_CHARS)
+                var n = 0
+                while (n < buf.size) { val k = r.read(buf, n, buf.size - n); if (k < 0) break; n += k }
+                val full = n < buf.size || r.read() < 0
+                val t = String(buf, 0, n)
+                if (full) t else t.substring(0, (t.lastIndexOf('\n') + 1).takeIf { it > 0 } ?: t.length)
+            }.orEmpty()
         } catch (_: Exception) {
             ""
         }
@@ -290,7 +307,7 @@ object OfficeReader {
         val cell = StringBuilder()
         var quoted = false
         var i = 0
-        while (i < text.length) {
+        while (i < text.length && rows.size <= 500) {
             val c = text[i]
             when {
                 quoted && c == '"' && i + 1 < text.length && text[i + 1] == '"' -> {

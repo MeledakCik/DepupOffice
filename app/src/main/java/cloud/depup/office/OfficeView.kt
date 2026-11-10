@@ -49,6 +49,20 @@ object OfficeView {
 
     /** Dijalankan di thread latar. */
     fun render(ctx: Context, uri: Uri, name: String, kind: String): RenderedDoc {
+        // Jalur cepat berkas lokal (salinan cache viewer): zip dibaca acak, bagian didekompresi seperlunya.
+        // Tanpa ini berkas 50 MB berarti ±50 MB byte mentah + seluruh isi zip terekstrak di RAM sekaligus.
+        val path = if (uri.scheme == "file") uri.path else null
+        if (path != null) {
+            val pkg = try { OPackage(java.io.File(path)) } catch (_: Exception) { null }
+            if (pkg != null) pkg.use { p ->
+                return when (kind) {
+                    "docx" -> try { DocxHtml.render(p, name) } catch (e: Throwable) { if (e is OutOfMemoryError) throw e; DocxHtml.renderSimple(p, name) }
+                    "xlsx" -> XlsxHtml.render(p, name)
+                    "pptx" -> PptxHtml.render(p, name)
+                    else -> throw IllegalArgumentException("Format tidak didukung")
+                }
+            }
+        }
         val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
         if (bytes.size < 4 || bytes[0] != 'P'.code.toByte() || bytes[1] != 'K'.code.toByte())
             throw IllegalArgumentException("Bukan berkas Office modern (mungkin format lama atau terenkripsi)")

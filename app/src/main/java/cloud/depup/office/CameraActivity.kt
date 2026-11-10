@@ -118,6 +118,9 @@ class CameraActivity : AppCompatActivity() {
     @Volatile private var armed = true            // false setelah jepret: tunggu kamera digerakkan dulu
     @Volatile private var busyShot = false
     private var lastHint = 0L
+    // Analisis cukup ±8x per detik; tiap frame kamera (30 fps) hanya membebani CPU HP kelas bawah.
+    private var lastAnalyze = 0L
+    private val analyzeEveryMs = if (Perf.low) 160L else 110L
 
     private val askCam = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) startCamera() else { toast("Izin kamera diperlukan untuk memindai"); finish() }
@@ -284,6 +287,9 @@ class CameraActivity : AppCompatActivity() {
     private fun analyze(img: ImageProxy) {
         try {
             if (!autoScan || busyShot) { prevLuma = null; stableSince = 0L; return }
+            val t0 = System.currentTimeMillis()
+            if (t0 - lastAnalyze < analyzeEveryMs) return
+            lastAnalyze = t0
             val plane = img.planes[0]
             val buf = plane.buffer
             val rs = plane.rowStride; val ps = plane.pixelStride
@@ -388,7 +394,10 @@ class CameraActivity : AppCompatActivity() {
                 val ratio = AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
                 val hiRes = ResolutionSelector.Builder()
                     .setAspectRatioStrategy(ratio)
-                    .setResolutionStrategy(ResolutionStrategy(Size(4000, 3000), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                    .setResolutionStrategy(ResolutionStrategy(
+                        // ±12 MP di HP kuat; ±8 MP di HP kelas bawah (masih tajam untuk OCR, jauh lebih ringan diproses).
+                        if (Perf.low) Size(3264, 2448) else Size(4000, 3000),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
                     .build()
                 val ratioOnly = ResolutionSelector.Builder().setAspectRatioStrategy(ratio).build()
 
@@ -396,7 +405,7 @@ class CameraActivity : AppCompatActivity() {
                 val cb = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                     .setResolutionSelector(hiRes)
-                    .setJpegQuality(100)
+                    .setJpegQuality(if (Perf.low) 95 else 100)
                     .setFlashMode(flashConst())
                 for (ext in listOf(Camera2Interop.Extender(pb), Camera2Interop.Extender(cb))) {
                     ext.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
@@ -404,9 +413,15 @@ class CameraActivity : AppCompatActivity() {
                     ext.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
                 }
                 val ext = Camera2Interop.Extender(cb)
-                ext.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-                ext.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                ext.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
+                if (Perf.low) {
+                    // ISP HP kelas bawah lambat pada mode HIGH_QUALITY -> jepretan tertunda lama. FAST tetap layak untuk dokumen.
+                    ext.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                    ext.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                } else {
+                    ext.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+                    ext.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+                    ext.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
+                }
 
                 val preview = pb.build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 val cap = cb.build()

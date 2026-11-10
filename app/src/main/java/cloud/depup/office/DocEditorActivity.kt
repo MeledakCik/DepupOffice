@@ -775,10 +775,11 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun loadImage(rId: String, targetW: Int, done: (Bitmap?) -> Unit) {
         if (imgCache.containsKey(rId)) { done(imgCache[rId]); return }
-        Thread {
+        // Pool bersama (2–3 thread), bukan satu thread baru per gambar: dokumen bergambar banyak tidak membanjiri CPU/RAM.
+        Perf.io.execute {
             val bmp = doc.imageBytes(rId)?.let { decodeSampled(it, targetW) }
             runOnUiThread { imgCache[rId] = bmp; if (!isFinishing) done(bmp) }
-        }.start()
+        }
     }
 
     private fun decodeSampled(b: ByteArray, targetW: Int): Bitmap? = try {

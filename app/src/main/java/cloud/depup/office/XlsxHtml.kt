@@ -30,8 +30,9 @@ object XlsxHtml {
         var indexed: IntArray = DEFAULT_INDEXED.copyOf()
     }
 
-    fun render(bytes: ByteArray, title: String): RenderedDoc {
-        val pkg = OPackage(bytes)
+    fun render(bytes: ByteArray, title: String): RenderedDoc = render(OPackage(bytes), title)
+
+    fun render(pkg: OPackage, title: String): RenderedDoc {
         val wbPath = pkg.mainPart() ?: "xl/workbook.xml"
         val c = Ctx(pkg)
         val wbRels = pkg.rels(wbPath)

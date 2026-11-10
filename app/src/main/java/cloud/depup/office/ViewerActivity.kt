@@ -85,12 +85,13 @@ class ViewerActivity : AppCompatActivity() {
     private var renderer: PdfRenderer? = null
     private val lock = Any()
     private val exec = Executors.newSingleThreadExecutor()
-    private val cache = object : LruCache<Int, Bitmap>(40 * 1024 * 1024) {
+    private val cache = object : LruCache<Int, Bitmap>(Perf.bitmapCacheBytes()) {
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
     }
     private var baseW = 1080
     private var zoom = 1f
-    private var gen = 0
+    @Volatile private var gen = 0
+    private val trimHook: () -> Unit = { runOnUiThread { cache.evictAll() } }
     private lateinit var rv: RecyclerView
     private lateinit var scroll: PinchScroll
     private val pageAdapter = PageAdapter()
@@ -119,7 +120,26 @@ class ViewerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         val rawUri = intent.data
         if (rawUri == null) { finish(); return }
-        val uri = Files.cacheCopy(this, rawUri)
+        Perf.onTrim(trimHook)
+        // Penyalinan ke cache bisa lama untuk berkas besar (mis. PDF 100 MB dari Drive/WhatsApp): jalankan di latar
+        // dengan layar memuat, jangan di main thread (dulu bisa memicu "Aplikasi tidak merespons").
+        setContentView(openingView(Files.nameOf(this, rawUri)))
+        Thread {
+            val uri = Files.cacheCopy(this, rawUri)
+            runOnUiThread { if (!isFinishing && !isDestroyed) build(rawUri, uri) }
+        }.start()
+    }
+
+    private fun openingView(name: String): View {
+        val box = vbox().apply { gravity = Gravity.CENTER; setBackgroundColor(C.CANVAS); setPadding(dp(24), dp(24), dp(24), dp(24)) }
+        box.add(android.widget.ProgressBar(this), w = dp(40), h = dp(40))
+        box.add(tv("Membuka $name…", 14f, C.MUTED).apply {
+            gravity = Gravity.CENTER; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }, top = 12)
+        return box
+    }
+
+    private fun build(rawUri: android.net.Uri, uri: android.net.Uri) {
 
         val name = Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
         val mime = intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
@@ -398,7 +418,7 @@ class ViewerActivity : AppCompatActivity() {
                 paper.add(banner)
             }
             mime.startsWith("image/") || name.endsWith(".jpg") || name.endsWith(".png") || name.endsWith(".jpeg") -> {
-                val bmp = try { Pdf.decode(this, uri, 2400) } catch (_: Exception) { null }
+                val bmp = try { Pdf.decode(this, uri, if (Perf.low) 1600 else 2400) } catch (_: Exception) { null }
                 if (bmp != null) {
                     val iv = ImageView(this).apply {
                         adjustViewBounds = true
@@ -493,8 +513,17 @@ class ViewerActivity : AppCompatActivity() {
                 paper.add(banner)
             }
             mime.startsWith("text/") || name.endsWith(".txt", ignoreCase = true) || name.endsWith(".md", ignoreCase = true) -> {
+                // Satu TextView dengan teks berukuran MB membuat tata letak membeku; tampilkan bagian awal saja.
+                val limit = if (Perf.low) 150_000 else 400_000
+                var cut = false
                 val content = try {
-                    contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    contentResolver.openInputStream(uri)?.bufferedReader()?.use { r ->
+                        val buf = CharArray(limit)
+                        var n = 0
+                        while (n < limit) { val k = r.read(buf, n, limit - n); if (k < 0) break; n += k }
+                        cut = n == limit && r.read() >= 0
+                        String(buf, 0, n)
+                    }.orEmpty()
                 } catch (_: Exception) {
                     ""
                 }
@@ -505,7 +534,7 @@ class ViewerActivity : AppCompatActivity() {
                 bRow.add(iconBadge(R.drawable.ic_note, C.NAVY, C.INDIGO_BG, 100, 20), w = dp(38), h = dp(38))
                 val bCol = vbox()
                 bCol.add(tv("Pratinjau Teks", 14f, C.TEXT, true))
-                bCol.add(tv("${content.length} karakter • teks bisa disalin", 11f, C.MUTED), top = 2)
+                bCol.add(tv(if (cut) "Menampilkan ${content.length} karakter pertama (berkas sangat besar)" else "${content.length} karakter • teks bisa disalin", 11f, C.MUTED), top = 2)
                 bRow.add(bCol, w = 0, weight = 1f, side = 8)
                 banner.add(bRow)
                 paper.add(banner)
@@ -800,11 +829,16 @@ class ViewerActivity : AppCompatActivity() {
             h.iv.setImageDrawable(null)
             val myGen = gen
             exec.execute {
+                // Saat di-scroll cepat, halaman yang sudah lewat tidak perlu dirender lagi.
+                if (myGen != gen || h.iv.tag != pos) return@execute
+                cache.get(pos)?.let { c -> runOnUiThread { if (h.iv.tag == pos && myGen == gen) h.iv.setImageBitmap(c) }; return@execute }
                 val bmp = try {
                     synchronized(lock) {
                         val r = renderer
-                        if (r == null) null else Pdf.render(r, pos, 1f, tw, 2600).bmp
+                        if (r == null) null else Pdf.render(r, pos, 1f, tw, Perf.pageMaxPx()).bmp
                     }
+                } catch (_: OutOfMemoryError) {
+                    cache.evictAll(); null
                 } catch (_: Throwable) { null }
                 if (bmp != null && myGen == gen) {
                     cache.put(pos, bmp)
@@ -815,6 +849,7 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        Perf.removeTrim(trimHook)
         try { officeWeb?.destroy() } catch (_: Exception) {}
         officeWeb = null
         exec.shutdownNow()
@@ -853,7 +888,7 @@ class ViewerActivity : AppCompatActivity() {
                         val bmp = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
                         page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                         page.close()
-                        val ocrRes = Ocr.run(bmp)
+                        val ocrRes = try { Ocr.run(bmp) } finally { bmp.recycle() }
                         if (ocrRes.text.isNotBlank()) {
                             sb.append("Halaman ").append(p + 1).append(":\n")
                             sb.append(ocrRes.text).append("\n\n")

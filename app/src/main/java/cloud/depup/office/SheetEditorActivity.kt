@@ -96,7 +96,8 @@ class SheetEditorActivity : AppCompatActivity() {
         if (uriStr != null) {
             val rawUri = runCatching { Uri.parse(uriStr) }.getOrNull()
             if (rawUri != null) {
-                val uri = Files.cacheCopy(this, rawUri)
+                // Dibaca langsung (streaming) dari sumbernya — tanpa menyalin seluruh berkas ke cache di main thread.
+                val uri = rawUri
                 sourceName = Files.baseName(Files.nameOf(this, uri))
                 val name = Files.nameOf(this, uri).lowercase()
                 val sheet = try {

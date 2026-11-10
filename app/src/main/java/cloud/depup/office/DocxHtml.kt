@@ -105,8 +105,9 @@ object DocxHtml {
     }
 
     // ------------------------------------------------------------------ API
-    fun render(bytes: ByteArray, title: String): RenderedDoc {
-        val pkg = OPackage(bytes)
+    fun render(bytes: ByteArray, title: String): RenderedDoc = render(OPackage(bytes), title)
+
+    fun render(pkg: OPackage, title: String): RenderedDoc {
         val main = pkg.mainPart() ?: "word/document.xml"
         val c = Ctx(pkg, main)
         // bagian pendukung yang rusak/aneh tidak boleh menggagalkan seluruh dokumen
@@ -183,8 +184,9 @@ object DocxHtml {
     }
 
     /** Mode cadangan bila render lengkap gagal: teks + tabel sederhana, tanpa tata letak halaman. */
-    fun renderSimple(bytes: ByteArray, title: String): RenderedDoc {
-        val pkg = OPackage(bytes)
+    fun renderSimple(bytes: ByteArray, title: String): RenderedDoc = renderSimple(OPackage(bytes), title)
+
+    fun renderSimple(pkg: OPackage, title: String): RenderedDoc {
         val doc = pkg.xml(pkg.mainPart() ?: "word/document.xml") ?: throw IllegalArgumentException("document.xml tidak ada")
         val body = doc.first("body") ?: throw IllegalArgumentException("body tidak ada")
         val sb = StringBuilder("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")

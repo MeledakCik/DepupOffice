@@ -16,6 +16,7 @@ import androidx.core.view.WindowInsetsCompat
 class DepupApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        Perf.init(this)
         applyNightMode(Theme.mode(this))
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             // Hitung token warna (terang/gelap) SEBELUM layar membangun tampilannya.
@@ -43,6 +44,17 @@ class DepupApp : Application() {
             override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
             override fun onActivityDestroyed(a: Activity) {}
         })
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // RUNNING_LOW (10) ke atas, atau aplikasi di latar: lepaskan cache bitmap.
+        if (level >= TRIM_MEMORY_RUNNING_LOW) Perf.trim()
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        Perf.trim()
     }
 
     companion object {

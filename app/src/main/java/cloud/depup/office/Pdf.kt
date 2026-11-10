@@ -396,7 +396,8 @@ object Pdf {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         ctx.contentResolver.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, bounds) }
         var sample = 1
-        while (max(bounds.outWidth, bounds.outHeight) / sample > maxDim * 2) sample *= 2
+        // Sampel sebesar mungkin selama hasilnya masih >= maxDim: puncak memori turun 4x tanpa mengurangi detail akhir.
+        while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxDim) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         val raw = ctx.contentResolver.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, opts) }
             ?: throw IOException("Gambar tidak terbaca")
@@ -413,7 +414,10 @@ object Pdf {
         }
         val f = min(1f, maxDim.toFloat() / max(raw.width, raw.height))
         if (f < 1f) m.postScale(f, f)
-        return Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
+        if (m.isIdentity) return raw
+        val out = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
+        if (out !== raw) raw.recycle()
+        return out
     }
 
     /** Mode dokumen: ambang adaptif lokal (integral image) -> hitam-putih tajam, ukuran PDF kecil. */

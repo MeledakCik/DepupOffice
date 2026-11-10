@@ -75,11 +75,19 @@ object Files {
             val ext = name.substringAfterLast('.', "tmp")
             val cleanBase = baseName(name).replace(Regex("[^\\p{L}\\p{N}_.-]+"), "_")
             val tempFile = File(ctx.cacheDir, "open_${cleanBase}.$ext")
-            
-            ctx.contentResolver.openInputStream(uri)?.use { input ->
-                tempFile.outputStream().use { output ->
-                    input.copyTo(output)
+
+            // Berkas yang sama dibuka lagi & belum berubah (ukuran sama, tidak lebih baru dari salinan) -> pakai salinan
+            // lama. Membuka ulang PDF/Word besar jadi instan, tanpa menyalin puluhan MB lagi.
+            val (srcSize, srcModified) = sizeAndModified(ctx, uri)
+            val reusable = tempFile.exists() && srcSize > 0 && srcModified > 0 &&
+                tempFile.length() == srcSize && tempFile.lastModified() >= srcModified
+            if (!reusable) {
+                // Tulis ke berkas sementara lalu ganti nama: salinan setengah jadi (aplikasi ditutup paksa) tak pernah terpakai.
+                val part = File(ctx.cacheDir, tempFile.name + ".part")
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    part.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
                 }
+                if (part.length() > 0) { tempFile.delete(); part.renameTo(tempFile) } else part.delete()
             }
             if (tempFile.exists() && tempFile.length() > 0) {
                 Uri.fromFile(tempFile)
@@ -90,6 +98,18 @@ object Files {
             uri
         }
     }
+
+    /** Ukuran & waktu ubah dari penyedia konten (0 bila tidak diketahui). */
+    private fun sizeAndModified(ctx: Context, uri: Uri): Pair<Long, Long> = try {
+        ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            if (!c.moveToFirst()) return@use 0L to 0L
+            val si = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            val mi = c.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val size = if (si >= 0 && !c.isNull(si)) c.getLong(si) else 0L
+            val mod = if (mi >= 0 && !c.isNull(mi)) c.getLong(mi) else 0L
+            size to mod
+        } ?: (0L to 0L)
+    } catch (_: Exception) { 0L to 0L }
 
     fun outDir(ctx: Context): File {
         val sd = Environment.getExternalStorageDirectory()

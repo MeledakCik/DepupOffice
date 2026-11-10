@@ -29,8 +29,9 @@ object PptxHtml {
     private val DEFAULT_MAP = mapOf("bg1" to "lt1", "tx1" to "dk1", "bg2" to "lt2", "tx2" to "dk2", "accent1" to "accent1", "accent2" to "accent2",
         "accent3" to "accent3", "accent4" to "accent4", "accent5" to "accent5", "accent6" to "accent6", "hlink" to "hlink", "folHlink" to "folHlink")
 
-    fun render(bytes: ByteArray, title: String): RenderedDoc {
-        val pkg = OPackage(bytes)
+    fun render(bytes: ByteArray, title: String): RenderedDoc = render(OPackage(bytes), title)
+
+    fun render(pkg: OPackage, title: String): RenderedDoc {
         val presPath = pkg.mainPart() ?: "ppt/presentation.xml"
         val pres = pkg.xml(presPath) ?: throw IllegalArgumentException("presentation.xml tidak ada")
         val c = Ctx(pkg)
