@@ -38,6 +38,18 @@ class PrivacyPolicyActivity : AppCompatActivity() {
                 }
             }
 
+            // Ikuti tema aplikasi (terang/gelap) dan ukuran huruf sistem.
+            webView.setBackgroundColor(C.BG)
+            webView.settings.textZoom = (resources.configuration.fontScale * 100).toInt()
+            webView.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                    val url = request?.url?.toString() ?: return false
+                    return handleExternalUrl(url)
+                }
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    view?.evaluateJavascript("document.documentElement.className='${if (C.dark) "dark" else "light"}'", null)
+                }
+            }
             webView.loadUrl("file:///android_asset/privacy.html")
         }
     }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Depup Fresh (v3) — tema GELAP. -->
+<resources>
+    <color name="bg">#0E1016</color>
+    <color name="surface">#181B23</color>
+    <color name="accent">#A8B1FF</color>
+    <color name="accent_soft">#A8B1FF</color>
+    <color name="gold">#F5B53D</color>
+    <color name="cream">#181B23</color>
+    <color name="line">#373C4C</color>
+    <color name="text">#ECEEF4</color>
+    <color name="muted">#A9AFC1</color>
+    <color name="splash_bg">#0E1016</color>
+</resources>

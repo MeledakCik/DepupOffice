@@ -72,162 +72,79 @@ class MainActivity : AppCompatActivity() {
     private fun pickFile(types: Array<String>, cb: (Uri) -> Unit) { onOne = cb; pickOne.launch(types) }
     private fun pickFiles(types: Array<String>, cb: (List<Uri>) -> Unit) { onMany = cb; pickMany.launch(types) }
 
-    // ================= KERANGKA: app bar + konten + navigasi bawah =================
+    // ================= KERANGKA: bilah atas + konten + navigasi bawah =================
     private lateinit var content: FrameLayout
     private lateinit var barTitle: TextView
-    private lateinit var fab: FrameLayout
-    private val navViews = mutableMapOf<Int, Pair<ImageView, TextView>>()
+    private lateinit var barLogo: View
+    private val navItems = mutableMapOf<Int, Triple<View, ImageView, TextView>>()
     private var tab = 0
+    private var sv: ScrollView? = null
+    private var renderedTab = -1
+    private val scrollMemo = mutableMapOf<Int, Int>()
     private var query = ""
     private var recentBox: LinearLayout? = null
-    private val tabNames = arrayOf("Baca", "Tools", "Buat", "Simpan")
+    private var docsMode = 0          // 0 terkini, 1 ditandai, 2 hasil olahan
+    private var docsCat = "Semua"
+    private var focusSearch = false
+    private val tabNames = arrayOf("Beranda", "Dokumen", "Alat", "Saya")
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt("tab", tab)
+        outState.putInt("docsMode", docsMode)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        tab = savedInstanceState?.getInt("tab") ?: 0
+        docsMode = savedInstanceState?.getInt("docsMode") ?: 0
         val mainView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(C.BG)
-            clipChildren = false
         }
         mainView.add(topBar())
         content = FrameLayout(this)
         mainView.add(content, w = MATCH, h = 0, weight = 1f)
+        mainView.add(View(this).apply { setBackgroundColor(C.LINE) }, h = 1)
         mainView.add(bottomNav())
 
         val root = FrameLayout(this)
         root.addView(mainView, FrameLayout.LayoutParams(MATCH, MATCH))
-        val splash = buildSplash()
-        root.addView(splash, FrameLayout.LayoutParams(MATCH, MATCH))
-
         setContentView(root)
-        select(0)
+        select(tab)
 
-        splash.postDelayed({
-            splash.animate()
-                .alpha(0f)
-                .scaleX(1.05f)
-                .scaleY(1.05f)
-                .setDuration(350)
-                .withEndAction {
+        if (savedInstanceState == null) {
+            val splash = buildSplash()
+            root.addView(splash, FrameLayout.LayoutParams(MATCH, MATCH))
+            Theme.apply(this, if (C.dark) C.BG else C.PRIMARY)
+            splash.postDelayed({
+                splash.animate().alpha(0f).setDuration(220).withEndAction {
                     root.removeView(splash)
-                    window.statusBarColor = C.SURFACE
-                    window.navigationBarColor = C.SURFACE
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                        window.decorView.systemUiVisibility =
-                            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-                    }
-                }
-                .start()
-        }, 1500)
+                    Theme.apply(this)
+                }.start()
+            }, 550L)
+        } else Theme.apply(this)
     }
 
+    /** Layar pembuka singkat (±0,5 detik). Animasi otomatis nonaktif bila "Hapus animasi" aktif di HP. */
     private fun buildSplash(): View {
         val splash = FrameLayout(this).apply {
-            setBackgroundColor(0xFF070D1E.toInt())
+            setBackgroundColor(if (C.dark) C.BG else C.PRIMARY)
             isClickable = true
-            isFocusable = true
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
-        val center = vbox().apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-
-        val titleTv = tv("Depup Office", 34f, 0xFFF0F9FF.toInt(), true).apply {
-            gravity = Gravity.CENTER
-            letterSpacing = 0.03f
-            alpha = 0f
-            translationY = -40f
-        }
-        val subTitleTv = tv("Deploy Platform", 14f, 0xFF38BDF8.toInt()).apply {
-            gravity = Gravity.CENTER
-            letterSpacing = 0.18f
-            alpha = 0f
-            translationY = -20f
-        }
-        center.add(titleTv)
-        center.add(subTitleTv, top = 6)
-
-        val logoView = ImageView(this).apply {
-            setImageResource(R.drawable.ic_cyber_cloud_logo)
-            alpha = 0f
-            scaleX = 0.4f
-            scaleY = 0.4f
-            translationY = 30f
-        }
-        center.add(logoView, top = 36, w = dp(170), h = dp(170))
-
-        val loadingLabel = tv("Loading…", 13f, 0xFF94A3B8.toInt()).apply {
-            gravity = Gravity.CENTER
-            alpha = 0f
-        }
-        center.add(loadingLabel, top = 40)
-
-        val pbarTrack = FrameLayout(this).apply {
-            background = shape(0x220284C7.toInt(), 100, 0xFF0284C7.toInt(), 1)
-            alpha = 0f
-        }
-        val pbarFill = View(this).apply {
-            background = shape(0xFF0284C7.toInt(), 100)
-        }
-        pbarTrack.addView(pbarFill, FrameLayout.LayoutParams(0, MATCH))
-        center.add(pbarTrack, top = 12, w = dp(240), h = dp(10))
-
-        val statusTv = tv("Initializing deploy environment • Syncing cloud nodes • Preparing platform…", 10f, 0xFF64748B.toInt()).apply {
-            gravity = Gravity.CENTER
-            alpha = 0f
-        }
-        center.add(statusTv, top = 16)
-
+        val fg = if (C.dark) C.TEXT else C.ON_PRIMARY
+        val center = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        val logo = ImageView(this).apply { setImageResource(R.drawable.ic_logo); alpha = 0f; scaleX = 0.85f; scaleY = 0.85f }
+        center.add(logo, w = dp(88), h = dp(88))
+        val name = tv("Depup Office", 28f, fg, true).apply { gravity = Gravity.CENTER; alpha = 0f }
+        center.add(name, top = 18, w = WRAP)
+        val tag = tv("Kantor saku · 100% offline", 15f, fg).apply { gravity = Gravity.CENTER; alpha = 0f }
+        center.add(tag, top = 4, w = WRAP)
         splash.addView(center, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
-
-        titleTv.animate()
-            .alpha(1f)
-            .translationY(0f)
-            .setDuration(600)
-            .setInterpolator(android.view.animation.DecelerateInterpolator())
-            .start()
-
-        subTitleTv.animate()
-            .alpha(1f)
-            .translationY(0f)
-            .setStartDelay(150)
-            .setDuration(600)
-            .setInterpolator(android.view.animation.DecelerateInterpolator())
-            .start()
-
-        logoView.animate()
-            .alpha(1f)
-            .scaleX(1.0f)
-            .scaleY(1.0f)
-            .translationY(0f)
-            .setStartDelay(200)
-            .setDuration(700)
-            .setInterpolator(android.view.animation.OvershootInterpolator(1.2f))
-            .withEndAction {
-                logoView.animate()
-                    .scaleX(1.06f)
-                    .scaleY(1.06f)
-                    .setDuration(700)
-                    .setInterpolator(android.view.animation.AccelerateDecelerateInterpolator())
-                    .start()
-            }
-            .start()
-
-        loadingLabel.animate().alpha(1f).setStartDelay(400).setDuration(400).start()
-        pbarTrack.animate().alpha(1f).setStartDelay(450).setDuration(400).start()
-        statusTv.animate().alpha(1f).setStartDelay(500).setDuration(400).start()
-
-        pbarTrack.postDelayed({
-            val maxW = pbarTrack.width
-            val anim = android.animation.ValueAnimator.ofInt(0, maxW)
-            anim.duration = 1000
-            anim.interpolator = android.view.animation.DecelerateInterpolator()
-            anim.addUpdateListener { a ->
-                val v = a.animatedValue as Int
-                pbarFill.layoutParams = FrameLayout.LayoutParams(v, MATCH)
-            }
-            anim.start()
-        }, 450)
-
+        logo.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(320).start()
+        name.animate().alpha(1f).setStartDelay(80).setDuration(300).start()
+        tag.animate().alpha(0.9f).setStartDelay(140).setDuration(300).start()
         return splash
     }
 
@@ -240,43 +157,15 @@ class MainActivity : AppCompatActivity() {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(C.SURFACE)
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            elevation = dp(1).toFloat()
+            setBackgroundColor(C.BG)
+            setPadding(dp(16), dp(6), dp(6), dp(6))
+            minimumHeight = dp(60)
         }
-        bar.add(ImageView(this).apply { setImageResource(R.drawable.ic_logo) }, w = dp(34), h = dp(34))
-        barTitle = tv("Baca", 20f, C.ACCENT, true)
+        barLogo = ImageView(this).apply { setImageResource(R.drawable.ic_logo); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        bar.add(barLogo, w = dp(32), h = dp(32), side = 0)
+        barTitle = headingTv("Depup Office", 22f)
         bar.add(barTitle, w = 0, weight = 1f, side = 10)
-
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val donasiBtn = icon(R.drawable.ic_heart, 0xFFEF4444.toInt(), 22).apply {
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            isClickable = true
-            setOnClickListener { showDonationDialog() }
-        }
-        val s = icon(R.drawable.ic_search, C.MUTED, 22).apply {
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            isClickable = true
-            setOnClickListener { showSearchDialog() }
-        }
-        val b = icon(R.drawable.ic_bell, C.MUTED, 22).apply {
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            isClickable = true
-            setOnClickListener { toast("Tidak ada notifikasi baru") }
-        }
-        val u = iconBadge(R.drawable.ic_user, Color.WHITE, C.ACCENT, 100, 18).apply {
-            isClickable = true
-            setOnClickListener { toast("Profil Pengguna • Depup Office") }
-        }
-        actions.add(donasiBtn, w = dp(32), h = dp(32))
-        actions.add(s, w = dp(32), h = dp(32), side = 2)
-        actions.add(b, w = dp(32), h = dp(32), side = 2)
-        actions.add(u, w = dp(32), h = dp(32), side = 4)
-
-        bar.add(actions, w = WRAP)
+        bar.add(iconBtn(R.drawable.ic_search, "Cari dokumen", C.TEXT) { openSearch() }, w = dp(48), h = dp(48))
         return bar
     }
 
@@ -342,41 +231,38 @@ class MainActivity : AppCompatActivity() {
 
         sheet { body, dismiss ->
             sheetHeader(
-                body, R.drawable.ic_heart, 0xFFDC2626.toInt(), C.RED_BG,
+                body, R.drawable.ic_heart, C.NAVY, C.INDIGO_BG,
                 "Dukung Depup Office", "Donasi sukarela via Saweria • Bebas iklan & 100% offline", dismiss
             )
             val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
 
             // Kartu Hero Saweria
             val heroCard = vbox(16).apply {
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xFFEA580C.toInt(), 0xFFC2410C.toInt())
-                ).apply { cornerRadius = dp(18).toFloat() }
-                elevation = dp(2).toFloat()
+                background = shape(C.WARN_C, 16)
             }
             val heroRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            heroRow.add(iconBadge(R.drawable.ic_heart, Color.WHITE, 0x33FFFFFF, 100, 24), w = dp(48), h = dp(48))
+            heroRow.add(iconBadge(R.drawable.ic_heart, C.ERROR, C.SURFACE, 100, 24), w = dp(48), h = dp(48))
             val heroCol = vbox()
-            heroCol.add(tv("Donasi via Saweria", 12f, 0xE6FFFFFF.toInt()))
-            heroCol.add(tv("saweria.co/depupdonate", 20f, Color.WHITE, true), top = 2)
-            heroCol.add(tv("GoPay • DANA • OVO • QRIS • LinkAja • ShopeePay", 11f, 0xE6FFFFFF.toInt()), top = 2)
+            heroCol.add(tv("Donasi via Saweria", 13f, C.WARN_T))
+            heroCol.add(tv("saweria.co/depupdonate", 19f, C.TEXT, true), top = 2)
+            heroCol.add(tv("GoPay • DANA • OVO • QRIS • LinkAja • ShopeePay", 13f, C.WARN_T), top = 2)
             heroRow.add(heroCol, w = 0, weight = 1f, side = 12)
             heroCard.add(heroRow)
-            heroCard.add(tv("Dukungan Anda membantu pengembangan fitur baru Depup Office tanpa iklan, tanpa langganan, dan tetap 100% offline di perangkat Anda.", 11f, 0xF2FFFFFF.toInt()))
+            heroCard.add(tv("Dukungan Anda membantu pengembangan fitur baru Depup Office tanpa iklan, tanpa langganan, dan tetap 100% offline di perangkat Anda.", 14f, C.TEXT), top = 10)
             pad.add(heroCard)
 
             // Tombol Utama Buka Saweria
             val saweriaBtn = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                background = shape(0xFFEA580C.toInt(), 12)
-                minimumHeight = dp(50)
+                background = shape(C.ACCENT, 14)
+                minimumHeight = dp(52)
+                contentDescription = "Buka halaman Saweria"
                 setPadding(dp(16), dp(12), dp(16), dp(12))
                 isClickable = true
                 isFocusable = true
-                add(icon(R.drawable.ic_heart, Color.WHITE, 20), w = dp(20), h = dp(20))
-                add(tv(" Buka Saweria (saweria.co/depupdonate) →", 14f, Color.WHITE, true), w = WRAP, side = 6)
+                add(icon(R.drawable.ic_heart, C.ON_PRIMARY, 20), w = dp(20), h = dp(20))
+                add(tv("Buka Saweria", 15f, C.ON_PRIMARY, true), w = WRAP, side = 6)
                 setOnClickListener {
                     try {
                         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(saweriaUrl)))
@@ -442,7 +328,7 @@ class MainActivity : AppCompatActivity() {
             val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
 
             val qrCard = FrameLayout(this).apply {
-                background = shape(Color.WHITE, 16, C.LINE, 1)
+                background = raised(Color.WHITE, 16, 2.5f)
                 setPadding(dp(14), dp(14), dp(14), dp(14))
             }
             qrCard.addView(ImageView(this).apply {
@@ -509,85 +395,98 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showSearchDialog() {
-        val et = EditText(this).apply {
-            hint = "Cari dokumen PDF, Word, Excel…"
-            setText(query)
-            setSelection(text.length)
-        }
-        AlertDialog.Builder(this).setTitle("Pencarian Dokumen").setView(et)
-            .setPositiveButton("Cari") { _, _ ->
-                query = et.text.toString().trim()
-                select(0)
-            }
-            .setNegativeButton("Batal", null).show()
+    private fun openSearch() {
+        focusSearch = true
+        docsMode = if (docsMode == 2) 2 else 0
+        select(1)
     }
 
+    /** Navigasi bawah: 4 tujuan + tombol Scan di tengah. Label selalu tampil; status terpilih diumumkan TalkBack. */
     private fun bottomNav(): View {
         val nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
-            clipChildren = false
-            elevation = dp(8).toFloat()
+            setPadding(dp(4), dp(6), dp(4), dp(8))
         }
         fun item(idx: Int, res: Int, label: String): View {
-            val g = icon(res, C.MUTED, 24)
-            val l = tv(label, 11f, C.MUTED, true).apply { gravity = Gravity.CENTER }
-            navViews[idx] = g to l
+            val ind = FrameLayout(this)
+            val ic = icon(res, C.MUTED, 24)
+            ind.addView(ic, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+            val l = tv(label, 12f, C.MUTED, true).apply { gravity = Gravity.CENTER; maxLines = 1; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+            navItems[idx] = Triple(ind, ic, l)
             return LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 isClickable = true
+                isFocusable = true
+                contentDescription = label
+                background = rippleBg(16)
+                minimumHeight = dp(56)
                 setOnClickListener { select(idx) }
-                add(g, w = dp(24), h = dp(24))
-                add(l, top = 2, w = WRAP)
+                add(ind, w = dp(60), h = dp(32))
+                add(l, top = 4, w = WRAP)
             }
         }
-        nav.add(item(0, R.drawable.ic_doc, "Baca"), w = 0, h = dp(64), weight = 1f)
-        nav.add(item(1, R.drawable.ic_tools, "Tools"), w = 0, h = dp(64), weight = 1f)
-        fab = FrameLayout(this).apply {
-            addView(icon(R.drawable.ic_scan, Color.WHITE, 28), FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.ACCENT) }
-            elevation = dp(6).toFloat()
-            translationY = -dp(16).toFloat()
-            contentDescription = "Buat dokumen"
-            setOnClickListener { select(2) }
+        nav.add(item(0, R.drawable.ic_home, "Beranda"), w = 0, weight = 1f)
+        nav.add(item(1, R.drawable.ic_folder, "Dokumen"), w = 0, weight = 1f)
+        // Tombol Scan: aksi paling sering, menonjol di tengah.
+        val scan = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Scan dokumen dengan kamera"
+            background = rippleBg(16)
+            minimumHeight = dp(56)
+            setOnClickListener { startScan() }
+            val fabBox = FrameLayout(this@MainActivity).apply { background = shape(C.PRIMARY, 16) }
+            fabBox.addView(icon(R.drawable.ic_scan, C.ON_PRIMARY, 26), FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
+            add(fabBox, w = dp(56), h = dp(40))
+            add(tv("Scan", 12f, C.PRIMARY, true).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, top = 2, w = WRAP)
         }
-        val fabSlot = FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
-        fabSlot.addView(fab, FrameLayout.LayoutParams(dp(60), dp(60), Gravity.CENTER))
-        nav.add(fabSlot, w = 0, h = dp(64), weight = 1f)
-        nav.add(item(3, R.drawable.ic_box, "Simpan"), w = 0, h = dp(64), weight = 1f)
+        nav.add(scan, w = 0, weight = 1f)
+        nav.add(item(2, R.drawable.ic_tools, "Alat"), w = 0, weight = 1f)
+        nav.add(item(3, R.drawable.ic_user, "Saya"), w = 0, weight = 1f)
         return nav
     }
 
     private fun select(i: Int) {
         tab = i
-        barTitle.text = tabNames[i]
-        navViews.forEach { (idx, v) ->
+        barTitle.text = if (i == 0) "Depup Office" else tabNames[i]
+        barLogo.visibility = if (i == 0) View.VISIBLE else View.GONE
+        navItems.forEach { (idx, v) ->
             val on = idx == i
-            v.first.setColorFilter(if (on) C.ACCENT else C.MUTED)
-            v.second.setTextColor(if (on) C.ACCENT else C.MUTED)
+            v.first.background = if (on) shape(C.PRIMARY_C, 100) else null
+            v.second.setColorFilter(if (on) C.ON_PRIMARY_C else C.MUTED)
+            v.third.setTextColor(if (on) C.TEXT else C.MUTED)
+            v.third.typeface = if (on) Fonts.head(this) else Fonts.label(this)
+            (v.first.parent as? View)?.isSelected = on
         }
-        (fab.background as GradientDrawable).setColor(if (i == 2) C.ACCENT_DARK else C.ACCENT)
         render()
     }
 
     private fun render() {
+        sv?.let { scrollMemo[renderedTab] = it.scrollY }
         content.removeAllViews()
         recentBox = null
-        val page = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(28)) }
+        val page = vbox().apply { setPadding(dp(16), dp(8), dp(16), dp(32)) }
         when (tab) {
-            0 -> buildBaca(page)
-            1 -> buildTools(page)
-            2 -> buildBuat(page)
-            else -> buildSimpan(page)
+            0 -> buildHome(page)
+            1 -> buildDocs(page)
+            2 -> buildTools(page)
+            else -> buildMe(page)
         }
-        content.addView(ScrollView(this).apply {
+        val scroller = ScrollView(this).apply {
             isFillViewport = true
-            overScrollMode = View.OVER_SCROLL_NEVER
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             addView(page)
-        })
+        }
+        sv = scroller
+        renderedTab = tab
+        content.addView(scroller)
+        val y = scrollMemo[tab] ?: 0
+        if (y > 0) scroller.post { scroller.scrollTo(0, y) }
     }
 
     private fun greeting(): String {
@@ -596,9 +495,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun heading(small: String?, title: String, sub: String? = null, parent: LinearLayout) {
-        if (small != null) parent.add(tv(small, 13f, C.MUTED))
-        parent.add(tv(title, 26f, C.TEXT, true), top = 2)
-        if (sub != null) parent.add(tv(sub, 14f, C.MUTED), top = 6)
+        if (small != null) parent.add(tv(small, 14f, C.MUTED))
+        parent.add(headingTv(title, 24f), top = 2)
+        if (sub != null) parent.add(tv(sub, 15f, C.MUTED), top = 6)
+    }
+
+    /** Kumpulan baris dalam satu kartu dengan garis pemisah — lebih rapi daripada kartu bertumpuk. */
+    private fun listCard(rows: List<View>): LinearLayout = vbox().apply {
+        background = raised(C.SURFACE, 16, 1f)
+        rows.forEachIndexed { i, r ->
+            if (i > 0) add(View(context).apply { setBackgroundColor(C.LINE) }, h = 1, side = 0).also {
+                (getChildAt(childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(72)
+            }
+            add(r)
+        }
     }
 
     private fun dirSize(f: File): Long = f.walkTopDown().filter { it.isFile }.sumOf { it.length() }
@@ -607,16 +517,15 @@ class MainActivity : AppCompatActivity() {
     private fun typeOf(mime: String, name: String): Triple<String, Int, Int> {
         val n = name.lowercase()
         return when {
-            mime == PDF || n.endsWith(".pdf") -> Triple("PDF", C.RED, C.RED_BG)
-            mime.contains("word") || n.endsWith(".doc") || n.endsWith(".docx") -> Triple("DOCX", C.ACCENT, C.BLUE_BG)
+            mime == PDF || n.endsWith(".pdf") -> Triple("PDF", C.PDF_FG, C.PDF_BG)
+            mime.contains("word") || n.endsWith(".doc") || n.endsWith(".docx") -> Triple("DOCX", C.DOC_FG, C.DOC_BG)
             mime.contains("sheet") || mime.contains("excel") || n.endsWith(".xls") || n.endsWith(".xlsx") || n.endsWith(".csv") ->
-                Triple("XLSX", C.TEAL, C.TEAL_BG)
-            mime.startsWith("image/") -> Triple("IMG", C.SKY, C.SKY_BG)
-            else -> Triple(n.substringAfterLast('.', "FILE").uppercase().take(4), C.INDIGO, C.INDIGO_BG)
+                Triple("XLSX", C.XLS_FG, C.XLS_BG)
+            mime.startsWith("image/") -> Triple("IMG", C.IMG_FG, C.IMG_BG)
+            else -> Triple(n.substringAfterLast('.', "FILE").uppercase().take(4), C.NAVY, C.TINT20)
         }
     }
 
-    private var filterMode = 0   // 0 semua terkini, 1 ditandai
 
     private fun metaLine(e: List<String>): String {
         val size = Files.sizeOf(this, Uri.parse(e[0]))
@@ -627,41 +536,50 @@ class MainActivity : AppCompatActivity() {
     private fun showRenameFileDialog(uriStr: String, currentName: String) =
         renameFlow(Uri.parse(uriStr), currentName) { render() }
 
+    /** Lencana jenis berkas (PDF/DOCX/XLSX/IMG): huruf tebal di wadah warna kategori. */
+    private fun typeBadge(label: String, fg: Int, bg: Int): View =
+        tv(label, 12f, fg, true).apply {
+            gravity = Gravity.CENTER
+            background = shape(bg, 12)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+
     private fun fileRow(e: List<String>): View {
         val (label, fg, bg) = typeOf(e[2], e[1])
         val uriStr = e[0]
-        val r = card(12, 16)
-        r.orientation = LinearLayout.HORIZONTAL
-        r.gravity = Gravity.CENTER_VERTICAL
-        r.background = rippleCard(16)
-        r.isClickable = true
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(4), dp(10))
+            minimumHeight = dp(68)
+        }
         fun openIt() {
             try { Files.open(this, Uri.parse(uriStr), e[2]) } catch (_: Exception) { toast("File tidak lagi tersedia") }
         }
-        r.setOnClickListener { openIt() }
-        r.add(tv(label, 11f, fg, true).apply { gravity = Gravity.CENTER; background = shape(bg, 12) }, w = dp(44), h = dp(44))
-        val col = vbox()
-        col.add(tv(e[1], 15f, C.TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
         val meta = metaLine(e)
-        col.add(tv(if (meta.isBlank()) "Dokumen $label" else meta, 12f, C.MUTED), top = 2)
+        r.tappable("${e[1]}, ${readableType(label)}${if (meta.isBlank()) "" else ", $meta"}. Ketuk untuk membuka") { openIt() }
+        r.add(typeBadge(label, fg, bg), w = dp(44), h = dp(44))
+        val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+        col.add(tv(e[1], 15f, C.TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+        col.add(tv(if (meta.isBlank()) readableType(label) else meta, 13f, C.MUTED), top = 2)
         r.add(col, w = 0, weight = 1f, side = 12)
         val marked = Meta.isMarked(this, uriStr)
-        val bm = icon(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off, if (marked) C.ACCENT else C.MUTED, 22)
-        bm.setPadding(dp(6), dp(6), dp(6), dp(6))
-        bm.setOnClickListener {
+        lateinit var bm: ImageView
+        bm = iconBtn(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off,
+            if (marked) "Hapus tanda ${e[1]}" else "Tandai ${e[1]}", if (marked) C.PRIMARY else C.MUTED, 22) {
             val on = Meta.toggleMark(this, uriStr)
             bm.setImageResource(if (on) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off)
-            bm.setColorFilter(if (on) C.ACCENT else C.MUTED)
-            if (filterMode == 1 && !on) render()
+            bm.setColorFilter(if (on) C.PRIMARY else C.MUTED)
+            bm.contentDescription = if (on) "Hapus tanda ${e[1]}" else "Tandai ${e[1]}"
+            toast(if (on) "Ditandai" else "Tanda dihapus")
+            if (tab == 1 && docsMode == 1 && !on) render()
         }
-        r.add(bm, w = dp(36), h = dp(36))
-        val more = icon(R.drawable.ic_more, C.MUTED, 22)
-        more.setPadding(dp(6), dp(6), dp(6), dp(6))
-        more.setOnClickListener {
-            val pm = android.widget.PopupMenu(this, more)
+        r.add(bm, w = dp(48), h = dp(48))
+        r.add(iconBtn(R.drawable.ic_more, "Opsi lain untuk ${e[1]}", C.MUTED, 22) { v ->
+            val pm = android.widget.PopupMenu(this, v)
             pm.menu.add(0, 1, 0, "Buka")
-            pm.menu.add(0, 2, 1, "Edit Dokumen")
-            pm.menu.add(0, 3, 2, "Ubah Nama (Rename)")
+            pm.menu.add(0, 2, 1, "Edit dokumen")
+            pm.menu.add(0, 3, 2, "Ubah nama")
             pm.menu.add(0, 4, 3, "Bagikan")
             pm.menu.add(0, 5, 4, "Hapus dari riwayat")
             pm.setOnMenuItemClickListener { m ->
@@ -675,27 +593,29 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             pm.show()
-        }
-        r.add(more, w = dp(36), h = dp(36))
+        }, w = dp(48), h = dp(48))
         return r
     }
 
-    private fun fillRecent(box: LinearLayout, max: Int, filter: String = "") {
+    private fun readableType(label: String) = when (label) {
+        "PDF" -> "Dokumen PDF"; "DOCX" -> "Dokumen Word"; "XLSX" -> "Spreadsheet Excel"; "IMG" -> "Gambar"; else -> "Berkas $label"
+    }
+
+    private fun fillRecent(box: LinearLayout, max: Int, filter: String = "", markedOnly: Boolean = false) {
         box.removeAllViews()
         val all = Recent.load(this)
         val marks = Meta.marks(this)
         val list = all.filter { filter.isBlank() || it[1].contains(filter, ignoreCase = true) }
-            .filter { filterMode == 0 || marks.contains(it[0]) }.take(max)
+            .filter { !markedOnly || marks.contains(it[0]) }.take(max)
         if (list.isEmpty()) {
-            val msg = when {
-                filterMode == 1 -> "Belum ada file yang ditandai. Ketuk ikon penanda di salah satu file."
-                all.isEmpty() -> "Belum ada file terakhir. Buka PDF, Word, atau Excel untuk memulai."
-                else -> "Tidak ada file yang cocok."
-            }
-            box.add(card(16, 16).apply { add(tv(msg, 13f, C.MUTED)) })
-        } else {
-            list.forEachIndexed { i, e -> box.add(fileRow(e), top = if (i == 0) 0 else 10) }
-        }
+            box.add(when {
+                markedOnly && filter.isBlank() -> emptyState(R.drawable.ic_bookmark_off, "Belum ada yang ditandai",
+                    "Ketuk ikon penanda di samping berkas agar mudah ditemukan lagi.")
+                all.isEmpty() -> emptyState(R.drawable.ic_folder, "Belum ada berkas",
+                    "Berkas PDF, Word, dan Excel yang Anda buka akan muncul di sini.", "Buka Berkas") { openAny() }
+                else -> emptyState(R.drawable.ic_search, "Tidak ditemukan", "Tidak ada berkas yang cocok dengan “$filter”.")
+            })
+        } else box.add(listCard(list.map { fileRow(it) }))
     }
 
     /** Buka editor yang sesuai. PDF/gambar/format lain dibuka di pratinjau, bukan editor kosong. */
@@ -722,112 +642,160 @@ class MainActivity : AppCompatActivity() {
         v.forEachIndexed { i, x -> add(x, w = WRAP).also { if (i > 0) (x.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8) } }
     }
 
-    // ================= TAB BACA =================
-    private fun buildBaca(p: LinearLayout) {
-        val recent = Recent.load(this)
-        val (free, total) = Files.deviceStorage()
-        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val left = vbox()
-        left.add(tv("● ${greeting()}", 13f, C.TEAL, true))
-        left.add(tv("Ruang Baca\nBerkas", 28f, C.TEXT, true), top = 2)
-        head.add(left, w = 0, weight = 1f)
-        head.add(iconPill(R.drawable.ic_cloud, "${Files.fmtGb(total - free)} / ${Files.fmtGb(total)}", C.ACCENT, C.BLUE_BG), w = WRAP)
-        p.add(head)
+    // ================= BERANDA =================
+    private fun buildHome(p: LinearLayout) {
+        p.add(tv(greeting(), 15f, C.MUTED), top = 4)
+        p.add(headingTv("Mau kerjakan apa hari ini?", 24f), top = 2)
 
-        val search = EditText(this).apply {
-            hint = "Cari dokumen PDF, Word, Excel…"
-            setHintTextColor(C.MUTED)
-            setTextColor(C.TEXT)
-            textSize = 14f
-            isSingleLine = true
-            background = shape(C.SURFACE2, 12)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            minHeight = dp(48)
-            setText(query)
-            typeface = Fonts.body(this@MainActivity)
-            compoundDrawablePadding = dp(10)
-            setCompoundDrawablesRelativeWithIntrinsicBounds(
-                getDrawable(R.drawable.ic_search)!!.mutate().also { it.setTint(C.MUTED); it.setBounds(0, 0, dp(20), dp(20)) },
-                null,
-                getDrawable(R.drawable.ic_tune)!!.mutate().also { it.setTint(C.MUTED); it.setBounds(0, 0, dp(20), dp(20)) },
-                null
-            )
-            addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) {
-                    query = s?.toString().orEmpty()
-                    recentBox?.let { fillRecent(it, 8, query) }
-                }
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            })
+        // Kolom cari (membuka tab Dokumen) — ukuran sentuh penuh 52dp.
+        val search = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 14, C.LINE, 1), null)
+            setPadding(dp(16), 0, dp(16), 0)
+            minimumHeight = dp(52)
+            isClickable = true; isFocusable = true
+            contentDescription = "Cari dokumen"
+            setOnClickListener { openSearch() }
+            add(icon(R.drawable.ic_search, C.MUTED, 20), w = dp(20), h = dp(20))
+            add(tv("Cari dokumen…", 15f, C.MUTED), w = 0, weight = 1f, side = 12)
         }
-        p.add(search, top = 14)
+        p.add(search, top = 16)
 
+        // Kartu Scan: aksi utama
         val h = hero()
-        val hrow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val hr = hbox()
         val hl = vbox()
-        hl.add(iconPill(R.drawable.ic_spark, "SMART SCAN", Color.WHITE, 0x33FFFFFF, 10f), w = WRAP)
-        hl.add(tv("Pindai Cepat\ndengan Kamera", 20f, Color.WHITE, true), top = 10)
-        hl.add(tv("Ubah kertas fisik jadi PDF: multi halaman, potong, dan filter hitam-putih.", 12f, 0xE6FFFFFF.toInt()), top = 6)
-        hl.add(heroBtn("Buka Kamera", R.drawable.ic_camera) { startScan() }, top = 14, w = WRAP)
-        hrow.add(hl, w = 0, weight = 1f)
-        hrow.add(iconBadge(R.drawable.ic_scan, Color.WHITE, 0x33FFFFFF, 20, 40), w = dp(84), h = dp(84), side = 8)
-        h.add(hrow)
+        hl.add(headingTv("Scan dokumen", 20f, C.ON_PRIMARY_C))
+        hl.add(tv("Foto kertas jadi PDF rapi. Sudut otomatis diluruskan.", 14f, C.ON_PRIMARY_C), top = 4)
+        hl.add(heroBtn("Mulai Scan", R.drawable.ic_camera) { startScan() }, top = 14, w = WRAP)
+        hr.add(hl, w = 0, weight = 1f)
+        hr.add(ScanFrameView(this), w = dp(92), h = dp(112), side = 6)
+        h.add(hr)
         p.add(h, top = 16)
 
-        p.add(sectionTitle("Format Dokumen", "4 Kategori"), top = 22)
-        fun count(pred: (List<String>) -> Boolean) = "${recent.count(pred)} file"
-        p.add(twoCols(
-            tile(R.drawable.ic_pdf, C.RED, C.RED_BG, "Buka PDF", "Buka file PDF dari File Manager HP",
-                count { it[2] == PDF }, C.MUTED, C.SURFACE2) { openPdf() },
-            tile(R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Buka Word", "Buka file Word (.docx) dari File Manager HP",
-                count { typeOf(it[2], it[1]).first == "DOCX" }, C.MUTED, C.SURFACE2) {
-                pickFile(arrayOf(DOCX, "application/msword", "text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")) { u ->
-                    remember(u)
-                    Files.open(this, u, Files.mimeOf(this, u))
-                }
-            }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Buka Excel", "Buka file Excel (.xlsx) dari File Manager HP",
-                count { typeOf(it[2], it[1]).first == "XLSX" }, C.MUTED, C.SURFACE2) {
-                pickFile(arrayOf(XLSX, "application/vnd.ms-excel", "text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { u ->
-                    remember(u)
-                    Files.open(this, u, Files.mimeOf(this, u))
-                }
-            },
-            tile(R.drawable.ic_folder, C.INDIGO, C.INDIGO_BG, "Semua Berkas", "Pilih berkas apa pun dari perangkat",
-                "${outFiles().size} total", C.MUTED, C.SURFACE2) { openAny() }
-        ), top = 12)
-
-        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun chip(res: Int, label: String, on: Boolean, f: () -> Unit) {
-            val fgc = if (on) Color.WHITE else C.MUTED
-            val c = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = shape(if (on) C.ACCENT else C.SURFACE2, 100)
-                setPadding(dp(14), dp(9), dp(16), dp(9))
-                isClickable = true
-                setOnClickListener { f() }
-            }
-            c.add(icon(res, fgc, 16), w = dp(16), h = dp(16))
-            c.add(tv(label, 13f, fgc, true), w = WRAP, side = 6)
-            chips.add(c, w = WRAP, side = 0).also { (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8) }
+        // Buka berkas: 4 pintasan sejajar
+        p.add(sectionTitle("Buka berkas"), top = 22)
+        fun quick(res: Int, fg: Int, bg: Int, label: String, desc: String, f: () -> Unit): View = vbox().apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(8), 0, dp(8))
+            tappable(desc) { f() }
+            background = rippleBg(14)
+            add(iconBadge(res, fg, bg, 16, 24), w = dp(56), h = dp(56))
+            add(tv(label, 13f, C.TEXT, true).apply { gravity = Gravity.CENTER; maxLines = 1 }, top = 6, w = WRAP)
         }
-        chip(R.drawable.ic_clock, "Semua Terkini", filterMode == 0) { filterMode = 0; render() }
-        chip(R.drawable.ic_star, "Ditandai", filterMode == 1) { filterMode = 1; render() }
-        chip(R.drawable.ic_lock, "Brankas Pribadi", false) { startActivity(Intent(this, VaultActivity::class.java)) }
-        p.add(android.widget.HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(chips)
-        }, top = 18)
+        p.add(evenRow(listOf(
+            quick(R.drawable.ic_pdf, C.PDF_FG, C.PDF_BG, "PDF", "Buka berkas PDF") { openPdf() },
+            quick(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "Word", "Buka dokumen Word") {
+                pickFile(arrayOf(DOCX, "application/msword", "text/plain")) { u -> remember(u); Files.open(this, u, Files.mimeOf(this, u)) }
+            },
+            quick(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Excel", "Buka spreadsheet Excel") {
+                pickFile(arrayOf(XLSX, "application/vnd.ms-excel", "text/csv")) { u -> remember(u); Files.open(this, u, Files.mimeOf(this, u)) }
+            },
+            quick(R.drawable.ic_folder, C.PRIMARY, C.PRIMARY_C, "Lainnya", "Buka berkas apa pun") { openAny() }
+        ), 4), top = 8)
 
-        p.add(sectionTitle("File Terakhir Dibuka", "Lihat Semua") { showRecent() }, top = 20)
+        // Buat baru
+        p.add(sectionTitle("Buat baru"), top = 18)
+        p.add(listCard(listOf(
+            createRow(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "Dokumen Word", "Halaman kosong, editor ala Word") {
+                startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_BLANK))
+            },
+            createRow(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Spreadsheet", "Tabel & rumus seperti Excel") {
+                startActivity(Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_BLANK))
+            },
+            createRow(R.drawable.ic_note, C.PRIMARY, C.PRIMARY_C, "Catatan jadi PDF", "Tulis teks, simpan sebagai PDF") { textFlow() },
+            createRow(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Gambar tanda tangan, tempel ke PDF") {
+                pickFile(arrayOf(PDF)) { signFlow(it) }
+            }
+        )), top = 8)
+
+        // Template siap pakai (gulir mendatar)
+        p.add(sectionTitle("Template siap pakai"), top = 18)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), dp(4), dp(6)) }
+        fun tpl(res: Int, fg: Int, bg: Int, title: String, sub: String, f: () -> Unit) {
+            val c = vbox(14).apply {
+                background = rippleCard(16)
+                tappable("Template $title. $sub") { f() }
+            }
+            c.add(iconBadge(res, fg, bg, 12, 22), w = dp(40), h = dp(40))
+            c.add(tv(title, 15f, C.TEXT, true).apply { maxLines = 2 }, top = 10)
+            c.add(tv(sub, 13f, C.MUTED).apply { maxLines = 2 }, top = 2)
+            row.add(c, w = dp(170), side = 0).also { (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(10) }
+        }
+        tpl(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "Surat Lamaran", "Format resmi HRD") {
+            startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_SURAT))
+        }
+        tpl(R.drawable.ic_user, C.DOC_FG, C.DOC_BG, "CV / Resume", "Riwayat hidup rapi") {
+            startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_CV))
+        }
+        tpl(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Kuitansi / Invoice", "Nota & pembayaran") {
+            startActivity(Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_INVOICE))
+        }
+        tpl(R.drawable.ic_sign, C.IMG_FG, C.IMG_BG, "TTD Transparan", "Foto TTD jadi PNG") { extractTransparentSignatureFlow() }
+        p.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipToPadding = false; addView(row) }, top = 8)
+
+        // Terakhir dibuka
+        p.add(sectionTitle("Terakhir dibuka", if (Recent.load(this).size > 3) "Lihat semua" else null) { docsMode = 0; select(1) }, top = 14)
         val box = vbox()
         recentBox = box
-        fillRecent(box, 8, query)
-        p.add(box, top = 12)
+        fillRecent(box, 3)
+        p.add(box, top = 8)
+    }
+
+    private fun createRow(res: Int, fg: Int, bg: Int, title: String, sub: String, f: () -> Unit): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(12), dp(12))
+            minimumHeight = dp(64)
+            tappable("$title. $sub") { f() }
+            add(iconBadge(res, fg, bg, 12, 22), w = dp(44), h = dp(44))
+            val c = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+            c.add(tv(title, 15f, C.TEXT, true))
+            c.add(tv(sub, 13f, C.MUTED), top = 1)
+            add(c, w = 0, weight = 1f, side = 12)
+            add(icon(R.drawable.ic_chev, C.MUTED, 20), w = dp(20), h = dp(20))
+        }
+
+    // ================= DOKUMEN =================
+    private fun buildDocs(p: LinearLayout) {
+        val search = field("Cari nama berkas…").apply {
+            isSingleLine = true
+            setText(query)
+            setSelection(text.length)
+            contentDescription = "Cari dokumen"
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            compoundDrawablePadding = dp(10)
+            setCompoundDrawablesRelative(getDrawable(R.drawable.ic_search)!!.mutate().also { it.setTint(C.MUTED); it.setBounds(0, 0, dp(20), dp(20)) }, null, null, null)
+        }
+        p.add(search, top = 4)
+        val listBox = vbox()
+        fun refresh() {
+            when (docsMode) {
+                0 -> fillRecent(listBox, 60, query)
+                1 -> fillRecent(listBox, 60, query, markedOnly = true)
+                else -> fillOutputs(listBox)
+            }
+        }
+        search.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) { query = s?.toString().orEmpty(); refresh() }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        })
+        p.add(segmented(listOf("Terkini", "Ditandai", "Hasil olahan"), docsMode) { docsMode = it; render() }, top = 12)
+        if (docsMode == 2) {
+            p.add(tv("Berkas yang dibuat aplikasi ini · folder sdcard/DepupOffice", 13f, C.MUTED), top = 10)
+        }
+        p.add(listBox, top = 12)
+        refresh()
+        if (focusSearch) {
+            focusSearch = false
+            search.post {
+                search.requestFocus()
+                (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.showSoftInput(search, 0)
+            }
+        }
     }
 
     private fun openAny() = pickFile(arrayOf("*/*")) { u -> remember(u); Files.open(this, u, Files.mimeOf(this, u)) }
@@ -850,170 +818,89 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildTools(p: LinearLayout) {
-        val head = vbox(18).apply {
-            background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFFE0ECFF.toInt(), 0xFFEEF2FF.toInt()))
-                .apply { cornerRadius = dp(20).toFloat() }
-        }
-        head.add(iconPill(R.drawable.ic_spark, "Serbaguna & Cepat", C.ACCENT, Color.WHITE, 11f), w = WRAP)
-        head.add(tv("Alat PDF Lengkap", 26f, C.TEXT, true), top = 10)
-        head.add(tv("Kelola, gabung, pisah, dan konversi format berkas secara instan.", 14f, C.MUTED), top = 6)
-        p.add(head)
+        p.add(tv("Pilih alat, lalu pilih berkasnya. Semua diproses di HP Anda.", 15f, C.MUTED), top = 4)
 
-        val dz = vbox(20).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            background = GradientDrawable().apply {
-                setColor(C.SURFACE); cornerRadius = dp(20).toFloat()
-                setStroke(dp(1), 0xFFC7D2FE.toInt(), dp(6).toFloat(), dp(4).toFloat())
-            }
-            isClickable = true
-            setOnClickListener { pickFile(arrayOf(PDF, "image/*")) { quickPick(it) } }
-        }
-        dz.add(iconBadge(R.drawable.ic_cloud, C.ACCENT, 0xFFDBE4FF.toInt(), 100, 30), w = dp(64), h = dp(64))
-        dz.add(tv("Pilih atau Tarik Berkas", 17f, C.TEXT, true).apply { gravity = Gravity.CENTER }, top = 12)
-        dz.add(tv("Ketuk untuk memilih berkas atau seret ke sini untuk memulai pengolahan instan", 12f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 4)
-        dz.add(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            listOf("PDF", "JPG", "PNG", "Maks 50MB").forEachIndexed { i, t ->
-                add(pill(t, C.MUTED, C.SURFACE2, 10f), w = WRAP).also { if (i > 0) (getChildAt(childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(8) }
-            }
-        }, top = 12)
-        p.add(dz, top = 16)
+        // Jalan pintas: pilih berkas dulu, alat menyesuaikan
+        p.add(actionRow(R.drawable.ic_upload, "Pilih berkas dulu", "PDF atau foto — lalu pilih tindakannya", C.PRIMARY, C.PRIMARY_C, shadow = false) {
+            pickFile(arrayOf(PDF, "image/*")) { quickPick(it) }
+        }, top = 14)
 
         Meta.lastJob(this)?.let { (title, name, path) ->
-            val c = card(14, 16)
-            val r1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            r1.add(View(this).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.TEAL) } }, w = dp(8), h = dp(8))
-            r1.add(tv("Proses Terakhir: $title", 13f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, w = 0, weight = 1f, side = 8)
-            r1.add(pill("✓ Selesai 100%", C.TEAL, C.TEAL_BG, 10f), w = WRAP)
-            c.add(r1)
-            c.add(progressBar(1f), top = 10)
-            val r2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            r2.add(icon(R.drawable.ic_pdf, C.MUTED, 18), w = dp(18), h = dp(18))
-            r2.add(tv(name, 12f, C.MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, w = 0, weight = 1f, side = 8)
-            r2.add(tv("Unduh ⤓", 12f, C.ACCENT, true).apply {
-                setPadding(dp(8), dp(6), dp(4), dp(6))
-                setOnClickListener {
+            val c = card(14, 16, shadow = false)
+            val r1 = hbox()
+            r1.add(iconBadge(R.drawable.ic_check_ok, C.SUCCESS, C.SUCCESS_C, 100, 18), w = dp(32), h = dp(32))
+            val col = vbox()
+            col.add(tv("Terakhir: $title", 14f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+            col.add(tv(name, 13f, C.MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, top = 1)
+            r1.add(col, w = 0, weight = 1f, side = 10)
+            r1.add(tv("Simpan ke Unduhan", 14f, C.PRIMARY, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(10), 0, dp(6), 0)
+                tappable {
                     val f = File(path)
-                    if (f.exists()) {
-                        work("Menyimpan…", { Files.saveToDownloads(this@MainActivity, Files.uriFor(this@MainActivity, f), name, Files.byName(name)) }) { r ->
-                            r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
-                        }
-                    }
+                    if (f.exists()) work("Menyimpan…", { Files.saveToDownloads(this@MainActivity, Files.uriFor(this@MainActivity, f), name, Files.byName(name)) }) { r ->
+                        r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+                    } else toast("Berkas sudah tidak ada")
                 }
             }, w = WRAP)
-            c.add(r2, top = 10)
-            p.add(c, top = 16)
+            c.add(r1)
+            p.add(c, top = 12)
         }
 
-        p.add(sectionTitle("Peralatan Utama PDF & Dokumen", "12 Alat Tersedia"), top = 22)
-        p.add(twoCols(
-            tile(R.drawable.ic_merge, C.INDIGO, C.INDIGO_BG, "Gabung PDF", "Satukan banyak dokumen PDF jadi satu, urutan bebas",
-                "Populer", C.ACCENT, C.BLUE_BG) { mergeFlow() },
-            tile(R.drawable.ic_cut, C.INDIGO, C.INDIGO_BG, "Pisah PDF", "Pilah halaman atau pisahkan berkas sesuai rentang",
-                chev = true) { pickFile(arrayOf(PDF)) { splitFlow(it) } }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_crop, C.ACCENT, C.BLUE_BG, "Susun & Hapus PDF", "Atur urutan, putar 90°, atau buang halaman PDF",
-                "Baru", C.ACCENT, C.BLUE_BG) { pickFile(arrayOf(PDF)) { organizePdfFlow(it) } },
-            tile(R.drawable.ic_image, C.INDIGO, C.INDIGO_BG, "Sedot Foto PDF", "Ekstrak seluruh gambar/foto dari PDF ke Galeri",
-                chev = true) { pickFile(arrayOf(PDF)) { extractImagesFlow(it) } }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_compress, C.TEAL, C.TEAL_BG, "Kompres PDF Target", "Kompres presisi < 200KB, < 500KB, < 1MB untuk CPNS",
-                "SSCASN", C.TEAL, C.TEAL_BG) { pickFile(arrayOf(PDF)) { compressFlow(it) } },
-            tile(R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Scan Struk & Nota", "Pindai nota/struk belanja, ekstrak total ke Excel",
-                chev = true) { startScan() }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_spark, C.INDIGO, C.INDIGO_BG, "Konversi Massal", "Konversi belasan foto sekaligus jadi PDF terpisah",
-                "Batch", C.INDIGO, C.INDIGO_BG) { batchConvertFlow() },
-            tile(R.drawable.ic_image, C.TEAL, C.TEAL_BG, "Kompres Foto Galeri", "Kecilkan ukuran foto galeri sebelum dikirim WA/Email",
-                chev = true) { compressGalleryFlow() }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_spark, C.TEAL, C.TEAL_BG, "Pindai & Buat QR Code", "Pindai QR verifikasi atau buat QR kustom",
-                "Fitur Baru", C.TEAL, C.TEAL_BG) { showQrDialog() },
-            tile(R.drawable.ic_lock, C.INDIGO, C.INDIGO_BG, "Kunci & Enkripsi", "Masukkan dokumen rahasia ke Brankas AES-256",
-                chev = true) { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } }
-        ), top = 12)
-
-        p.add(sectionTitle("Pengaturan Format Dokumen", "3 Format"), top = 22)
-        p.add(twoCols(
-            tile(R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Pengaturan Word", "Ukuran A4, margin & spasi",
-                chev = true) { showWordFormatSettingsSheet() },
-            tile(R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Pengaturan Excel", "Garis kisi & mata uang",
-                chev = true) { showExcelFormatSettingsSheet() }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_pdf, C.RED, C.RED_BG, "Pengaturan PDF", "Preset zoom & tema reader",
-                chev = true) { showPdfFormatSettingsSheet() },
-            tile(R.drawable.ic_lock, C.INDIGO, C.INDIGO_BG, "Brankas Vault", "AES-256 terenkripsi",
-                chev = true) { startActivity(Intent(this, VaultActivity::class.java)) }
-        ), top = 12)
-
-        p.add(sectionTitle("Informasi & Bantuan", "Play Store"), top = 22)
-        p.add(twoCols(
-            tile(R.drawable.ic_shield, C.ACCENT, C.BLUE_BG, "Privacy Policy", "Kebijakan privasi & perlindungan data",
-                chev = true) { startActivity(Intent(this, PrivacyPolicyActivity::class.java)) },
-            tile(R.drawable.ic_heart, C.RED, C.RED_BG, "Dukung Developer", "Donasi sukarela via Saweria",
-                chev = true) {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://saweria.co/depupdonate")))
-                } catch (_: Exception) { toast("Tidak dapat membuka browser") }
+        fun section(title: String, vararg tiles: View) {
+            p.add(sectionTitle(title), top = 22)
+            tiles.toList().chunked(2).forEachIndexed { i, pair ->
+                p.add(if (pair.size == 2) twoCols(pair[0], pair[1]) else twoCols(pair[0], View(this)), top = if (i == 0) 8 else 12)
             }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_spark, C.INDIGO, C.INDIGO_BG, "Kontak Developer", "Hubungi depupdev@gmail.com",
-                chev = true) {
-                try {
-                    startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:depupdev@gmail.com")))
-                } catch (_: Exception) { toast("Email client tidak tersedia") }
-            },
-            tile(R.drawable.ic_doc, C.TEAL, C.TEAL_BG, "Tentang Aplikasi", "Depup Office • 100% Offline",
-                chev = true) { startActivity(Intent(this, PrivacyPolicyActivity::class.java)) }
-        ), top = 12)
-
-        val tip = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-            background = shape(0xFFE4EAFB.toInt(), 16)
         }
-        tip.add(iconBadge(R.drawable.ic_bulb, C.ACCENT, 0xFFD3DEF7.toInt(), 100, 22), w = dp(40), h = dp(40))
-        val tc = vbox()
-        tc.add(tv("Tips Efisiensi", 15f, C.TEXT, true))
-        tc.add(tv("Semua proses berjalan secara lokal dan aman di perangkat tanpa mengunggah isi rahasia ke server luar.", 12f, C.MUTED), top = 2)
-        tip.add(tc, w = 0, weight = 1f, side = 12)
-        p.add(tip, top = 20)
+        section("Kelola PDF",
+            tile(R.drawable.ic_merge, C.PDF_FG, C.PDF_BG, "Gabung PDF", "Satukan beberapa PDF, urutan bebas") { mergeFlow() },
+            tile(R.drawable.ic_cut, C.PDF_FG, C.PDF_BG, "Pisah PDF", "Ambil halaman tertentu") { pickFile(arrayOf(PDF)) { splitFlow(it) } },
+            tile(R.drawable.ic_crop, C.PDF_FG, C.PDF_BG, "Susun halaman", "Urutkan, putar, atau hapus halaman") { pickFile(arrayOf(PDF)) { organizePdfFlow(it) } },
+            tile(R.drawable.ic_compress, C.PDF_FG, C.PDF_BG, "Kompres PDF", "Target < 200 KB / 500 KB / 1 MB", "CPNS", C.PDF_FG, C.PDF_BG) { pickFile(arrayOf(PDF)) { compressFlow(it) } },
+            tile(R.drawable.ic_image, C.PDF_FG, C.PDF_BG, "PDF ke JPG", "Tiap halaman jadi gambar") { pickFile(arrayOf(PDF)) { pdfToJpgFlow(it) } },
+            tile(R.drawable.ic_img_add, C.PDF_FG, C.PDF_BG, "Ambil gambar", "Simpan foto di dalam PDF") { pickFile(arrayOf(PDF)) { extractImagesFlow(it) } }
+        )
+        section("Gambar & foto",
+            tile(R.drawable.ic_pdf, C.IMG_FG, C.IMG_BG, "Foto ke PDF", "Gabung foto jadi satu PDF") { jpgToPdfFlow() },
+            tile(R.drawable.ic_grid, C.IMG_FG, C.IMG_BG, "Konversi massal", "Banyak foto jadi PDF terpisah") { batchConvertFlow() },
+            tile(R.drawable.ic_image, C.IMG_FG, C.IMG_BG, "Kompres foto", "Kecilkan sebelum kirim WA/email") { compressGalleryFlow() },
+            tile(R.drawable.ic_sign, C.IMG_FG, C.IMG_BG, "TTD transparan", "Foto tanda tangan jadi PNG") { extractTransparentSignatureFlow() }
+        )
+        section("Tanda tangan & keamanan",
+            tile(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Gambar lalu tempel ke halaman") { pickFile(arrayOf(PDF)) { signFlow(it) } },
+            tile(R.drawable.ic_lock, C.PRIMARY, C.PRIMARY_C, "Kunci berkas", "Enkripsi ke Brankas AES-256") { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } },
+            tile(R.drawable.ic_qr, C.PRIMARY, C.PRIMARY_C, "QR Code", "Pindai atau buat QR") { showQrDialog() },
+            tile(R.drawable.ic_scan, C.XLS_FG, C.XLS_BG, "Scan struk", "Total belanja ke Excel") { startScan() }
+        )
+        section("Bagikan & ekspor",
+            tile(R.drawable.ic_chat, C.SUCCESS, C.SUCCESS_C, "Kirim ke WhatsApp", "Pilih berkas lalu kirim") {
+                pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), true) }
+            },
+            tile(R.drawable.ic_share, C.PRIMARY, C.PRIMARY_C, "Bagikan", "Drive, email, aplikasi lain") {
+                pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), false) }
+            },
+            tile(R.drawable.ic_download, C.PRIMARY, C.PRIMARY_C, "Simpan ke HP", "Salin ke folder Unduhan") { exportFlow() },
+            tile(R.drawable.ic_print, C.PRIMARY, C.PRIMARY_C, "Cetak", "Printer atau simpan PDF") {
+                pickFile(arrayOf(PDF)) { u -> Files.print(this, u, Files.nameOf(this, u)) }
+            }
+        )
     }
 
-    /** Baris pilihan pengaturan: label, indeks terpilih, dan aksi saat dipilih. */
+    /** Baris pilihan pengaturan: tiap opsi 48dp, status terpilih diumumkan pembaca layar. */
     private fun settingsChips(
         row: LinearLayout,
         labels: List<String>,
         selectedIndex: Int,
-        color: Int,
+        @Suppress("UNUSED_PARAMETER") color: Int,
         onPick: (Int) -> Unit
     ) {
         row.removeAllViews()
-        labels.forEachIndexed { i, label ->
-            val sel = i == selectedIndex
-            val v = tv(label, 12f, if (sel) Color.WHITE else C.TEXT, true).apply {
-                gravity = Gravity.CENTER
-                background = shape(if (sel) color else C.SURFACE2, 10)
-                setPadding(dp(6), dp(10), dp(6), dp(10))
-                isClickable = true
-                setOnClickListener { onPick(i) }
-            }
-            row.add(v, w = 0, h = dp(40), weight = 1f).also {
-                if (i > 0) (v.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
-            }
-        }
+        row.addView(segmented(labels, selectedIndex, onPick), LinearLayout.LayoutParams(MATCH, WRAP))
     }
 
     private fun showWordFormatSettingsSheet() = sheet { body, dismiss ->
-        sheetHeader(body, R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Pengaturan Format Word", "Konfigurasi standar dokumen .docx", dismiss)
+        sheetHeader(body, R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "Pengaturan Format Word", "Konfigurasi standar dokumen .docx", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
         var size = DocSettings.pageSize(this)
         var margin = DocSettings.marginMode(this)
@@ -1063,7 +950,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showExcelFormatSettingsSheet() = sheet { body, dismiss ->
-        sheetHeader(body, R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Pengaturan Format Excel", "Konfigurasi standar spreadsheet", dismiss)
+        sheetHeader(body, R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Pengaturan Format Excel", "Konfigurasi standar spreadsheet", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
         var grid = SheetSettings.showGridlines(this)
         var currency = SheetSettings.currencySymbol(this)
@@ -1104,7 +991,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPdfFormatSettingsSheet() = sheet { body, dismiss ->
-        sheetHeader(body, R.drawable.ic_pdf, C.RED, C.RED_BG, "Pengaturan Format PDF", "Konfigurasi standar pembaca PDF", dismiss)
+        sheetHeader(body, R.drawable.ic_pdf, C.PDF_FG, C.PDF_BG, "Pengaturan Format PDF", "Konfigurasi standar pembaca PDF", dismiss)
         val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
         var zoom = PdfSettings.defaultZoom(this).coerceIn(1f, 2.5f)
         var theme = PdfSettings.readerTheme(this)
@@ -1116,7 +1003,7 @@ class MainActivity : AppCompatActivity() {
         val smoothRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
         fun option(label: String, selected: Boolean, color: Int, onClick: () -> Unit): TextView =
-            tv(label, 12f, if (selected) Color.WHITE else C.TEXT, true).apply {
+            tv(label, 12f, if (selected) C.ON_PRIMARY else C.TEXT, true).apply {
                 gravity = Gravity.CENTER
                 background = shape(if (selected) color else C.SURFACE2, 10)
                 setPadding(dp(6), dp(10), dp(6), dp(10))
@@ -1207,462 +1094,181 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ================= TAB BUAT =================
     private fun outFiles(): List<File> =
         (Files.outDir(this).listFiles()?.filter { it.isFile } ?: emptyList()).sortedByDescending { it.lastModified() }
 
-    private fun outRow(f: File): View {
+    private fun catOf(f: File) = typeOf(Files.byName(f.name), f.name).first
+
+    /** Satu baris hasil olahan (buka dengan ketuk; menu ⋮ untuk edit, ubah nama, hapus, bagikan). */
+    private fun outRow(f: File, onChanged: () -> Unit = { render() }): View {
         val mime = Files.byName(f.name)
         val (label, fg, bg) = typeOf(mime, f.name)
-        val r = card(12, 16)
-        r.orientation = LinearLayout.HORIZONTAL
-        r.gravity = Gravity.CENTER_VERTICAL
-        r.add(tv(label, 11f, fg, true).apply { gravity = Gravity.CENTER; background = shape(bg, 12) }, w = dp(44), h = dp(44))
-        val col = vbox()
-        col.add(tv(f.name, 14f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
-        col.add(tv("${Files.fmtSize(f.length())} • ${Files.relTime(f.lastModified())}", 12f, C.MUTED), top = 2)
+        val uri = Files.uriFor(this, f)
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(4), dp(10))
+            minimumHeight = dp(68)
+        }
+        val meta = "${Files.fmtSize(f.length())} • ${Files.relTime(f.lastModified())}"
+        r.tappable("${f.name}, ${readableType(label)}, $meta. Ketuk untuk membuka") { Files.open(this, uri, mime) }
+        r.add(typeBadge(label, fg, bg), w = dp(44), h = dp(44))
+        val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+        col.add(tv(f.name, 15f, C.TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+        col.add(tv(meta, 13f, C.MUTED), top = 2)
         r.add(col, w = 0, weight = 1f, side = 12)
-        r.add(tv("Buka  ›", 13f, C.ACCENT, true).apply {
-            background = shape(C.BLUE_BG, 10)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setOnClickListener { Files.open(this@MainActivity, Files.uriFor(this@MainActivity, f), mime) }
-        }, w = WRAP, side = 6)
+        r.add(iconBtn(R.drawable.ic_more, "Opsi lain untuk ${f.name}", C.MUTED, 22) { v ->
+            val pm = android.widget.PopupMenu(this, v)
+            pm.menu.add(0, 1, 0, "Buka")
+            pm.menu.add(0, 2, 1, "Edit dokumen")
+            pm.menu.add(0, 3, 2, "Ubah nama")
+            pm.menu.add(0, 5, 3, "Bagikan")
+            pm.menu.add(0, 4, 4, "Hapus berkas")
+            pm.setOnMenuItemClickListener { m ->
+                when (m.itemId) {
+                    1 -> Files.open(this, uri, mime)
+                    2 -> editDoc(uri.toString(), f.name, mime)
+                    3 -> showRenameFileDialog(uri.toString(), f.name)
+                    4 -> confirm("Hapus berkas?", "“${f.name}” akan dihapus dari HP dan tidak bisa dikembalikan.", "Hapus") {
+                        f.delete(); toast("Berkas dihapus"); onChanged()
+                    }
+                    else -> try { Files.share(this, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+                }
+                true
+            }
+            pm.show()
+        }, w = dp(48), h = dp(48))
         return r
     }
 
-    private fun hint(res: Int, text: String): View = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        add(icon(res, C.TEAL, 14), w = dp(14), h = dp(14))
-        add(tv(text, 11f, C.MUTED), w = WRAP, side = 4)
+    /** Daftar hasil olahan + chip kategori (dipakai tab Dokumen). */
+    private fun fillOutputs(box: LinearLayout) {
+        box.removeAllViews()
+        val all = outFiles()
+        val cats = listOf("Semua" to "", "PDF" to "PDF", "Word" to "DOCX", "Excel" to "XLSX", "Gambar" to "IMG")
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cats.forEach { (name, code) ->
+            val n = if (code.isEmpty()) all.size else all.count { catOf(it) == code }
+            chips.add(filterChip("$name ($n)", docsCat == name) { docsCat = name; fillOutputs(box) }, w = WRAP, side = 0)
+                .also { (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8) }
+        }
+        box.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+        val code = cats.firstOrNull { it.first == docsCat }?.second.orEmpty()
+        val list = all.filter { code.isEmpty() || catOf(it) == code }
+            .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+        if (list.isEmpty()) box.add(emptyState(R.drawable.ic_box, "Belum ada hasil", "Hasil scan, konversi, dan dokumen yang Anda simpan akan muncul di sini."), top = 12)
+        else box.add(listCard(list.take(80).map { f -> outRow(f) { fillOutputs(box) } }), top = 12)
     }
 
-    private fun buildBuat(p: LinearLayout) {
-        p.add(iconPill(R.drawable.ic_plus, "STUDIO KREASI PDF", C.ACCENT, C.BLUE_BG, 10f), w = WRAP)
-        p.add(tv("Buat Dokumen Baru", 26f, C.TEXT, true), top = 10)
-        p.add(tv("Pindai fisik, tulis langsung, atau bubuhkan tanda tangan resmi.", 14f, C.MUTED), top = 6)
+    private fun showOutputs(@Suppress("UNUSED_PARAMETER") list: List<File>) { docsMode = 2; select(1) }
 
-        // --- Scan kamera ---
-        val h = hero()
-        val hr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        hr.add(iconBadge(R.drawable.ic_camera, Color.WHITE, 0x33FFFFFF, 14, 24), w = dp(48), h = dp(48))
+    // ================= SAYA =================
+    private fun buildMe(p: LinearLayout) {
+        // Kepala
+        val head = hbox()
+        head.add(iconBadge(R.drawable.ic_logo, C.PRIMARY, C.PRIMARY_C, 16, 30).apply {
+            (getChildAt(0) as ImageView).clearColorFilter()
+        }, w = dp(56), h = dp(56))
         val hc = vbox()
-        hc.add(pill("PALING POPULER", C.TEAL, 0xFFCCFBF1.toInt(), 10f), w = WRAP)
-        hc.add(tv("Scan Kamera jadi PDF", 20f, Color.WHITE, true), top = 4)
-        hr.add(hc, w = 0, weight = 1f, side = 12)
-        h.add(hr)
-        h.add(ScanFrameView(this), top = 16, h = dp(130))
-        h.add(pillRow(
-            iconPill(R.drawable.ic_merge, "Multi-halaman", Color.WHITE, 0x33FFFFFF, 11f),
-            iconPill(R.drawable.ic_crop, "Potong manual", Color.WHITE, 0x33FFFFFF, 11f)
-        ), top = 14)
-        h.add(pillRow(iconPill(R.drawable.ic_contrast, "Filter B&W & Warna", Color.WHITE, 0x33FFFFFF, 11f)), top = 8)
-        h.add(heroBtn("Buka Kamera Pindai", R.drawable.ic_scan) { startScan() }, top = 16)
-        p.add(h, top = 18)
+        hc.add(headingTv("Depup Office", 20f))
+        hc.add(iconPill(R.drawable.ic_verified, "100% offline · berkas tidak diunggah", C.SUCCESS, C.SUCCESS_C), top = 4, w = WRAP)
+        head.add(hc, w = 0, weight = 1f, side = 12)
+        p.add(head, top = 4)
 
-        // --- Buat Word & Excel ---
-        p.add(twoCols(
-            tile(R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Buat Word", "Editor .docx interaktif",
-                "A4 & Format", C.ACCENT, C.BLUE_BG) {
-                startActivity(Intent(this, DocEditorActivity::class.java)
-                    .putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_BLANK))
-            },
-            tile(R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Buat Excel", "Spreadsheet & Rumus",
-                "Rumus =SUM", C.TEAL, C.TEAL_BG) {
-                startActivity(Intent(this, SheetEditorActivity::class.java)
-                    .putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_BLANK))
-            }
-        ), top = 16)
-
-        // --- Template Dokumen Siap Pakai ---
-        p.add(sectionTitle("Template Dokumen Siap Pakai", "4 Template"), top = 20)
-        p.add(twoCols(
-            tile(R.drawable.ic_doc, C.ACCENT, C.BLUE_BG, "Surat Lamaran Kerja", "Template resmi HRD, siap edit & simpan .docx",
-                "Siap Kerja", C.ACCENT, C.BLUE_BG) {
-                startActivity(Intent(this, DocEditorActivity::class.java)
-                    .putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_SURAT))
-            },
-            tile(R.drawable.ic_doc, C.INDIGO, C.INDIGO_BG, "CV / Resume Profesional", "Template Curriculum Vitae terstruktur",
-                "Karir", C.INDIGO, C.INDIGO_BG) {
-                startActivity(Intent(this, DocEditorActivity::class.java)
-                    .putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_CV))
-            }
-        ), top = 12)
-        p.add(twoCols(
-            tile(R.drawable.ic_sheet, C.TEAL, C.TEAL_BG, "Kuintansi / Invoice", "Format pembayaran resmi & nota penjualan",
-                "Keuangan", C.TEAL, C.TEAL_BG) {
-                startActivity(Intent(this, SheetEditorActivity::class.java)
-                    .putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_INVOICE))
-            },
-            tile(R.drawable.ic_sign, C.ACCENT, C.BLUE_BG, "Ekstrak TTD Transparan", "Ubah foto TTD basah kertas jadi PNG transparan",
-                "Fitur Baru", C.ACCENT, C.BLUE_BG) {
-                extractTransparentSignatureFlow()
-            }
-        ), top = 12)
-
-        // --- Tulis teks ---
-        val t = card(16, 16)
-        val tr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        tr.add(iconBadge(R.drawable.ic_note, C.INDIGO, C.INDIGO_BG, 14, 24), w = dp(48), h = dp(48))
-        val tc = vbox()
-        tc.add(tv("Tulis Teks jadi PDF", 17f, C.TEXT, true))
-        tc.add(tv("Editor memo cepat, hasil PDF rapi", 12f, C.MUTED), top = 2)
-        tr.add(tc, w = 0, weight = 1f, side = 12)
-        t.add(tr)
-        t.add(evenRow(listOf(
-            miniTile(R.drawable.ic_bulb, "Catatan Instan"),
-            miniTile(R.drawable.ic_doc, "Ukuran A4 Rapi"),
-            miniTile(R.drawable.ic_sheet, "Multi-halaman")
-        )), top = 14)
-        t.add(btn("Buat Dokumen Teks", true, C.INDIGO, R.drawable.ic_note) { textFlow() }, top = 14)
-        p.add(t, top = 16)
-
-        // --- Tanda tangan ---
-        val s = card(16, 16)
-        val sr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        sr.add(iconBadge(R.drawable.ic_sign, C.TEAL, C.TEAL_BG, 14, 24), w = dp(48), h = dp(48))
-        val sc = vbox()
-        sc.add(tv("Tanda Tangan Digital", 17f, C.TEXT, true))
-        sc.add(tv("Gambar tanda tangan, tempel ke PDF", 12f, C.MUTED), top = 2)
-        sr.add(sc, w = 0, weight = 1f, side = 12)
-        sr.add(pill("Offline", C.TEAL, C.TEAL_BG, 10f), w = WRAP)
-        s.add(sr)
-        val pv = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = shape(0xFFF0FDFA.toInt(), 14)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-        }
-        val pc = vbox()
-        pc.add(tv("Pratinjau Goresan Pena", 10f, C.MUTED))
-        pc.add(tv("Tanda Tangan Anda", 22f, 0xFF0F5C4E.toInt()).apply { typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC) }, top = 4)
-        pv.add(pc, w = 0, weight = 1f)
-        pv.add(iconBadge(R.drawable.ic_check_ok, C.TEAL, Color.WHITE, 100, 22), w = dp(38), h = dp(38))
-        s.add(pv, top = 14)
-        s.add(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            add(hint(R.drawable.ic_sign, "Gambar di layar"), w = 0, weight = 1f)
-            add(hint(R.drawable.ic_doc, "Pilih halaman"), w = 0, weight = 1f)
-            add(hint(R.drawable.ic_full, "Kiri/Tengah/Kanan"), w = 0, weight = 1.2f)
-        }, top = 12)
-        s.add(btn("Bubuhkan Tanda Tangan", true, C.TEAL, R.drawable.ic_sign) { pickFile(arrayOf(PDF)) { signFlow(it) } }, top = 14)
-        p.add(s, top = 16)
-
-        // --- Hasil terakhir ---
-        val outs = outFiles()
-        if (outs.isNotEmpty()) {
-            p.add(sectionTitle("Hasil Terakhir", "Lihat Semua (${outs.size})") { showOutputs(outs) }, top = 22)
-            outs.take(2).forEachIndexed { i, f -> p.add(outRow(f), top = if (i == 0) 12 else 10) }
-        }
-
-        val tip = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = shape(0xFFEEF2FF.toInt(), 16)
-        }
-        tip.add(iconBadge(R.drawable.ic_bulb, C.TEAL, 0xFFCCFBF1.toInt(), 100, 20), w = dp(36), h = dp(36))
-        tip.add(tv("Tips Pencahayaan: letakkan berkas di atas latar kontras dan cahaya merata agar hasil potong lebih tajam.", 12f, C.MUTED), w = 0, weight = 1f, side = 12)
-        p.add(tip, top = 20)
-    }
-
-    private fun showFolderExplorerSheet(initialCategory: String = "SEMUA") = sheet { body, dismiss ->
-        sheetHeader(body, R.drawable.ic_folder, C.ACCENT, C.BLUE_BG, "Folder DepupOffice", "sdcard/DepupOffice • ${Files.fmtSize(dirSize(Files.outDir(this)))}", dismiss)
-        val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(16)) }
-
-        var activeFilter = initialCategory
-        val allFiles = outFiles()
-
-        val chipsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val scrollChips = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chipsRow) }
-
-        val listBox = vbox()
-
-        fun filterFiles(): List<File> = when (activeFilter) {
-            "PDF" -> allFiles.filter { typeOf(Files.byName(it.name), it.name).first == "PDF" }
-            "Word" -> allFiles.filter { typeOf(Files.byName(it.name), it.name).first == "DOCX" }
-            "Excel" -> allFiles.filter { typeOf(Files.byName(it.name), it.name).first == "XLSX" }
-            "Gambar" -> allFiles.filter { typeOf(Files.byName(it.name), it.name).first == "IMG" }
-            else -> allFiles
-        }
-
-        fun renderFileList() {
-            listBox.removeAllViews()
-            val filtered = filterFiles()
-
-            chipsRow.removeAllViews()
-            val cats = listOf("SEMUA", "PDF", "Word", "Excel", "Gambar")
-            cats.forEach { cat ->
-                val count = when (cat) {
-                    "PDF" -> allFiles.count { typeOf(Files.byName(it.name), it.name).first == "PDF" }
-                    "Word" -> allFiles.count { typeOf(Files.byName(it.name), it.name).first == "DOCX" }
-                    "Excel" -> allFiles.count { typeOf(Files.byName(it.name), it.name).first == "XLSX" }
-                    "Gambar" -> allFiles.count { typeOf(Files.byName(it.name), it.name).first == "IMG" }
-                    else -> allFiles.size
-                }
-                val isSel = cat.equals(activeFilter, ignoreCase = true)
-                val chip = tv("$cat ($count)", 12f, if (isSel) Color.WHITE else C.TEXT, true).apply {
-                    background = shape(if (isSel) C.ACCENT else C.SURFACE2, 100)
-                    setPadding(dp(12), dp(8), dp(12), dp(8))
-                    isClickable = true
-                    setOnClickListener { activeFilter = cat; renderFileList() }
-                }
-                chipsRow.add(chip, w = WRAP).also { (chip.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(6) }
-            }
-
-            if (filtered.isEmpty()) {
-                listBox.add(card(16, 16).apply {
-                    add(tv("Belum ada berkas $activeFilter di folder sdcard/DepupOffice.", 13f, C.MUTED))
-                }, top = 12)
-            } else {
-                filtered.forEachIndexed { idx, f ->
-                    val mime = Files.byName(f.name)
-                    val (label, fg, bg) = typeOf(mime, f.name)
-                    val uri = Files.uriFor(this@MainActivity, f)
-                    val r = card(12, 16)
-                    r.orientation = LinearLayout.HORIZONTAL
-                    r.gravity = Gravity.CENTER_VERTICAL
-                    r.add(tv(label, 11f, fg, true).apply { gravity = Gravity.CENTER; background = shape(bg, 12) }, w = dp(44), h = dp(44))
-                    val col = vbox()
-                    col.add(tv(f.name, 14f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
-                    col.add(tv("${Files.fmtSize(f.length())} • ${Files.relTime(f.lastModified())}", 12f, C.MUTED), top = 2)
-                    r.add(col, w = 0, weight = 1f, side = 10)
-
-                    val more = icon(R.drawable.ic_more, C.MUTED, 22).apply {
-                        setPadding(dp(6), dp(6), dp(6), dp(6))
-                        setOnClickListener { v ->
-                            val pm = android.widget.PopupMenu(this@MainActivity, v)
-                            pm.menu.add(0, 1, 0, "Buka")
-                            pm.menu.add(0, 2, 1, "Edit Dokumen")
-                            pm.menu.add(0, 3, 2, "Ubah Nama (Rename)")
-                            pm.menu.add(0, 4, 3, "Hapus File")
-                            pm.menu.add(0, 5, 4, "Bagikan")
-                            pm.setOnMenuItemClickListener { m ->
-                                when (m.itemId) {
-                                    1 -> { dismiss(); Files.open(this@MainActivity, uri, mime) }
-                                    2 -> { dismiss(); editDoc(uri.toString(), f.name, mime) }
-                                    3 -> { dismiss(); showRenameFileDialog(uri.toString(), f.name) }
-                                    4 -> {
-                                        confirm("Hapus Berkas", "Hapus '${f.name}' dari perangkat?", "Hapus") {
-                                            f.delete()
-                                            renderFileList()
-                                            toast("Berkas dihapus")
-                                        }
-                                    }
-                                    else -> try { Files.share(this@MainActivity, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
-                                }
-                                true
-                            }
-                            pm.show()
-                        }
-                    }
-                    r.add(more, w = dp(36), h = dp(36))
-                    listBox.add(r, top = if (idx == 0) 12 else 8)
-                }
-            }
-        }
-
-        pad.add(scrollChips)
-        pad.add(listBox)
-        body.add(pad)
-        renderFileList()
-    }
-
-    private fun showOutputs(list: List<File>) {
-        AlertDialog.Builder(this).setTitle("Hasil olahan")
-            .setItems(list.map { it.name }.toTypedArray()) { _, i ->
-                val f = list[i]
-                Files.open(this, Files.uriFor(this, f), Files.byName(f.name))
-            }.setNegativeButton("Tutup", null).show()
-    }
-
-    // ================= TAB SIMPAN =================
-    private fun buildSimpan(p: LinearLayout) {
-        heading(null, "Penyimpanan &\nKeamanan", parent = p)
-        p.add(iconPill(R.drawable.ic_verified, "Offline · File tidak pernah diunggah", C.TEAL, C.TEAL_BG, 11f), top = 8, w = WRAP)
-
+        // Brankas
         val vaultFiles = Vault.list(this)
-        val h = hero()
-        val hr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        hr.add(iconBadge(R.drawable.ic_lock, Color.WHITE, 0x33FFFFFF, 14, 24), w = dp(48), h = dp(48))
-        val hc = vbox()
-        hc.add(tv("Brankas Terenkripsi", 18f, Color.WHITE, true))
-        hc.add(tv("AES-256 · kunci di Android Keystore", 12f, 0xCCFFFFFF.toInt()), top = 2)
-        hr.add(hc, w = 0, weight = 1f, side = 12)
-        hr.add(pill("${vaultFiles.size} berkas", Color.WHITE, 0x33FFFFFF, 11f), w = WRAP)
-        h.add(hr)
-        h.add(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = shape(0x26FFFFFF, 12)
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            add(icon(R.drawable.ic_shield, 0xFFBAE6FD.toInt(), 20), w = dp(20), h = dp(20))
-            add(tv("Simpan KTP, ijazah, sertifikat & dokumen finansial. Dikunci PIN dan tanpa fitur reset.", 12f, 0xE6FFFFFF.toInt()), w = 0, weight = 1f, side = 10)
-        }, top = 14)
-        h.add(heroBtn("Buka Brankas Vault", R.drawable.ic_lock) { startActivity(Intent(this, VaultActivity::class.java)) }, top = 14)
-        p.add(h, top = 16)
+        p.add(sectionTitle("Keamanan"), top = 22)
+        p.add(listCard(listOf(
+            createRow(R.drawable.ic_lock, C.PRIMARY, C.PRIMARY_C, "Brankas pribadi",
+                "${vaultFiles.size} berkas · terkunci PIN/sidik jari, AES-256") { startActivity(Intent(this, VaultActivity::class.java)) },
+            createRow(R.drawable.ic_shield, C.SUCCESS, C.SUCCESS_C, "Privasi & tentang aplikasi", "Bagaimana data Anda dijaga") {
+                startActivity(Intent(this, PrivacyPolicyActivity::class.java))
+            }
+        )), top = 8)
 
+        // Penyimpanan
         val vaultSize = dirSize(Vault.dir(this))
         val outSize = dirSize(Files.outDir(this))
         val (free, total) = Files.deviceStorage()
-        val st = card(16, 16)
-        val sh = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        sh.add(icon(R.drawable.ic_tune, C.ACCENT, 20), w = dp(20), h = dp(20))
-        sh.add(tv("Penyimpanan Terpakai", 16f, C.TEXT, true), w = 0, weight = 1f, side = 8)
-        sh.add(tv(Files.fmtSize(vaultSize + outSize), 14f, C.ACCENT, true), w = WRAP)
+        p.add(sectionTitle("Penyimpanan"), top = 22)
+        val st = card(16, 16, shadow = false)
+        val sh = hbox()
+        sh.add(tv("Dipakai Depup Office", 15f, C.TEXT, true), w = 0, weight = 1f)
+        sh.add(tv(Files.fmtSize(vaultSize + outSize), 15f, C.PRIMARY, true), w = WRAP)
         st.add(sh)
-        st.add(stackedBar(listOf(outSize to C.ACCENT, vaultSize to C.INDIGO)), top = 12)
-        st.add(tv("Tersisa ${Files.fmtGb(free)} dari ${Files.fmtGb(total)} di perangkat", 12f, C.MUTED).apply { gravity = Gravity.END }, top = 6)
-        fun stat(label: String, v: Long, col: Int) = vbox(12).apply {
-            background = shape(C.SURFACE2, 12)
-            add(tv("● $label", 11f, col, true))
-            add(tv(Files.fmtSize(v), 15f, C.TEXT, true), top = 4)
+        st.add(stackedBar(listOf(outSize to C.PRIMARY, vaultSize to C.IMG_FG)), top = 12)
+        fun legend(color: Int, label: String, v: String) = hbox().apply {
+            add(View(context).apply { background = shape(color, 100) }, w = dp(10), h = dp(10))
+            add(tv(label, 14f, C.TEXT), w = 0, weight = 1f, side = 8)
+            add(tv(v, 14f, C.MUTED), w = WRAP)
+            minimumHeight = dp(32)
         }
-        st.add(evenRow(listOf(
-            stat("Hasil olahan", outSize, C.ACCENT),
-            stat("Vault", vaultSize, C.INDIGO),
-            stat("Sisa di HP", free, C.TEAL)
-        ), 6), top = 12)
-        p.add(st, top = 16)
+        st.add(legend(C.PRIMARY, "Hasil olahan (${outFiles().size} berkas)", Files.fmtSize(outSize)), top = 10)
+        st.add(legend(C.IMG_FG, "Brankas", Files.fmtSize(vaultSize)))
+        st.add(legend(C.LINE_STRONG, "Sisa ruang HP", "${Files.fmtGb(free)} dari ${Files.fmtGb(total)}"))
+        st.add(btn("Lihat hasil olahan", false, C.ACCENT, R.drawable.ic_folder) { docsMode = 2; docsCat = "Semua"; select(1) }, top = 10)
+        p.add(st, top = 8)
 
-        val folderCard = card(16, 16)
-        val fRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        fRow.add(iconBadge(R.drawable.ic_folder, C.ACCENT, C.BLUE_BG, 100, 24), w = dp(48), h = dp(48))
-        val fCol = vbox()
-        fCol.add(tv("Manajer Folder DepupOffice", 17f, C.TEXT, true))
-        fCol.add(tv("sdcard/DepupOffice • ${outFiles().size} berkas tersimpan", 12f, C.MUTED), top = 2)
-        fRow.add(fCol, w = 0, weight = 1f, side = 12)
-        folderCard.add(fRow)
-
-        val statRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val pdfCount = outFiles().count { typeOf(Files.byName(it.name), it.name).first == "PDF" }
-        val docCount = outFiles().count { typeOf(Files.byName(it.name), it.name).first == "DOCX" }
-        val sheetCount = outFiles().count { typeOf(Files.byName(it.name), it.name).first == "XLSX" }
-        val imgCount = outFiles().count { typeOf(Files.byName(it.name), it.name).first == "IMG" }
-
-        fun fStat(label: String, count: Int, col: Int, bgCol: Int) = vbox(10).apply {
-            background = shape(bgCol, 12)
-            gravity = Gravity.CENTER_HORIZONTAL
-            isClickable = true
-            setOnClickListener { showFolderExplorerSheet(label) }
-            add(tv(label, 11f, col, true))
-            add(tv("$count file", 13f, C.TEXT, true), top = 2)
-        }
-
-        statRow.add(evenRow(listOf(
-            fStat("PDF", pdfCount, C.RED, C.RED_BG),
-            fStat("Word", docCount, C.ACCENT, C.BLUE_BG),
-            fStat("Excel", sheetCount, C.TEAL, C.TEAL_BG),
-            fStat("Gambar", imgCount, C.SKY, C.SKY_BG)
-        ), 6))
-        folderCard.add(statRow, top = 12)
-
-        folderCard.add(btn("Eksplor Isi Folder DepupOffice", true, C.ACCENT, R.drawable.ic_folder) {
-            showFolderExplorerSheet("SEMUA")
-        }, top = 14)
-        p.add(folderCard, top = 16)
-
-        val wa = card(16, 16)
-        val wr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        wr.add(iconBadge(R.drawable.ic_share, C.TEAL, 0xFFCCFBF1.toInt(), 100, 22), w = dp(40), h = dp(40))
-        val wc = vbox()
-        wc.add(tv("Share WhatsApp & Sosial", 16f, C.TEXT, true))
-        wc.add(tv("Kirim instan lewat aplikasi pesan", 12f, C.MUTED), top = 2)
-        wr.add(wc, w = 0, weight = 1f, side = 12)
-        wa.add(wr)
-        wa.add(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = shape(C.SURFACE2, 12)
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-            add(icon(R.drawable.ic_compress, C.INDIGO, 20), w = dp(20), h = dp(20))
-            val c = vbox()
-            c.add(tv("Perkecil dulu supaya cepat terkirim", 12f, C.TEXT, true))
-            c.add(tv("PDF besar bisa dikompres lewat Tools sebelum dikirim agar mudah dibuka penerima.", 11f, C.MUTED), top = 2)
-            add(c, w = 0, weight = 1f, side = 10)
-        }, top = 14)
-        wa.add(btn("Kirim Cepat ke WhatsApp  →", true, 0xFF005952.toInt(), R.drawable.ic_chat) {
-            pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), true) }
+        // Tampilan & aksesibilitas
+        p.add(sectionTitle("Tampilan"), top = 22)
+        val tc = card(16, 16, shadow = false)
+        tc.add(tv("Tema", 15f, C.TEXT, true))
+        tc.add(tv("Mode gelap lebih nyaman di malam hari dan menghemat baterai.", 13f, C.MUTED), top = 2)
+        tc.add(segmented(listOf("Ikuti HP", "Terang", "Gelap"), Theme.mode(this)) { m ->
+            Theme.setMode(this, m)
+            val wasDark = C.dark
+            DepupApp.applyNightMode(m)
+            if (Theme.isDark(this) == wasDark) render() else recreate()
         }, top = 12)
-        wa.add(evenRow(listOf(
-            btn("Bagikan Lain", false, C.ACCENT, R.drawable.ic_upload) {
-                pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), false) }
-            },
-            btn("Kompres PDF", false, C.ACCENT, R.drawable.ic_compress) { pickFile(arrayOf(PDF)) { compressFlow(it) } }
-        ), 8), top = 8)
-        p.add(wa, top = 16)
+        tc.add(View(this).apply { setBackgroundColor(C.LINE) }, top = 14, h = 1)
+        tc.add(createRow(R.drawable.ic_zoom_in, C.PRIMARY, C.PRIMARY_C, "Ukuran huruf & tampilan",
+            "Aplikasi mengikuti ukuran huruf di pengaturan HP") {
+            try { startActivity(Intent(android.provider.Settings.ACTION_DISPLAY_SETTINGS)) } catch (_: Exception) { toast("Pengaturan tidak tersedia") }
+        }.apply { setPadding(0, dp(10), 0, 0) })
+        p.add(tc, top = 8)
 
-        val ex = card(16, 16)
-        val eh = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        eh.add(iconBadge(R.drawable.ic_upload, C.INDIGO, C.INDIGO_BG, 100, 20), w = dp(36), h = dp(36))
-        eh.add(tv("Ekspor & Cetak Dokumen", 16f, C.TEXT, true), w = 0, weight = 1f, side = 10)
-        eh.add(tv("Siap Kerja", 11f, C.MUTED), w = WRAP)
-        ex.add(eh)
-        fun exTile(res: Int, t1: String, t2: String, f: () -> Unit) = vbox(12).apply {
-            background = shape(C.SURFACE2, 16)
-            gravity = Gravity.CENTER_HORIZONTAL
-            isClickable = true
-            setOnClickListener { f() }
-            add(iconBadge(res, C.ACCENT, Color.WHITE, 100, 22), w = dp(44), h = dp(44))
-            add(tv(t1, 12f, C.TEXT, true).apply { gravity = Gravity.CENTER }, top = 8)
-            add(tv(t2, 10f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 2)
-        }
-        ex.add(evenRow(listOf(
-            exTile(R.drawable.ic_cloud, "Cloud / Drive", "Lewat menu bagikan") {
-                pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), false) }
-            },
-            exTile(R.drawable.ic_phone, "Memori HP", "Unduh lokal") { exportFlow() },
-            exTile(R.drawable.ic_print, "Printer", "Cetak PDF") {
-                pickFile(arrayOf(PDF)) { u -> Files.print(this, u, Files.nameOf(this, u)) }
+        // Format bawaan
+        p.add(sectionTitle("Format bawaan"), top = 22)
+        p.add(listCard(listOf(
+            createRow(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "Dokumen Word", "Ukuran kertas, margin, spasi, huruf") { showWordFormatSettingsSheet() },
+            createRow(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Spreadsheet Excel", "Garis kisi, mata uang, jumlah otomatis") { showExcelFormatSettingsSheet() },
+            createRow(R.drawable.ic_pdf, C.PDF_FG, C.PDF_BG, "Pembaca PDF", "Zoom awal, tema baca, gaya gulir") { showPdfFormatSettingsSheet() }
+        )), top = 8)
+
+        // Dukungan
+        p.add(sectionTitle("Dukungan"), top = 22)
+        p.add(listCard(listOf(
+            createRow(R.drawable.ic_heart, C.ERROR, C.ERROR_C, "Dukung developer", "Donasi sukarela — semua fitur tetap gratis") { showDonationDialog() },
+            createRow(R.drawable.ic_mail, C.PRIMARY, C.PRIMARY_C, "Kirim masukan", "depupdev@gmail.com") {
+                try { startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:depupdev@gmail.com"))) }
+                catch (_: Exception) { toast("Aplikasi email tidak tersedia") }
             }
-        ), 8), top = 12)
-        p.add(ex, top = 16)
+        )), top = 8)
 
-        // Kartu donasi: pintu masuk yang jelas tanpa mengganggu fungsi utama.
-        val donate = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(0xFFFEF2F2.toInt(), 0xFFFFF7ED.toInt())
-            ).apply {
-                cornerRadius = dp(16).toFloat()
-                setStroke(dp(1), 0xFFFECACA.toInt())
-            }
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { showDonationDialog() }
-        }
-        donate.add(iconBadge(R.drawable.ic_heart, 0xFFDC2626.toInt(), 0xFFFEE2E2.toInt(), 100, 22), w = dp(44), h = dp(44))
-        val dc = vbox()
-        dc.add(tv("Dukung Depup Office", 16f, C.TEXT, true))
-        dc.add(tv("Donasi sukarela • tetap offline, tanpa iklan & langganan", 11f, C.MUTED), top = 2)
-        donate.add(dc, w = 0, weight = 1f, side = 12)
-        donate.add(tv("Donasi", 11f, Color.WHITE, true).apply {
-            background = shape(0xFFDC2626.toInt(), 100)
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-        }, w = WRAP)
-        p.add(donate, top = 16)
-
-        p.add(sectionTitle("Riwayat Berbagi Terakhir"), top = 22)
+        // Riwayat berbagi
         val sh2 = Meta.shares(this).take(3)
-        if (sh2.isEmpty()) {
-            p.add(card(16, 16).apply { add(tv("Belum ada riwayat berbagi. File yang kamu bagikan dari sini akan muncul di sini.", 13f, C.MUTED)) }, top = 12)
-        } else sh2.forEachIndexed { i, e ->
-            val wapp = e[1] == "WhatsApp"
-            val r = card(12, 16)
-            r.orientation = LinearLayout.HORIZONTAL
-            r.gravity = Gravity.CENTER_VERTICAL
-            r.add(iconBadge(if (wapp) R.drawable.ic_chat else R.drawable.ic_upload,
-                if (wapp) C.TEAL else C.INDIGO, if (wapp) 0xFFCCFBF1.toInt() else C.INDIGO_BG, 12, 20), w = dp(40), h = dp(40))
-            val col = vbox()
-            col.add(tv(e[0], 14f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
-            val sz = e[2].toLongOrNull() ?: -1L
-            col.add(tv(listOf(e[1], if (sz >= 0) Files.fmtSize(sz) else "").filter { it.isNotBlank() }.joinToString(" • "), 12f, C.MUTED), top = 2)
-            r.add(col, w = 0, weight = 1f, side = 12)
-            r.add(tv(Files.relTime(e[3].toLongOrNull() ?: 0L), 11f, C.MUTED), w = WRAP, side = 4)
-            p.add(r, top = if (i == 0) 12 else 8)
+        if (sh2.isNotEmpty()) {
+            p.add(sectionTitle("Baru dibagikan"), top = 22)
+            p.add(listCard(sh2.map { e ->
+                val wapp = e[1] == "WhatsApp"
+                hbox().apply {
+                    setPadding(dp(14), dp(10), dp(14), dp(10))
+                    minimumHeight = dp(60)
+                    add(iconBadge(if (wapp) R.drawable.ic_chat else R.drawable.ic_upload,
+                        if (wapp) C.SUCCESS else C.PRIMARY, if (wapp) C.SUCCESS_C else C.PRIMARY_C, 12, 20), w = dp(44), h = dp(44))
+                    val col = vbox()
+                    col.add(tv(e[0], 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+                    val sz = e[2].toLongOrNull() ?: -1L
+                    col.add(tv(listOf(e[1], if (sz >= 0) Files.fmtSize(sz) else "", Files.relTime(e[3].toLongOrNull() ?: 0L))
+                        .filter { it.isNotBlank() }.joinToString(" • "), 13f, C.MUTED), top = 1)
+                    add(col, w = 0, weight = 1f, side = 12)
+                    isFocusable = true
+                }
+            }), top = 8)
         }
+
+        val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { null }
+        p.add(tv("Depup Office${ver?.let { " versi $it" } ?: ""}", 13f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 24)
     }
 
     // ================= BACA =================
@@ -1694,7 +1300,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun miniBtn(label: String, onClick: () -> Unit) = tv(label, 16f, C.ACCENT_SOFT, true).apply {
         gravity = Gravity.CENTER
-        background = shape(C.BG, 10)
+        background = raised(C.SURFACE, 10, 2f)
         setOnClickListener { onClick() }
     }
 
@@ -1747,7 +1353,7 @@ class MainActivity : AppCompatActivity() {
             val iv = ImageView(this).apply {
                 setImageBitmap(thumb)
                 adjustViewBounds = true
-                background = shape(Color.WHITE, 8, C.LINE, 1)
+                background = paperThumbBg(8)
             }
             topRow.add(iv, w = dp(80), h = dp(100))
         }
@@ -1788,7 +1394,7 @@ class MainActivity : AppCompatActivity() {
             val iv = ImageView(this).apply {
                 setImageBitmap(thumb)
                 adjustViewBounds = true
-                background = shape(Color.WHITE, 8, C.LINE, 1)
+                background = paperThumbBg(8)
             }
             topRow.add(iv, w = dp(80), h = dp(100))
         }
@@ -1814,7 +1420,7 @@ class MainActivity : AppCompatActivity() {
             targetRow.removeAllViews()
             targets.forEachIndexed { idx, tName ->
                 val isSel = selectedMode == 0 && targetKb == targetVals[idx]
-                val chip = tv(tName, 11f, if (isSel) Color.WHITE else C.TEXT, true).apply {
+                val chip = tv(tName, 11f, if (isSel) C.ON_PRIMARY else C.TEXT, true).apply {
                     background = shape(if (isSel) C.ACCENT else C.SURFACE2, 8)
                     setPadding(dp(6), dp(8), dp(6), dp(8))
                     gravity = Gravity.CENTER
@@ -1833,7 +1439,7 @@ class MainActivity : AppCompatActivity() {
             levelRow.removeAllViews()
             levels.forEachIndexed { idx, lvlName ->
                 val isSel = selectedMode == 1 && idx == selectedLevel
-                val chip = tv(lvlName, 11f, if (isSel) Color.WHITE else C.TEXT, true).apply {
+                val chip = tv(lvlName, 11f, if (isSel) C.ON_PRIMARY else C.TEXT, true).apply {
                     background = shape(if (isSel) C.TEAL else C.SURFACE2, 8)
                     setPadding(dp(6), dp(8), dp(6), dp(8))
                     gravity = Gravity.CENTER
@@ -1887,7 +1493,7 @@ class MainActivity : AppCompatActivity() {
             val iv = ImageView(this).apply {
                 setImageBitmap(thumb)
                 adjustViewBounds = true
-                background = shape(Color.WHITE, 8, C.LINE, 1)
+                background = paperThumbBg(8)
             }
             topRow.add(iv, w = dp(80), h = dp(100))
         }
@@ -2003,7 +1609,7 @@ class MainActivity : AppCompatActivity() {
         fun paintLevels() {
             chips.forEachIndexed { i, chip ->
                 val on = i == sel
-                chip.setTextColor(if (on) Color.WHITE else C.TEXT)
+                chip.setTextColor(if (on) C.ON_PRIMARY else C.TEXT)
                 chip.background = shape(if (on) C.TEAL else C.SURFACE2, 8)
             }
         }
@@ -2180,13 +1786,13 @@ class MainActivity : AppCompatActivity() {
             val pad = vbox().apply { setPadding(dp(20), dp(16), dp(20), dp(18)) }
 
             val previewCard = FrameLayout(this).apply {
-                background = shape(Color.WHITE, 16, C.LINE, 1)
+                background = raised(Color.WHITE, 16, 2.5f)
                 setPadding(dp(18), dp(18), dp(18), dp(18))
             }
             val preview = ImageView(this).apply {
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 setImageResource(R.drawable.ic_spark)
-                setColorFilter(0xFFCBD5E1.toInt())
+                setColorFilter(C.LINE_STRONG)
             }
             previewCard.addView(preview, FrameLayout.LayoutParams(MATCH, dp(250)))
             pad.add(previewCard)
@@ -2206,7 +1812,7 @@ class MainActivity : AppCompatActivity() {
                 if (text.isEmpty()) {
                     currentBitmap = null
                     preview.setImageResource(R.drawable.ic_spark)
-                    preview.setColorFilter(0xFFCBD5E1.toInt())
+                    preview.setColorFilter(C.LINE_STRONG)
                     status.setTextColor(C.MUTED)
                     status.text = "Ketik sesuatu untuk melihat pratinjau kode QR."
                     return

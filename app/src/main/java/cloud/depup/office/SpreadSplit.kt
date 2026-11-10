@@ -22,10 +22,11 @@ import kotlin.math.tan
  */
 object SpreadSplit {
     private const val DW = 256
+    @JvmStatic var debug: ((String) -> Unit)? = null
     private const val MIN_ENERGY = 2.5f
     private const val MIN_RATIO = 2.5f
-    private const val CONTENT = 0.06f   // pecahan piksel bertepi vertikal: sisi berisi
-    private const val BLANK = 0.035f    // di bawah ini: sisi kosong
+    private const val CONTENT = 0.045f  // pecahan piksel bertepi vertikal (beda > 10): sisi berisi
+    private const val BLANK = 0.022f    // di bawah ini: sisi kosong
 
     /** [q] = 8 angka piksel di gambar kecil [g] (KA, KaA, KaB, KiB). Mengembalikan sudut baru dalam piksel yang sama, atau null. */
     fun apply(g: IntArray, w: Int, h: Int, q: FloatArray): FloatArray? {
@@ -33,6 +34,10 @@ object SpreadSplit {
         val qw = (dist(q, 0, 1) + dist(q, 3, 2)) / 2f
         val qh = (dist(q, 0, 3) + dist(q, 1, 2)) / 2f
         if (qw < 64f || qh < 64f) return null
+        // 2 halaman berdampingan hampir selalu melebar (masing-masing halaman tegak). Bila satu halaman terpotong bingkai
+        // foto, bentuknya bisa mendekati bujur sangkar — tapi dokumen TEGAK (A4, struk: lebar < 0,85 x tinggi) tidak
+        // pernah dipecah: margin kiri teks / bayangan bisa tampak seperti lipatan.
+        if (qw < qh * 0.85f) return null
         val dw = DW
         val dh = (dw * qh / qw).toInt().coerceIn(96, 512)
 
@@ -48,10 +53,10 @@ object SpreadSplit {
 
         // ---- garis lipatan ----
         val xMin = (0.2f * dw).toInt(); val xMax = (0.85f * dw).toInt()
-        val all = FloatArray(17 * (xMax - xMin)); var n = 0
-        var best = 0f; var bx = 0; var bdeg = 0
-        for (deg in -8..8) {
-            val tn = tan(deg * PI / 180.0).toFloat()
+        val nx = xMax - xMin
+        val all = FloatArray(17 * nx)
+        for (di in 0 until 17) {
+            val tn = tan((di - 8) * PI / 180.0).toFloat()
             for (x0 in xMin until xMax) {
                 var sum = 0f; var cnt = 0
                 for (y in 0 until dh) {
@@ -60,16 +65,51 @@ object SpreadSplit {
                     if (xl < 0 || xr >= dw) continue
                     sum += abs(c[y * dw + xr] - c[y * dw + xl]); cnt++
                 }
-                if (cnt < dh * 0.8f) { all[n++] = 0f; continue }
-                val e = sum / cnt
-                all[n++] = e
-                if (e > best) { best = e; bx = x0; bdeg = deg }
+                all[di * nx + (x0 - xMin)] = if (cnt < dh * 0.8f) 0f else sum / cnt
             }
         }
-        val sorted = all.copyOf(n); sorted.sort()
-        val med = sorted[n / 2]
-        if (best < MIN_ENERGY || best < MIN_RATIO * max(med, 0.3f)) return null
+        val sorted = all.copyOf(); sorted.sort()
+        val med = sorted[sorted.size / 2]
 
+        /** Tepi kandidat membentang dari atas sampai bawah? (lipatan buku ya; tepi foto KTP / benda lain tidak) */
+        fun coverage(x0: Int, tn: Float, e: Float): FloatArray {
+            var on = 0; var tot = 0
+            val onT = IntArray(3); val totT = IntArray(3)
+            val thrE = max(3f, e * 0.4f)
+            for (y in 0 until dh) {
+                val xs = x0 + (y - dh / 2f) * tn
+                val xl = (xs - 2f).roundToInt(); val xr = (xs + 2f).roundToInt()
+                if (xl < 0 || xr >= dw) continue
+                tot++
+                val t3 = min(2, y * 3 / dh); totT[t3]++
+                if (abs(c[y * dw + xr] - c[y * dw + xl]) > thrE) { on++; onT[t3]++ }
+            }
+            if (tot == 0) return floatArrayOf(0f, 0f)
+            val minThird = (0 until 3).minOf { if (totT[it] == 0) 0f else onT[it].toFloat() / totT[it] }
+            return floatArrayOf(on.toFloat() / tot, minThird, onT[0].toFloat() / max(1, totT[0]), onT[1].toFloat() / max(1, totT[1]), onT[2].toFloat() / max(1, totT[2]))
+        }
+
+        // Tepi terkuat belum tentu lipatan (tepi laptop / keyboard yang ikut masuk kotak lebih kontras).
+        // Coba beberapa tepi terkuat yang letaknya berbeda; pakai yang pertama lolos syarat lipatan.
+        val order = all.indices.sortedByDescending { all[it] }
+        val tried = ArrayList<Int>()
+        var best = 0f; var bx = -1; var bdeg = 0
+        for (idx in order) {
+            val e = all[idx]
+            if (e < MIN_ENERGY || e < 1.8f * max(med, 0.3f)) break
+            val x0 = xMin + idx % nx; val deg = idx / nx - 8
+            if (tried.any { abs(it - x0) < 10 }) continue
+            tried.add(x0)
+            val cov = coverage(x0, tan(deg * PI / 180.0).toFloat(), e)
+            debug?.invoke("SPLIT cand x=$x0 deg=$deg e=$e cov=${cov[0]} thirds=${cov.drop(2)}")
+            // menerus di (setidaknya) dua dari tiga bagian tinggi halaman — sepertiga sisanya boleh hilang
+            // (kotak dokumen sedikit lebih panjang dari buku, bayangan, jari). Tepi foto KTP hanya kuat di tengah.
+            val strongThirds = (2..4).count { cov[it] >= 0.8f }
+            if (cov[0] >= 0.6f && strongThirds >= 2) { best = e; bx = x0; bdeg = deg; break }
+            if (tried.size >= 8) break
+        }
+        debug?.invoke("SPLIT best=$best med=$med bx=$bx deg=$bdeg dh=$dh")
+        if (bx < 0) return null
         val tn = tan(bdeg * PI / 180.0).toFloat()
         val xt = bx + (0 - dh / 2f) * tn
         val xb = bx + (dh - dh / 2f) * tn
@@ -78,10 +118,36 @@ object SpreadSplit {
         val lx1 = (lo - gap).toInt(); val rx0 = (hi + gap).toInt()
         if (lx1 < 20 || dw - 4 - rx0 < 20) return null     // tiap sisi minimal ~8% lebar
 
-        val fl = vEdges(d, dw, dh, 4, lx1)
-        val fr = vEdges(d, dw, dh, rx0, dw - 4)
-        val keepLeft = fl >= CONTENT && fr < BLANK
-        val keepRight = fr >= CONTENT && fl < BLANK
+        // Kedua sisi lipatan harus sama-sama KERTAS (terang serupa). Batas pita judul gelap / foto / kotak berwarna
+        // dengan badan dokumen bukan lipatan buku.
+        run {
+            fun meanC(x0: Int, x1: Int): Float {
+                var sum = 0L; var n = 0
+                for (y in 4 until dh - 4) for (x in max(0, x0) until min(dw, x1)) { sum += c[y * dw + x]; n++ }
+                return if (n == 0) 0f else sum.toFloat() / n
+            }
+            val ml = meanC(4, lx1); val mr = meanC(rx0, dw - 4)
+            debug?.invoke("SPLIT sideMean l=$ml r=$mr")
+            if (min(ml, mr) < 0.7f * max(ml, mr) || abs(ml - mr) > 45f) return null
+        }
+        // ambang 10 (bukan 18): goresan pulpen tipis di foto kecil sudah sangat kabur
+        // jauhi bayangan lipatan & pinggir halaman (gradasi di sana bukan tulisan)
+        val fl = vEdges(d, dw, dh, 12, lx1 - 8, 10)
+        val fr = vEdges(d, dw, dh, rx0 + 8, dw - 12, 10)
+        debug?.invoke("SPLIT fl=$fl fr=$fr")
+        // Berisi vs kosong dinilai RELATIF juga: tulisan tangan tipis / pensil hanya menghasilkan sedikit tepi, tapi
+        // tetap jauh lebih banyak daripada halaman bergaris yang kosong.
+        fun content(a: Float, b: Float) = a >= CONTENT || (a >= 0.02f && a >= 3f * b + 0.01f)
+        var keepLeft = content(fl, fr) && fr < BLANK
+        var keepRight = content(fr, fl) && fl < BLANK
+        if (!keepLeft && !keepRight) {
+            // Kedua halaman berisi: bila satu halaman terpotong bingkai foto, yang dituju jelas halaman yang utuh.
+            fun nearBorder(x: Float) = x < 3f || x > w - 4f
+            val leftCut = nearBorder(q[0]) && nearBorder(q[6])
+            val rightCut = nearBorder(q[2]) && nearBorder(q[4])
+            if (leftCut && !rightCut && fr >= 0.02f) keepRight = true
+            else if (rightCut && !leftCut && fl >= 0.02f) keepLeft = true
+        }
         if (!keepLeft && !keepRight) return null
 
         val m = 0.025f * dw    // jarak aman dari bayangan lipatan
@@ -98,11 +164,11 @@ object SpreadSplit {
     }
 
     /** Pecahan piksel bertepi vertikal kuat (selisih kiri-kanan > 18) pada kolom [x0, x1). */
-    private fun vEdges(d: IntArray, dw: Int, dh: Int, x0: Int, x1: Int): Float {
+    private fun vEdges(d: IntArray, dw: Int, dh: Int, x0: Int, x1: Int, thr: Int = 18): Float {
         var hit = 0; var tot = 0
         for (y in 6 until dh - 6) for (x in max(x0, 4) + 1 until min(x1, dw - 4) - 1) {
             tot++
-            if (abs(d[y * dw + x + 1] - d[y * dw + x - 1]) > 18) hit++
+            if (abs(d[y * dw + x + 1] - d[y * dw + x - 1]) > thr) hit++
         }
         return if (tot == 0) 0f else hit.toFloat() / tot
     }

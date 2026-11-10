@@ -3,25 +3,28 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#FFFFFF">
+    android:background="@color/bg">
 
     <LinearLayout
         android:id="@+id/toolbarPrivacy"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="60dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#FFFFFF"
-        android:elevation="4dp"
-        android:paddingStart="12dp"
+        android:background="@color/bg"
+        android:paddingStart="4dp"
         android:paddingEnd="16dp">
 
         <ImageView
             android:id="@+id/btnBackPrivacy"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="8dp"
-            android:contentDescription="Back"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="12dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Kembali"
+            android:focusable="true"
+            android:clickable="true"
+            android:tint="@color/text"
             android:src="@drawable/ic_back" />
 
         <TextView
@@ -29,15 +32,20 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="8dp"
-            android:text="Privacy Policy"
-            android:textColor="#0F172A"
-            android:textSize="18sp"
+            android:accessibilityHeading="true"
+            android:text="Privasi &amp; Tentang"
+            android:textColor="@color/text"
+            android:textSize="20sp"
             android:textStyle="bold" />
     </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/line" />
 
     <WebView
         android:id="@+id/webViewPrivacy"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
-
 </LinearLayout>

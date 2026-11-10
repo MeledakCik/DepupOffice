@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Depup Fresh (v3) — tema TERANG. Nilai sama dengan token di Ui.kt (object C). Versi gelap: values-night/colors.xml -->
 <resources>
-    <color name="bg">#F8FAFC</color>
+    <color name="bg">#F5F6FA</color>
     <color name="surface">#FFFFFF</color>
-    <color name="accent">#1E60D5</color>
-    <color name="accent_soft">#1E60D5</color>
-    <color name="text">#0F172A</color>
-    <color name="muted">#64748B</color>
-    <color name="ic_launcher_background">#FFFFFF</color>
-    <color name="cyber_bg">#070D1E</color>
+    <color name="accent">#4338CA</color>
+    <color name="accent_soft">#4338CA</color>
+    <color name="gold">#F5A524</color>
+    <color name="cream">#FFFFFF</color>
+    <color name="line">#D5D9E3</color>
+    <color name="text">#151823</color>
+    <color name="muted">#535A6C</color>
+    <color name="ic_launcher_background">#E7E6FC</color>
+    <color name="splash_bg">#4338CA</color>
 </resources>

@@ -27,6 +27,7 @@ class DocxWriter(
             "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
             "<Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>" +
             "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>" +
+            "<Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>" +
             "</Types>"
         val root = XML +
             "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
@@ -34,6 +35,33 @@ class DocxWriter(
             "</Relationships>"
         put("[Content_Types].xml", types.toByteArray())
         put("_rels/.rels", root.toByteArray())
+        put("word/styles.xml", stylesXml().toByteArray())
+    }
+
+    private val fontName get() = if (fontFamily == 1) "Times New Roman" else "Calibri"
+
+    /**
+     * Tanpa styles.xml, setiap aplikasi memakai font bawaannya sendiri (Word: Times New Roman,
+     * WPS/Google Docs: lain lagi) sehingga dokumen tampak berbeda di tiap aplikasi. Di sini font,
+     * ukuran, dan warna default ditetapkan eksplisit.
+     */
+    private fun stylesXml(): String {
+        val f = fontName
+        return XML +
+            "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+            "<w:docDefaults><w:rPrDefault><w:rPr>" +
+            "<w:rFonts w:ascii=\"$f\" w:hAnsi=\"$f\" w:eastAsia=\"$f\" w:cs=\"$f\"/>" +
+            "<w:color w:val=\"000000\"/><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/><w:lang w:val=\"id-ID\"/>" +
+            "</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after=\"120\"/></w:pPr></w:pPrDefault></w:docDefaults>" +
+            "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:qFormat/></w:style>" +
+            "<w:style w:type=\"paragraph\" w:styleId=\"Title\"><w:name w:val=\"Title\"/><w:basedOn w:val=\"Normal\"/><w:qFormat/>" +
+            "<w:pPr><w:jc w:val=\"center\"/><w:spacing w:after=\"60\"/></w:pPr><w:rPr><w:b/><w:color w:val=\"001156\"/><w:sz w:val=\"32\"/><w:szCs w:val=\"32\"/></w:rPr></w:style>" +
+            "<w:style w:type=\"paragraph\" w:styleId=\"Subtitle\"><w:name w:val=\"Subtitle\"/><w:basedOn w:val=\"Normal\"/><w:qFormat/>" +
+            "<w:pPr><w:jc w:val=\"center\"/><w:spacing w:after=\"240\"/></w:pPr><w:rPr><w:i/><w:color w:val=\"4A5580\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr></w:style>" +
+            "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:qFormat/>" +
+            "<w:pPr><w:keepNext/><w:spacing w:before=\"200\" w:after=\"80\"/><w:outlineLvl w:val=\"0\"/></w:pPr>" +
+            "<w:rPr><w:b/><w:color w:val=\"001156\"/><w:sz w:val=\"28\"/><w:szCs w:val=\"28\"/></w:rPr></w:style>" +
+            "</w:styles>"
     }
 
     private fun esc(s: String): String {
@@ -65,7 +93,10 @@ class DocxWriter(
     private fun appendRunText(target: StringBuilder, text: String) {
         text.split('\n').forEachIndexed { i, line ->
             if (i > 0) target.append("<w:br/>")
-            target.append("<w:t xml:space=\"preserve\">").append(esc(line)).append("</w:t>")
+            line.split('\t').forEachIndexed { k, seg ->
+                if (k > 0) target.append("<w:tab/>")
+                target.append("<w:t xml:space=\"preserve\">").append(esc(seg)).append("</w:t>")
+            }
         }
     }
 
@@ -167,12 +198,30 @@ class DocxWriter(
         body.append("</w:tbl><w:p><w:pPr><w:spacing w:after=\"60\"/></w:pPr></w:p>")
     }
 
+    /** Catatan: miring, teks cokelat di atas latar kuning muda — sama seperti tampilan di editor. */
     fun note(text: String) {
-        body.append("<w:p><w:pPr><w:spacing w:after=\"120\" w:line=\"${(lineSpacing * 240).toInt()}\" w:lineRule=\"auto\"/></w:pPr>")
-            .append("<w:r><w:rPr><w:i/><w:color w:val=\"64748B\"/><w:sz w:val=\"20\"/></w:rPr>")
+        body.append("<w:p><w:pPr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFF0C9\"/>")
+            .append("<w:spacing w:after=\"120\" w:line=\"${(lineSpacing * 240).toInt()}\" w:lineRule=\"auto\"/></w:pPr>")
+            .append("<w:r><w:rPr><w:i/><w:color w:val=\"6B4A00\"/><w:sz w:val=\"22\"/></w:rPr>")
         appendRunText(body, text)
         body.append("</w:r></w:p>")
     }
+
+    private fun styled(style: String, text: String, align: Int = -1) {
+        val jc = when (align) { 1 -> "<w:jc w:val=\"center\"/>"; 2 -> "<w:jc w:val=\"right\"/>"; 0 -> "<w:jc w:val=\"left\"/>"; else -> "" }
+        body.append("<w:p><w:pPr><w:pStyle w:val=\"$style\"/>").append(jc).append("</w:pPr><w:r>")
+        appendRunText(body, text)
+        body.append("</w:r></w:p>")
+    }
+
+    /** Judul dokumen (gaya Title: tebal, 16 pt, navy, rata tengah). */
+    fun title(text: String) = styled("Title", text)
+
+    /** Sub-judul / nomor dokumen (gaya Subtitle: miring, abu-biru, rata tengah). */
+    fun subtitle(text: String) = styled("Subtitle", text)
+
+    /** Judul bab (gaya Heading 1 asli Word sehingga muncul di navigasi/daftar isi). */
+    fun heading(text: String, align: Int = 0) = styled("Heading1", text, align)
 
     /** Gambar JPEG satu halaman, diskalakan agar muat dalam area tulis A4 (17 x 25,7 cm). */
     fun image(jpeg: ByteArray, wPx: Int, hPx: Int) {
@@ -218,7 +267,9 @@ class DocxWriter(
             "<w:pgMar w:top=\"$margin\" w:right=\"$margin\" w:bottom=\"$margin\" w:left=\"$margin\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>" +
             "</w:sectPr></w:body></w:document>"
         val docRels = xml +
-            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">$rels</Relationships>"
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+            "<Relationship Id=\"rIdStyles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>" +
+            "$rels</Relationships>"
         put("word/document.xml", doc.toByteArray())
         put("word/_rels/document.xml.rels", docRels.toByteArray())
         zip.finish(); zip.close()

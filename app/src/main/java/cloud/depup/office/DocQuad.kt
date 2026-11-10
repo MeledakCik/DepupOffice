@@ -23,7 +23,23 @@ object DocQuad {
      * atau null bila tidak yakin ATAU dokumen praktis sudah berupa persegi panjang sejajar bingkai
      * (biar jalur potong biasa yang menanganinya, tanpa resampling yang tak perlu).
      */
-    fun detect(g: IntArray, w: Int, h: Int): FloatArray? {
+    fun detect(g: IntArray, w: Int, h: Int): FloatArray? = run(g, w, h, 0.15f, null)
+
+    /** Semua segi-empat wilayah yang lolos (luas >= [minArea]) untuk dinilai ulang oleh [DocFind]. */
+    fun candidates(g: IntArray, w: Int, h: Int, minArea: Float): List<FloatArray> {
+        val all = ArrayList<FloatArray>()
+        run(g, w, h, minArea, all)
+        return all
+    }
+
+    /** Segi-empat (luas maksimum dalam cembung) dari masker wilayah; dipakai juga oleh [DocFind]. */
+    internal fun quadFromMask(mask: BooleanArray, w: Int, h: Int): FloatArray? {
+        val inside = BooleanArray(w * h)
+        fillHoles(mask, inside, w, h, IntArray(w * h + 8))
+        return quadOf(inside, w, h)
+    }
+
+    private fun run(g: IntArray, w: Int, h: Int, minArea: Float, collect: MutableList<FloatArray>?): FloatArray? {
         if (w < 16 || h < 16 || g.size < w * h) return null
         val closed = closeGray(g, w, h, 3)
         val queue = IntArray(w * h + 8)
@@ -36,10 +52,11 @@ object DocQuad {
             val q = quadOf(inside, w, h) ?: return
             val qa = polyArea(q)
             val area = qa / (w * h).toFloat()
-            if (area < 0.15f || area > 0.985f) return      // area ~1 = wilayah bocor menelan seluruh frame
+            if (area < minArea || area > 0.985f) return      // area ~1 = wilayah bocor menelan seluruh frame
             val fill = count / qa
             val fq = if (fill > 1f) 1f / fill else fill
             if (fq < 0.80f) return                           // wilayah tidak mirip segi-empat
+            collect?.add(q)
             // Latar (meja) juga bisa tampak seperti segi-empat. Dokumen biasanya memuat titik tengah foto dan
             // tidak menempel ke hampir seluruh pinggir bingkai, sedangkan latar sebaliknya.
             var score = fq * fq * area
@@ -57,7 +74,7 @@ object DocQuad {
                 consider(m)
             }
         }
-        if (best == null) otsuMask(g, w, h, queue)?.let { consider(it) }
+        if (best == null || collect != null) otsuMask(g, w, h, queue)?.let { consider(it) }
 
         val q = best ?: return null
         // Lebarkan sedikit ke luar (wilayah tumbuh berhenti 1 piksel sebelum garis tepi kertas).

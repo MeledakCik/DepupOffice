@@ -145,18 +145,17 @@ class ViewerActivity : AppCompatActivity() {
             toast("Dokumen ini dilindungi kata sandi (Password Protected)")
         } catch (_: Exception) {}
 
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFFE9EDF7.toInt()) }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(C.CANVAS) }
 
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
-            elevation = dp(2).toFloat()
             setPadding(dp(4), dp(8), dp(4), dp(8))
         }
-        bar.add(icon(R.drawable.ic_back, C.TEXT, 24).apply {
-            setPadding(dp(12), dp(8), dp(12), dp(8)); setOnClickListener { finish() }
-        }, w = dp(48), h = dp(40))
+        bar.add(icon(R.drawable.ic_back, C.TEXT, 24).asButton("Kembali").apply {
+            setOnClickListener { finish() }
+        }, w = dp(48), h = dp(48))
         val tcol = vbox()
         val trow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         trow.add(tv(name, 16f, C.TEXT, true).apply {
@@ -167,28 +166,26 @@ class ViewerActivity : AppCompatActivity() {
         tcol.add(trow)
         tcol.add(tv("Depup Office Reader", 12f, C.MUTED))
         bar.add(tcol, w = 0, weight = 1f)
-        moonBtn = icon(R.drawable.ic_moon, C.TEXT, 22).apply {
-            setPadding(dp(10), dp(8), dp(10), dp(8)); setOnClickListener { toggleNight() }
+        moonBtn = icon(R.drawable.ic_moon, C.TEXT, 22).asButton("Mode baca malam").apply {
+            setOnClickListener { toggleNight() }
         }
-        bar.add(moonBtn, w = dp(42), h = dp(40))
+        bar.add(moonBtn, w = dp(48), h = dp(48))
         marked = Meta.isMarked(this, uriStr)
-        markBtn = icon(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off, if (marked) C.ACCENT else C.TEXT, 22).apply {
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+        markBtn = icon(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off, if (marked) C.ACCENT else C.TEXT, 22).asButton(if (marked) "Hapus tanda" else "Tandai dokumen").apply {
             setOnClickListener {
+                contentDescription = if (!marked) "Hapus tanda" else "Tandai dokumen"
                 marked = Meta.toggleMark(this@ViewerActivity, uriStr)
                 setImageResource(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off)
                 setColorFilter(if (marked) C.ACCENT else C.TEXT)
             }
         }
-        bar.add(markBtn, w = dp(42), h = dp(40))
-        val editBtn = icon(R.drawable.ic_sign, C.ACCENT, 22).apply {
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+        bar.add(markBtn, w = dp(48), h = dp(48))
+        val editBtn = icon(R.drawable.ic_sign, C.ACCENT, 22).asButton("Tanda tangan & edit PDF").apply {
             setOnClickListener { showPdfEditDialog(uri, name) }
         }
-        bar.add(editBtn, w = dp(42), h = dp(40))
+        bar.add(editBtn, w = dp(48), h = dp(48))
 
-        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).apply {
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 pm.menu.add(0, 1, 0, "Bagikan")
@@ -272,44 +269,43 @@ class ViewerActivity : AppCompatActivity() {
             val nav = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                background = shape(0xF2FFFFFF.toInt(), 24, C.LINE, 1)
-                elevation = dp(4).toFloat()
+                background = raised(C.SURFACE, 24, 3f)
                 setPadding(dp(4), dp(6), dp(4), dp(6))
             }
-            nav.add(icon(R.drawable.ic_up, C.MUTED, 22).apply { setOnClickListener { goTo(curPage - 1) } }, w = dp(36), h = dp(32))
-            pageBadge = tv("1", 14f, Color.WHITE, true).apply {
+            nav.add(icon(R.drawable.ic_up, C.MUTED, 22).asButton("Halaman sebelumnya").apply { setOnClickListener { goTo(curPage - 1) } }, w = dp(48), h = dp(48))
+            pageBadge = tv("1", 14f, C.ON_PRIMARY, true).apply {
                 gravity = Gravity.CENTER
                 background = shape(C.ACCENT, 100)
                 isClickable = true
+                contentDescription = "Lompat ke halaman"
                 setOnClickListener { showJumpPageDialog() }
             }
-            nav.add(pageBadge, w = dp(36), h = dp(36), top = 2)
+            nav.add(pageBadge, w = dp(44), h = dp(44), top = 2)
             nav.add(tv("/$total", 10f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 2)
-            nav.add(icon(R.drawable.ic_down, C.MUTED, 22).apply { setOnClickListener { goTo(curPage + 1) } }, w = dp(36), h = dp(32), top = 2)
+            nav.add(icon(R.drawable.ic_down, C.MUTED, 22).asButton("Halaman berikutnya").apply { setOnClickListener { goTo(curPage + 1) } }, w = dp(48), h = dp(48), top = 2)
             stage.addView(nav, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = dp(8) })
 
             val tb = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = shape(0xF2FFFFFF.toInt(), 100, C.LINE, 1)
-                elevation = dp(6).toFloat()
+                background = raised(C.SURFACE, 100, 3f)
                 setPadding(dp(10), dp(6), dp(6), dp(6))
             }
-            tb.add(icon(R.drawable.ic_zoom_out, C.TEXT, 22).apply {
-                setPadding(dp(9), dp(9), dp(9), dp(9)); setOnClickListener { setZoom(zoom - 0.5f, baseW / 2f) }
-            }, w = dp(40), h = dp(40))
+            tb.add(icon(R.drawable.ic_zoom_out, C.TEXT, 22).asButton("Perkecil").apply {
+                setOnClickListener { setZoom(zoom - 0.5f, baseW / 2f) }
+            }, w = dp(48), h = dp(48))
             zoomLabel = tv("100%", 13f, C.TEXT, true).apply { gravity = Gravity.CENTER }
             tb.add(zoomLabel, w = dp(52))
-            tb.add(icon(R.drawable.ic_zoom_in, C.TEXT, 22).apply {
-                setPadding(dp(9), dp(9), dp(9), dp(9)); setOnClickListener { setZoom(zoom + 0.5f, baseW / 2f) }
-            }, w = dp(40), h = dp(40))
-            tb.add(icon(R.drawable.ic_print, C.TEXT, 22).apply {
-                setPadding(dp(9), dp(9), dp(9), dp(9))
+            tb.add(icon(R.drawable.ic_zoom_in, C.TEXT, 22).asButton("Perbesar").apply {
+                setOnClickListener { setZoom(zoom + 0.5f, baseW / 2f) }
+            }, w = dp(48), h = dp(48))
+            tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
                 setOnClickListener { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } }
-            }, w = dp(40), h = dp(40), side = 4)
+            }, w = dp(48), h = dp(48), side = 4)
             tb.add(FrameLayout(this).apply {
+                contentDescription = "Bagikan"; isFocusable = true
                 background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.ACCENT) }
-                addView(icon(R.drawable.ic_upload, Color.WHITE, 22), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+                addView(icon(R.drawable.ic_upload, C.ON_PRIMARY, 22), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
                 setOnClickListener { try { Files.share(this@ViewerActivity, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
             }, w = dp(44), h = dp(44), side = 4)
             stage.addView(tb, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(16) })
@@ -321,14 +317,74 @@ class ViewerActivity : AppCompatActivity() {
         setContentView(root)
     }
 
-    private fun renderNonPdf(uri: android.net.Uri, name: String, mime: String, stage: FrameLayout) {
+    private var officeWeb: android.webkit.WebView? = null
+
+    /**
+     * DOCX / XLSX / PPTX ditampilkan semirip mungkin dengan aslinya (halaman, font, tabel, gambar, slide) lewat
+     * [OfficeView]. Bila gagal (berkas rusak / tidak lazim), kembali ke pratinjau teks sederhana.
+     */
+    private fun renderOffice(uri: android.net.Uri, name: String, mime: String, kind: String, stage: FrameLayout) {
+        stage.removeAllViews()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val strip = hbox().apply { setPadding(dp(8), dp(6), dp(8), dp(6)); setBackgroundColor(C.SURFACE) }
+        val label = when (kind) { "docx" -> "Dokumen Word"; "xlsx" -> "Lembar kerja Excel"; else -> "Presentasi PowerPoint" }
+        strip.add(tv(label, 12f, C.MUTED), w = 0, weight = 1f, side = 6)
+        if (kind == "docx" || kind == "xlsx") {
+            strip.add(btn(if (kind == "docx") "Edit Word" else "Edit Excel", false, C.ACCENT) {
+                val i = if (kind == "docx") android.content.Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_URI, uri.toString())
+                else android.content.Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_URI, uri.toString())
+                startActivity(i); finish()
+            }, w = WRAP)
+        }
+        val printBtn = btn("Cetak / PDF", true, C.ACCENT, R.drawable.ic_print) {
+            officeWeb?.let { OfficeView.print(this, it, name) } ?: toast("Dokumen masih disiapkan")
+        }
+        strip.add(printBtn, w = WRAP, side = 4)
+        col.add(strip)
+        val holder = FrameLayout(this).apply { setBackgroundColor(C.CANVAS) }
+        val loading = vbox().apply { gravity = Gravity.CENTER }
+        loading.add(android.widget.ProgressBar(this), w = dp(40), h = dp(40))
+        loading.add(tv("Menyiapkan tampilan dokumen…", 13f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 10)
+        holder.addView(loading, FrameLayout.LayoutParams(MATCH, MATCH))
+        col.add(holder, h = 0, weight = 1f)
+        stage.addView(col, FrameLayout.LayoutParams(MATCH, MATCH))
+        // tumpukan besar: dokumen bertingkat dalam (tabel di dalam tabel, grup shape) aman dari StackOverflow
+        Thread(null, {
+            val r = try { Result.success(OfficeView.render(this, uri, name, kind)) } catch (e: Throwable) { Result.failure(e) }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                r.onSuccess { doc ->
+                    val wv = try { Result.success(OfficeView.webView(this, doc)) } catch (e: Throwable) { Result.failure(e) }
+                    wv.onSuccess {
+                        officeWeb = it
+                        holder.removeAllViews()
+                        holder.addView(it, FrameLayout.LayoutParams(MATCH, MATCH))
+                    }.onFailure { e -> officeError(holder, uri, name, mime, stage, "Tampilan dokumen gagal dimuat", e) }
+                }.onFailure { e -> officeError(holder, uri, name, mime, stage, "Berkas tidak bisa ditampilkan", e) }
+            }
+        }, "office-render", 64L * 1024 * 1024).start()
+    }
+
+    /** Kegagalan ditampilkan jelas (dengan nama error) — bukan diam-diam jatuh ke pratinjau teks yang tanpa tabel. */
+    private fun officeError(holder: FrameLayout, uri: android.net.Uri, name: String, mime: String, stage: FrameLayout, title: String, e: Throwable) {
+        holder.removeAllViews()
+        val box = vbox().apply { gravity = Gravity.CENTER; setPadding(dp(24), dp(24), dp(24), dp(24)) }
+        box.add(tv(title, 16f, C.TEXT, true).apply { gravity = Gravity.CENTER })
+        box.add(tv("${e.javaClass.simpleName}: ${e.message?.take(160) ?: "-"}", 12f, C.MUTED).apply { gravity = Gravity.CENTER; setTextIsSelectable(true) }, top = 8)
+        box.add(btn("Tampilkan teks saja", false, C.ACCENT) { renderNonPdf(uri, name, mime, stage, allowWeb = false) }, w = WRAP, top = 16)
+        holder.addView(box, FrameLayout.LayoutParams(MATCH, MATCH))
+    }
+
+    private fun renderNonPdf(uri: android.net.Uri, name: String, mime: String, stage: FrameLayout, allowWeb: Boolean = true) {
+        val kind = OfficeView.kindOf(name, mime) ?: if (allowWeb && !mime.startsWith("image/") && mime != PDF) OfficeView.sniff(this, uri) else null
+        if (allowWeb && (kind == "docx" || kind == "xlsx" || kind == "pptx")) { renderOffice(uri, name, mime, kind, stage); return }
         stage.removeAllViews()
         val scrollContent = android.widget.ScrollView(this).apply {
             isFillViewport = true
             overScrollMode = View.OVER_SCROLL_NEVER
         }
         val paper = card(16, 16).apply {
-            setBackgroundColor(if (night) 0xFF0F172A.toInt() else Color.WHITE)
+            setBackgroundColor(if (night) 0xFF14161D.toInt() else C.SURFACE)
         }
 
         when {
@@ -359,12 +415,12 @@ class ViewerActivity : AppCompatActivity() {
                     background = shape(C.BLUE_BG, 12, C.ACCENT, 1)
                 }
                 val bRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                bRow.add(iconBadge(R.drawable.ic_sheet, C.TEAL, Color.WHITE, 100, 20), w = dp(38), h = dp(38))
+                bRow.add(iconBadge(R.drawable.ic_sheet, C.TEAL, C.SURFACE, 100, 20), w = dp(38), h = dp(38))
                 val bCol = vbox()
                 bCol.add(tv("Konversi Cepat Depup", 14f, C.TEXT, true))
                 bCol.add(tv("Ekspor spreadsheet ini menjadi file PDF rapi siap cetak", 11f, C.MUTED), top = 2)
                 bRow.add(bCol, w = 0, weight = 1f, side = 8)
-                bRow.add(tv("Edit Excel", 11f, Color.WHITE, true).apply {
+                bRow.add(tv("Edit Excel", 11f, C.ON_PRIMARY, true).apply {
                     background = shape(C.TEAL, 8)
                     setPadding(dp(10), dp(7), dp(10), dp(7))
                     setOnClickListener {
@@ -396,7 +452,7 @@ class ViewerActivity : AppCompatActivity() {
 
                     val colHead = LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
-                        background = shape(0xFFE2E8F0.toInt(), 6)
+                        background = shape(C.LINE, 6)
                         setPadding(dp(6), dp(6), dp(6), dp(6))
                     }
                     colHead.add(tv("#", 11f, C.MUTED, true), w = dp(28))
@@ -411,14 +467,14 @@ class ViewerActivity : AppCompatActivity() {
                             orientation = LinearLayout.HORIZONTAL
                             gravity = Gravity.CENTER_VERTICAL
                             background = shape(
-                                if (header) 0xFFE0F2FE.toInt() else (if (rowIdx % 2 == 0) C.SURFACE2 else Color.WHITE),
+                                if (header) C.BLUE_BG else (if (rowIdx % 2 == 0) C.SURFACE2 else C.SURFACE),
                                 6
                             )
                             setPadding(dp(6), dp(8), dp(6), dp(8))
                         }
                         rowView.add(tv("${rowIdx + 1}", 11f, C.MUTED, true), w = dp(28))
                         for (c in 0 until cols) {
-                            rowView.add(tv(rowCells.getOrNull(c).orEmpty().trim(), 12f, if (header) C.TEAL else C.TEXT, header).apply {
+                            rowView.add(tv(rowCells.getOrNull(c).orEmpty().trim(), 12f, if (header) C.ACCENT else C.TEXT, header).apply {
                                 maxLines = 1
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }, w = 0, weight = 1f, side = 4)
@@ -427,6 +483,14 @@ class ViewerActivity : AppCompatActivity() {
                     }
                     paper.add(tableBox, top = 6)
                 }
+            }
+            kind == "legacy" || kind == "pptx" -> {
+                val banner = card(16, 16).apply { background = shape(C.SURFACE2, 16, C.LINE, 1) }
+                banner.add(tv(if (kind == "legacy") "Format lama belum didukung" else "Presentasi tidak dapat dibuka", 18f, C.TEXT, true))
+                banner.add(tv(if (kind == "legacy") "Berkas .doc / .ppt (format Office 97–2003) belum bisa ditampilkan di pembaca ini. Buka di Word/PowerPoint lalu simpan ulang sebagai .docx / .pptx."
+                    else "Berkas ini rusak atau dilindungi kata sandi.", 13f, C.MUTED), top = 6)
+                banner.add(btn("Bagikan ke aplikasi lain", true, C.ACCENT) { try { Files.share(this, uri, mime, false) } catch (_: Exception) {} }, top = 16)
+                paper.add(banner)
             }
             mime.startsWith("text/") || name.endsWith(".txt", ignoreCase = true) || name.endsWith(".md", ignoreCase = true) -> {
                 val content = try {
@@ -438,7 +502,7 @@ class ViewerActivity : AppCompatActivity() {
                     background = shape(C.SURFACE2, 12, C.LINE, 1)
                 }
                 val bRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                bRow.add(iconBadge(R.drawable.ic_note, C.INDIGO, C.INDIGO_BG, 100, 20), w = dp(38), h = dp(38))
+                bRow.add(iconBadge(R.drawable.ic_note, C.NAVY, C.INDIGO_BG, 100, 20), w = dp(38), h = dp(38))
                 val bCol = vbox()
                 bCol.add(tv("Pratinjau Teks", 14f, C.TEXT, true))
                 bCol.add(tv("${content.length} karakter • teks bisa disalin", 11f, C.MUTED), top = 2)
@@ -451,7 +515,7 @@ class ViewerActivity : AppCompatActivity() {
                     paper.add(TextView(this).apply {
                         text = content.take(200_000)
                         textSize = 13f
-                        setTextColor(if (night) Color.WHITE else C.TEXT)
+                        setTextColor(if (night) C.ON_PRIMARY else C.TEXT)
                         typeface = Typeface.MONOSPACE
                         setTextIsSelectable(true)
                         setLineSpacing(dp(3).toFloat(), 1.15f)
@@ -469,12 +533,12 @@ class ViewerActivity : AppCompatActivity() {
                     background = shape(C.BLUE_BG, 12, C.ACCENT, 1)
                 }
                 val bRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                bRow.add(iconBadge(R.drawable.ic_doc, C.ACCENT, Color.WHITE, 100, 20), w = dp(38), h = dp(38))
+                bRow.add(iconBadge(R.drawable.ic_doc, C.ACCENT, C.SURFACE, 100, 20), w = dp(38), h = dp(38))
                 val bCol = vbox()
                 bCol.add(tv("Pratinjau Isi Dokumen Word", 14f, C.TEXT, true))
                 bCol.add(tv("${paragraphs.size} paragraf terbaca • ketuk Edit Word untuk mengubah teks", 11f, C.MUTED), top = 2)
                 bRow.add(bCol, w = 0, weight = 1f, side = 8)
-                bRow.add(tv("Edit Word", 11f, Color.WHITE, true).apply {
+                bRow.add(tv("Edit Word", 11f, C.ON_PRIMARY, true).apply {
                     background = shape(C.ACCENT, 8)
                     setPadding(dp(12), dp(7), dp(12), dp(7))
                     setOnClickListener {
@@ -493,7 +557,7 @@ class ViewerActivity : AppCompatActivity() {
                         val tv = TextView(this).apply {
                             text = p.text
                             textSize = if (i == 0) 17f else 13f
-                            setTextColor(if (night) Color.WHITE else C.TEXT)
+                            setTextColor(if (night) C.ON_PRIMARY else C.TEXT)
                             typeface = when {
                                 p.bold -> Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                                 p.italic -> Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
@@ -601,7 +665,7 @@ class ViewerActivity : AppCompatActivity() {
         val zoomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         zooms.forEachIndexed { idx, zName ->
             val isSel = kotlin.math.abs(zoomVal[idx] - zoom) < 0.05f
-            val btn = tv(zName, 12f, if (isSel) Color.WHITE else C.TEXT, true).apply {
+            val btn = tv(zName, 12f, if (isSel) C.ON_PRIMARY else C.TEXT, true).apply {
                 background = shape(if (isSel) C.ACCENT else C.SURFACE2, 8)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
                 gravity = Gravity.CENTER
@@ -620,7 +684,7 @@ class ViewerActivity : AppCompatActivity() {
         val themeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         themes.forEachIndexed { idx, tName ->
             val isSel = paperTheme == idx
-            val btn = tv(tName, 11f, if (isSel) Color.WHITE else C.TEXT, true).apply {
+            val btn = tv(tName, 11f, if (isSel) C.ON_PRIMARY else C.TEXT, true).apply {
                 background = shape(if (isSel) C.ACCENT else C.SURFACE2, 8)
                 setPadding(dp(8), dp(8), dp(8), dp(8))
                 gravity = Gravity.CENTER
@@ -644,7 +708,7 @@ class ViewerActivity : AppCompatActivity() {
         val pct = if (total <= 0) 0 else ((p + 1) * 100 / total)
         progLabel.text = "$pct% selesai"
         progHolder.removeAllViews()
-        progHolder.addView(progressBar(pct / 100f, C.ACCENT, 0xFFD3DCF2.toInt(), 6), FrameLayout.LayoutParams(MATCH, MATCH))
+        progHolder.addView(progressBar(pct / 100f, C.ACCENT, C.TRACK, 6), FrameLayout.LayoutParams(MATCH, MATCH))
     }
 
     private fun toggleNight() {
@@ -709,11 +773,11 @@ class ViewerActivity : AppCompatActivity() {
             when (paperTheme) {
                 1 -> {
                     h.iv.colorFilter = invert
-                    h.iv.setBackgroundColor(0xFF0F172A.toInt())
+                    h.iv.setBackgroundColor(0xFF14161D.toInt())
                 }
                 2 -> {
                     h.iv.colorFilter = sepiaFilter
-                    h.iv.setBackgroundColor(0xFFFBF0D9.toInt())
+                    h.iv.setBackgroundColor(0xFFF4ECD8.toInt())
                 }
                 3 -> {
                     h.iv.colorFilter = greenFilter
@@ -751,6 +815,8 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        try { officeWeb?.destroy() } catch (_: Exception) {}
+        officeWeb = null
         exec.shutdownNow()
         synchronized(lock) {
             try { renderer?.close() } catch (_: Exception) {}

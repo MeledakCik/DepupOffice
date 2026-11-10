@@ -1,10 +1,10 @@
-# Depup Office v2.2.1 - Play Store Checklist
+# Depup Office v2.2.2 - Play Store Checklist
 
 ## Build
     cp keystore.properties.example keystore.properties   # isi kredensial upload key
     ./gradlew clean bundleRelease
-    -> app/build/outputs/bundle/release/DepupOffice_v2.2.1-release.aab
-Pastikan versionCode (4) > versionCode terakhir yang pernah di-upload.
+    -> app/build/outputs/bundle/release/DepupOffice_v2.2.2-release.aab
+Pastikan versionCode (6) > versionCode terakhir yang pernah di-upload (versionCode 5 sudah terpakai = v2.2.1).
 
 ## Data Safety (isi di Play Console)
 - Does your app collect or share any required user data types? -> **No**

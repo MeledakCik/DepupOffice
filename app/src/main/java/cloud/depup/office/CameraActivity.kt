@@ -55,7 +55,7 @@ class GuideView(ctx: Context) : View(ctx) {
     var grid = false
     private val dim = Paint().apply { color = 0x66000000 }
     private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF22D3EE.toInt(); style = Paint.Style.STROKE; strokeWidth = ctx.dp(3).toFloat(); strokeCap = Paint.Cap.ROUND
+        color = C.GOLD; style = Paint.Style.STROKE; strokeWidth = ctx.dp(3).toFloat(); strokeCap = Paint.Cap.ROUND
     }
     private val thin = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0x55FFFFFF; style = Paint.Style.STROKE; strokeWidth = ctx.dp(1).toFloat()
@@ -82,6 +82,9 @@ class GuideView(ctx: Context) : View(ctx) {
         ), edge)
     }
 }
+
+/** UI kamera selalu gelap (di atas pratinjau foto), jadi warnanya tidak ikut tema terang/gelap. */
+private val CAM_ACCENT = 0xFF4338CA.toInt()
 
 /** Viewfinder sendiri (CameraX): mode multi-halaman / KTP / dokumen, flash, grid, filter bawaan. */
 class CameraActivity : AppCompatActivity() {
@@ -141,29 +144,32 @@ class CameraActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(10), dp(16), 0)
         }
-        fun round(res: Int, onClick: () -> Unit) = FrameLayout(this).apply {
+        fun round(res: Int, desc: String, onClick: () -> Unit) = FrameLayout(this).apply {
             background = shape(0x66000000, 100)
+            contentDescription = desc; isFocusable = true
             addView(icon(res, Color.WHITE, 22), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
             setOnClickListener { onClick() }
         }
-        top.add(round(R.drawable.ic_close) { cancel() }, w = dp(44), h = dp(44))
+        top.add(round(R.drawable.ic_close, "Tutup kamera") { cancel() }, w = dp(48), h = dp(48))
         top.add(View(this), w = 0, weight = 1f)
         val fp = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = shape(0x66000000, 100)
             setPadding(dp(14), dp(8), dp(6), dp(8))
+            minimumHeight = dp(48)
+            contentDescription = "Ganti mode lampu kilat"
             setOnClickListener { cycleFlash() }
         }
-        fp.add(icon(R.drawable.ic_flash, 0xFFFACC15.toInt(), 18), w = dp(18), h = dp(18))
+        fp.add(icon(R.drawable.ic_flash, C.GOLD, 18), w = dp(18), h = dp(18))
         flashLabel = tv("Otomatis", 13f, Color.WHITE, true).apply {
-            background = shape(C.ACCENT, 100)
+            background = shape(CAM_ACCENT, 100)
             setPadding(dp(12), dp(5), dp(12), dp(5))
         }
         fp.add(flashLabel, w = WRAP, side = 8)
         top.add(fp, w = WRAP)
         top.add(View(this), w = 0, weight = 1f)
-        top.add(round(R.drawable.ic_grid) { guide.grid = !guide.grid; guide.invalidate() }, w = dp(44), h = dp(44))
+        top.add(round(R.drawable.ic_grid, "Tampilkan atau sembunyikan garis bantu") { guide.grid = !guide.grid; guide.invalidate() }, w = dp(48), h = dp(48))
         root.addView(top, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
 
         hintPill = tv("Letakkan dokumen di dalam bingkai & permukaan kontras", 12f, Color.WHITE).apply {
@@ -184,14 +190,16 @@ class CameraActivity : AppCompatActivity() {
         // ----- bawah -----
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xE60B1220.toInt())
+            setBackgroundColor(0xE6101218.toInt())
             setPadding(dp(16), dp(12), dp(16), dp(14))
         }
         val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         listOf("Multi-Halaman", "KTP / ID Card", "Dokumen (PDF)").forEachIndexed { i, n ->
-            val t = tv(n, 13f, 0xFFCBD5E1.toInt(), true).apply {
+            val t = tv(n, 13f, 0xCCFFFFFF.toInt(), true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(14), dp(9), dp(14), dp(9))
+                minHeight = dp(44)
+                gravity = Gravity.CENTER
                 setOnClickListener { setMode(i) }
             }
             tabs.add(t)
@@ -208,12 +216,13 @@ class CameraActivity : AppCompatActivity() {
             background = shape(0x33FFFFFF, 14, Color.WHITE, 2)
             clipToOutline = true
             outlineProvider = ViewOutlineProvider.BACKGROUND
+            contentDescription = "Selesai memotret, lanjut ke edit"
             setOnClickListener { finishWithShots() }
         }
         tf.addView(thumb, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER))
         badge = tv("0", 11f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.ACCENT) }
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(CAM_ACCENT) }
             visibility = View.GONE
         }
         tf.addView(badge, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP or Gravity.END))
@@ -227,8 +236,9 @@ class CameraActivity : AppCompatActivity() {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0); setStroke(dp(4), Color.WHITE) }
         }
         shutter = FrameLayout(this).apply {
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.ACCENT) }
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(CAM_ACCENT) }
             addView(icon(R.drawable.ic_camera, Color.WHITE, 28), FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
+            contentDescription = "Ambil foto"
             setOnClickListener { snap() }
         }
         outer.addView(shutter, FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER))
@@ -239,6 +249,7 @@ class CameraActivity : AppCompatActivity() {
         right.add(FrameLayout(this).apply {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x33FFFFFF) }
             addView(icon(R.drawable.ic_wand, Color.WHITE, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+            contentDescription = "Ganti filter warna"
             setOnClickListener { filterIdx = (filterIdx + 1) % filters.size; filterLabel.text = filterNames[filterIdx] }
         }, w = dp(56), h = dp(56))
         filterLabel = tv(filterNames[0], 11f, Color.WHITE)
@@ -259,7 +270,7 @@ class CameraActivity : AppCompatActivity() {
 
     private fun paintAuto() {
         autoPill.text = if (autoScan) "● Pindai otomatis: AKTIF" else "○ Pindai otomatis: MATI"
-        autoPill.background = shape(if (autoScan) 0xE60D9488.toInt() else 0x99000000.toInt(), 100)
+        autoPill.background = shape(if (autoScan) 0xE60F7040.toInt() else 0x99000000.toInt(), 100)
     }
 
     private fun hint(t: String) {
@@ -338,8 +349,9 @@ class CameraActivity : AppCompatActivity() {
         modeIdx = i
         tabs.forEachIndexed { k, t ->
             val on = k == i
-            t.setTextColor(if (on) Color.WHITE else 0xFFCBD5E1.toInt())
-            t.background = if (on) shape(C.ACCENT, 100) else null
+            t.setTextColor(if (on) Color.WHITE else 0xCCFFFFFF.toInt())
+            t.background = if (on) shape(CAM_ACCENT, 100) else null
+            t.isSelected = on
         }
         guide.ratio = if (i == 1) 1.586f else 0.707f
         guide.invalidate()

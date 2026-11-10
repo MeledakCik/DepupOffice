@@ -118,7 +118,7 @@ class VaultActivity : AppCompatActivity() {
     private fun header(sub: String) {
         holder.removeAllViews()
         val h = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
-        h.add(icon(R.drawable.ic_back, C.TEXT, 24).apply { setPadding(0, 0, dp(14), 0); setOnClickListener { finish() } }, w = dp(38), h = dp(24))
+        h.add(icon(R.drawable.ic_back, C.TEXT, 24).asButton("Kembali").apply { setOnClickListener { finish() } }, w = dp(48), h = dp(48))
         val c = vbox()
         c.add(tv("Vault Brankas", 20f, C.TEXT, true))
         c.add(tv(sub, 12f, C.MUTED))
@@ -187,7 +187,7 @@ class VaultActivity : AppCompatActivity() {
             holder.add(tv("Brankas masih kosong.", 13f, C.MUTED), top = 20)
         }
         files.forEach { f ->
-            holder.add(actionRow(R.drawable.ic_lock, Vault.displayName(f), Files.fmtSize(f.length()), C.AMBER, C.AMBER_BG) { fileMenu(f) }, top = 10)
+            holder.add(actionRow(R.drawable.ic_lock, Vault.displayName(f), Files.fmtSize(f.length()), C.AMBER, C.AMBER_BG, shadow = false) { fileMenu(f) }, top = 10)
         }
     }
 

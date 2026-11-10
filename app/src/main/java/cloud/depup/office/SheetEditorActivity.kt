@@ -14,7 +14,7 @@ import java.io.File
 import java.text.NumberFormat
 import java.util.Locale
 
-class SheetCell(var valStr: String = "", var isBold: Boolean = false, var bgColor: Int = Color.WHITE)
+class SheetCell(var valStr: String = "", var isBold: Boolean = false, var bgColor: Int = 0)
 
 class SheetEditorActivity : AppCompatActivity() {
 
@@ -63,7 +63,7 @@ class SheetEditorActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFFF1F5F9.toInt())
+            setBackgroundColor(C.SURFACE2)
         }
 
         root.add(topBar(initialTitle))
@@ -124,7 +124,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 matrix.add(mutableListOf(SheetCell("INV-002"), SheetCell("CV Jaya Abadi"), SheetCell("30 Okt 2024"), SheetCell("8500000")))
                 matrix.add(mutableListOf(SheetCell("TOTAL", true), SheetCell(""), SheetCell(""), SheetCell("=SUM(D2:D3)", true)))
                 numCols = 4
-                return "Invoice / Kuintansi"
+                return "Invoice / Kuitansi"
             }
             TEMPLATE_PRESENSI -> {
                 matrix.clear()
@@ -158,7 +158,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 SheetCell(
                     row.getOrNull(c).orEmpty(),
                     isBold = r in boldRows,
-                    bgColor = if (r in boldRows) 0xFFE2E8F0.toInt() else Color.WHITE
+                    bgColor = if (r in boldRows) C.LINE else 0
                 )
             }
             matrix.add(list)
@@ -188,9 +188,9 @@ class SheetEditorActivity : AppCompatActivity() {
                         cellVal,
                         isBold = rIdx == 0 || rIdx == 5,
                         bgColor = when (rIdx) {
-                            0 -> 0xFFE2E8F0.toInt()
-                            5 -> 0xFFE0F2FE.toInt()
-                            else -> Color.WHITE
+                            0 -> C.LINE
+                            5 -> C.BLUE_BG
+                            else -> 0
                         }
                     )
                 )
@@ -206,14 +206,12 @@ class SheetEditorActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
-            elevation = dp(2).toFloat()
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
 
-        bar.add(icon(R.drawable.ic_back, C.TEXT, 24).apply {
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+        bar.add(icon(R.drawable.ic_back, C.TEXT, 24).asButton("Kembali").apply {
             setOnClickListener { finish() }
-        }, w = dp(40), h = dp(40))
+        }, w = dp(48), h = dp(48))
 
         sheetTitleEt = field("Nama Spreadsheet Excel", multi = false).apply {
             setText(initialTitle)
@@ -230,13 +228,11 @@ class SheetEditorActivity : AppCompatActivity() {
         }
         bar.add(tmplBtn, w = WRAP, side = 4)
 
-        bar.add(icon(R.drawable.ic_tune, C.TEAL, 22).apply {
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+        bar.add(icon(R.drawable.ic_tune, C.TEAL, 22).asButton("Pengaturan spreadsheet").apply {
             setOnClickListener { showExcelSettingsSheet() }
-        }, w = dp(40), h = dp(40))
+        }, w = dp(48), h = dp(48))
 
-        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).apply {
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@SheetEditorActivity, v)
                 pm.menu.add(0, 1, 0, "🔊 Bacakan Isi Tabel (Voice Reader)")
@@ -253,7 +249,7 @@ class SheetEditorActivity : AppCompatActivity() {
             }
         }, w = dp(40), h = dp(40))
 
-        val saveBtn = tv("Ekspor", 13f, Color.WHITE, true).apply {
+        val saveBtn = tv("Ekspor", 13f, C.ON_PRIMARY, true).apply {
             background = shape(C.TEAL, 8)
             setPadding(dp(12), dp(8), dp(12), dp(8))
             setOnClickListener { saveSpreadsheet() }
@@ -268,7 +264,6 @@ class SheetEditorActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
-            elevation = dp(1).toFloat()
             setPadding(dp(12), dp(6), dp(12), dp(6))
         }
 
@@ -317,7 +312,7 @@ class SheetEditorActivity : AppCompatActivity() {
 
         fun toolBtn(label: String, onClick: () -> Unit) {
             val tvBtn = tv(label, 11f, C.TEXT, true).apply {
-                background = shape(C.SURFACE, 8, C.LINE, 1)
+                background = raised(C.SURFACE, 10, 2f)
                 setPadding(dp(10), dp(6), dp(10), dp(6))
                 isClickable = true
                 setOnClickListener { onClick() }
@@ -386,7 +381,7 @@ class SheetEditorActivity : AppCompatActivity() {
         toolBtn("Warna Biru") {
             if (activeRow in matrix.indices) {
                 ensureCell(activeRow, activeCol)
-                matrix[activeRow][activeCol].bgColor = 0xFFE0F2FE.toInt()
+                matrix[activeRow][activeCol].bgColor = C.BLUE_BG
                 renderGrid()
             }
         }
@@ -394,7 +389,7 @@ class SheetEditorActivity : AppCompatActivity() {
         toolBtn("Warna Putih") {
             if (activeRow in matrix.indices) {
                 ensureCell(activeRow, activeCol)
-                matrix[activeRow][activeCol].bgColor = Color.WHITE
+                matrix[activeRow][activeCol].bgColor = 0
                 renderGrid()
             }
         }
@@ -676,12 +671,12 @@ class SheetEditorActivity : AppCompatActivity() {
     private fun renderGrid() {
         gridBox.removeAllViews()
         val cardGrid = card(8, 12).apply {
-            background = shape(C.SURFACE, 12, if (currentGridlines) C.LINE else Color.TRANSPARENT, 1)
+            background = raised(C.SURFACE, 12, 2f)
         }
 
         val colHead = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = shape(0xFFE2E8F0.toInt(), 6)
+            background = shape(C.LINE, 6)
             setPadding(dp(4), dp(6), dp(4), dp(6))
         }
         colHead.add(tv("#", 11f, C.MUTED, true).apply { gravity = Gravity.CENTER }, w = dp(28))
@@ -706,12 +701,12 @@ class SheetEditorActivity : AppCompatActivity() {
 
                 val cellTv = tv(evaluated.ifBlank { "-" }, 12f, if (isActive) C.TEAL else C.TEXT, cell.isBold || isActive).apply {
                     gravity = Gravity.CENTER
-                    background = shape(
-                        if (isActive) 0xFFCCFBF1.toInt() else cell.bgColor,
-                        6,
-                        if (isActive) C.TEAL else (if (currentGridlines) C.LINE else Color.TRANSPARENT),
-                        1
-                    )
+                    // shape() sengaja tidak menggambar stroke, jadi gridline & cincin sel aktif digambar manual:
+                    // tanpa ini tombol gridline tidak berefek dan sel aktif hanya dibedakan lewat isian pucat.
+                    background = shape(if (isActive) C.TEAL_SOFT else if (cell.bgColor == 0) C.SURFACE else cell.bgColor, 6).apply {
+                        if (isActive) setStroke(dp(2), C.TEAL)
+                        else if (currentGridlines) setStroke(dp(1), C.LINE)
+                    }
                     setPadding(dp(4), dp(6), dp(4), dp(6))
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
@@ -774,7 +769,7 @@ class SheetEditorActivity : AppCompatActivity() {
         val currRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         currencies.forEachIndexed { idx, cName ->
             val isSel = currVal[idx] == currentCurrency
-            val btn = tv(cName, 12f, if (isSel) Color.WHITE else C.TEXT, true).apply {
+            val btn = tv(cName, 12f, if (isSel) C.ON_PRIMARY else C.TEXT, true).apply {
                 background = shape(if (isSel) C.TEAL else C.SURFACE2, 8)
                 setPadding(dp(10), dp(8), dp(10), dp(8))
                 gravity = Gravity.CENTER
@@ -793,7 +788,7 @@ class SheetEditorActivity : AppCompatActivity() {
         val gridRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         listOf("Tampilkan Garis", "Sembunyikan Garis").forEachIndexed { idx, gName ->
             val isSel = (idx == 0) == currentGridlines
-            val btn = tv(gName, 12f, if (isSel) Color.WHITE else C.TEXT, true).apply {
+            val btn = tv(gName, 12f, if (isSel) C.ON_PRIMARY else C.TEXT, true).apply {
                 background = shape(if (isSel) C.TEAL else C.SURFACE2, 8)
                 setPadding(dp(12), dp(8), dp(12), dp(8))
                 gravity = Gravity.CENTER

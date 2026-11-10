@@ -13,11 +13,16 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "2.2.1"
+        versionCode = 6
+        versionName = "2.2.2"
+        // App hanya berbahasa Indonesia (values/ tunggal, tanpa values-xx). Tanpa baris ini, string
+        // terjemahan dari AndroidX/Play Services/CameraX untuk puluhan bahasa lain tetap ikut terbundel.
+        // (Sengaja TIDAK membatasi density: mipmap launcher sudah kecil, dan membatasi density
+        // berisiko menghilangkan ikon yang pas untuk sebagian perangkat demi penghematan tak berarti.)
+        resourceConfigurations += listOf("id", "en")
     }
 
-    base.archivesName.set("DepupOffice_v2.2.1")
+    base.archivesName.set("DepupOffice_v2.2.2")
 
     // Kredensial TIDAK boleh hardcode. Isi keystore.properties (di-gitignore) atau env var DEPUP_*.
     val keystoreProps = Properties().apply {

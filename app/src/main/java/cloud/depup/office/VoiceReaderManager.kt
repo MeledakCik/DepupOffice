@@ -136,7 +136,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val rootLayout = LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(activity, 20), dp(activity, 20), dp(activity, 20), dp(activity, 20))
-                setBackgroundColor(Color.WHITE)
+                setBackgroundColor(C.SURFACE)
             }
 
             // Header
@@ -147,7 +147,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val titleTv = TextView(activity).apply {
                 text = "🔊 Voice Reader — $title"
                 textSize = 16f
-                setTextColor(Color.parseColor("#0F172A"))
+                setTextColor(C.TEXT)
                 setTypeface(null, android.graphics.Typeface.BOLD)
             }
             headerBox.addView(titleTv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -157,7 +157,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val progressTv = TextView(activity).apply {
                 text = "Siap membaca..."
                 textSize = 12f
-                setTextColor(Color.parseColor("#64748B"))
+                setTextColor(C.MUTED)
                 setPadding(0, dp(activity, 8), 0, dp(activity, 8))
             }
             rootLayout.addView(progressTv)
@@ -166,11 +166,10 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val previewBox = TextView(activity).apply {
                 text = if (contentText.length > 150) contentText.take(150) + "..." else contentText
                 textSize = 13f
-                setTextColor(Color.parseColor("#334155"))
+                setTextColor(C.MUTED)
                 setPadding(dp(activity, 12), dp(activity, 12), dp(activity, 12), dp(activity, 12))
                 background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#F8FAFC"))
-                    setStroke(1, Color.parseColor("#E2E8F0"))
+                    setColor(C.SURFACE2)
                     cornerRadius = dp(activity, 8).toFloat()
                 }
             }
@@ -185,7 +184,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val speedLabel = TextView(activity).apply {
                 text = "Kecepatan: "
                 textSize = 12f
-                setTextColor(Color.parseColor("#475569"))
+                setTextColor(C.MUTED)
             }
             speedLayout.addView(speedLabel)
 
@@ -195,11 +194,11 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             speedRates.forEach { rate ->
                 val btn = TextView(activity).apply {
                     text = "${rate}x"
-                    textSize = 11f
+                    textSize = 13f
                     setPadding(dp(activity, 8), dp(activity, 4), dp(activity, 8), dp(activity, 4))
-                    setTextColor(if (rate == currentRate) Color.WHITE else Color.parseColor("#1E293B"))
+                    setTextColor(if (rate == currentRate) C.ON_PRIMARY else C.TEXT)
                     background = GradientDrawable().apply {
-                        setColor(if (rate == currentRate) Color.parseColor("#2563EB") else Color.parseColor("#F1F5F9"))
+                        setColor(if (rate == currentRate) C.PRIMARY else C.SURFACE2)
                         cornerRadius = dp(activity, 6).toFloat()
                     }
                     setOnClickListener {
@@ -207,9 +206,9 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                         reader.setSpeechRate(currentRate)
                         speedButtons.forEachIndexed { idx, b ->
                             val r = speedRates[idx]
-                            b.setTextColor(if (r == currentRate) Color.WHITE else Color.parseColor("#1E293B"))
+                            b.setTextColor(if (r == currentRate) C.ON_PRIMARY else C.TEXT)
                             (b.background as GradientDrawable).setColor(
-                                if (r == currentRate) Color.parseColor("#2563EB") else Color.parseColor("#F1F5F9")
+                                if (r == currentRate) C.PRIMARY else C.SURFACE2
                             )
                         }
                     }
@@ -232,7 +231,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val langLabel = TextView(activity).apply {
                 text = "Bahasa: "
                 textSize = 12f
-                setTextColor(Color.parseColor("#475569"))
+                setTextColor(C.MUTED)
             }
             langLayout.addView(langLabel)
 
@@ -240,19 +239,19 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val enBtn = TextView(activity)
 
             val updateLangUi = { isId: Boolean ->
-                idBtn.setTextColor(if (isId) Color.WHITE else Color.parseColor("#1E293B"))
+                idBtn.setTextColor(if (isId) C.ON_PRIMARY else C.TEXT)
                 (idBtn.background as GradientDrawable).setColor(
-                    if (isId) Color.parseColor("#16A34A") else Color.parseColor("#F1F5F9")
+                    if (isId) C.PRIMARY else C.SURFACE2
                 )
-                enBtn.setTextColor(if (!isId) Color.WHITE else Color.parseColor("#1E293B"))
+                enBtn.setTextColor(if (!isId) C.ON_PRIMARY else C.TEXT)
                 (enBtn.background as GradientDrawable).setColor(
-                    if (!isId) Color.parseColor("#16A34A") else Color.parseColor("#F1F5F9")
+                    if (!isId) C.PRIMARY else C.SURFACE2
                 )
             }
 
             idBtn.apply {
                 text = "🇮🇩 Indonesia"
-                textSize = 11f
+                textSize = 12f
                 setPadding(dp(activity, 10), dp(activity, 4), dp(activity, 10), dp(activity, 4))
                 background = GradientDrawable().apply { cornerRadius = dp(activity, 6).toFloat() }
                 setOnClickListener {
@@ -263,7 +262,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             }
             enBtn.apply {
                 text = "🇬🇧 English"
-                textSize = 11f
+                textSize = 12f
                 setPadding(dp(activity, 10), dp(activity, 4), dp(activity, 10), dp(activity, 4))
                 background = GradientDrawable().apply { cornerRadius = dp(activity, 6).toFloat() }
                 setOnClickListener {
@@ -292,11 +291,11 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val playBtn = TextView(activity).apply {
                 text = "▶️ Putar Suara"
                 textSize = 14f
-                setTextColor(Color.WHITE)
+                setTextColor(C.ON_PRIMARY)
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setPadding(dp(activity, 20), dp(activity, 10), dp(activity, 20), dp(activity, 10))
                 background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#2563EB"))
+                    setColor(C.PRIMARY)
                     cornerRadius = dp(activity, 8).toFloat()
                 }
             }
@@ -304,10 +303,10 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             val stopBtn = TextView(activity).apply {
                 text = "⏹️ Stop"
                 textSize = 14f
-                setTextColor(Color.parseColor("#1E293B"))
+                setTextColor(C.TEXT)
                 setPadding(dp(activity, 16), dp(activity, 10), dp(activity, 16), dp(activity, 10))
                 background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#E2E8F0"))
+                    setColor(C.SURFACE2)
                     cornerRadius = dp(activity, 8).toFloat()
                 }
             }

@@ -28,7 +28,19 @@ object LineQuad {
 
     private const val VIRT_SUPPORT = 0.55f
 
-    fun detect(g: IntArray, w: Int, h: Int): FloatArray? {
+    fun detect(g: IntArray, w: Int, h: Int): FloatArray? = run(g, w, h, 0.15f, null)
+
+    /**
+     * Semua segi-empat garis-tepi yang lolos (untuk dinilai ulang oleh [DocFind]): luas minimum [minArea],
+     * maksimal [max] terbaik berdasar dukungan tepi. Koordinat piksel gambar kecil.
+     */
+    fun candidates(g: IntArray, w: Int, h: Int, minArea: Float, max: Int = 24): List<FloatArray> {
+        val all = ArrayList<Pair<FloatArray, Float>>()
+        run(g, w, h, minArea, all)
+        return all.sortedByDescending { it.second }.take(max).map { it.first }
+    }
+
+    private fun run(g: IntArray, w: Int, h: Int, minArea: Float, collect: MutableList<Pair<FloatArray, Float>>?): FloatArray? {
         if (w < 32 || h < 32 || g.size < w * h) return null
         val gx = IntArray(w * h); val gy = IntArray(w * h); val mag = FloatArray(w * h)
         val hist = IntArray(1024)
@@ -64,15 +76,16 @@ object LineQuad {
                 if (idx >= tt * W && idx < (tt + 1) * W) acc[idx]++
             }
         }
-        val minVotes = (0.22f * min(w, h)).toInt()
+        val minVotes = if (collect != null) (0.10f * min(w, h)).toInt() else (0.22f * min(w, h)).toInt()
         val hs = ArrayList<Ln>(); val vs = ArrayList<Ln>()
-        for (n in 0 until 24) {
+        for (n in 0 until (if (collect != null) 32 else 24)) {
             var bi = -1; var bv = 0
             for (i in acc.indices) if (acc[i] > bv) { bv = acc[i]; bi = i }
             if (bi < 0 || bv < minVotes) break
             val t = bi / W; val r = bi % W - R
-            if (abs(t - 90) <= 35) { if (hs.size < 10) hs.add(Ln(t, r.toFloat(), false)) }
-            else if (t <= 35 || t >= 145) { if (vs.size < 10) vs.add(Ln(t, r.toFloat(), false)) }
+            val cap = if (collect != null) 14 else 10
+            if (abs(t - 90) <= 35) { if (hs.size < cap) hs.add(Ln(t, r.toFloat(), false)) }
+            else if (t <= 35 || t >= 145) { if (vs.size < cap) vs.add(Ln(t, r.toFloat(), false)) }
             for (dt in -8..8) {
                 val tt = (t + dt + 180) % 180
                 for (rr in max(0, r + R - 8)..min(W - 1, r + R + 8)) acc[tt * W + rr] = 0
@@ -83,7 +96,7 @@ object LineQuad {
 
         // ---- kombinasi segi-empat ----
         var best: FloatArray? = null; var bestScore = 0f
-        val minEdge = 0.15f * max(w, h)
+        val minEdge = if (collect != null) 0.06f * max(w, h) else 0.15f * max(w, h)
         for (i in 0 until hs.size) for (j in i + 1 until hs.size) for (k in 0 until vs.size) for (l in k + 1 until vs.size) {
             val a = hs[i]; val b = hs[j]; val c = vs[k]; val d = vs[l]
             if (a.virt && b.virt && c.virt && d.virt) continue
@@ -102,7 +115,7 @@ object LineQuad {
             }
             if (out) continue
             val area = polyArea(q) / (w * h)
-            if (area < 0.15f || area > 1.1f) continue
+            if (area < minArea || area > 1.1f) continue
             if (!anglesOk(q, minEdge)) continue
             val sup = floatArrayOf(
                 side(q[0], q[1], q[2], q[3], top, mag, gx, gy, thr, w, h),
@@ -113,6 +126,10 @@ object LineQuad {
             val mn = minOf(minOf(sup[0], sup[1]), minOf(sup[2], sup[3])); val mean = (sup[0] + sup[1] + sup[2] + sup[3]) / 4f
             if (mn < 0.5f) continue
             val score = (0.5f * mn + 0.5f * mean) * sqrt(min(area, 1f))
+            if (collect != null) {
+                val o = FloatArray(8) { if (it % 2 == 0) q[it].coerceIn(0f, w.toFloat()) else q[it].coerceIn(0f, h.toFloat()) }
+                collect.add(o to (0.5f * mn + 0.5f * mean))
+            }
             if (score > bestScore) { bestScore = score; best = q }
         }
         val q = best ?: return null

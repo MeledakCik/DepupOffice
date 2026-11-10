@@ -44,19 +44,40 @@ class ScanPage(
     var watermark: String? = null,
     /** Foto asli sebelum koreksi perspektif (null = belum pernah diluruskan). Dipakai untuk "Reset". */
     var origFile: File? = null
-)
+) {
+    /**
+     * Area potong bebas: 4 titik sudut (lihat [Quad]). Boleh miring / tidak sejajar; saat disimpan hasilnya
+     * otomatis ditegakkan menjadi persegi panjang 90°. [crop] selalu = kotak pembatasnya.
+     */
+    var quad: FloatArray = Quad.full()
+        private set
 
-/** Kanvas potong: gambar + 4 sudut + 4 sisi yang bisa digeser, area luar diredupkan. */
+    fun setQuad(q: FloatArray) {
+        quad = q.copyOf()
+        val b = Quad.bbox(quad)
+        crop.set(b[0], b[1], b[2], b[3])
+    }
+}
+
+/**
+ * Kanvas potong BEBAS: 4 titik sudut bisa digeser ke mana saja (mengikuti dokumen yang miring / berperspektif),
+ * 4 pegangan di tengah sisi menggeser satu sisi, dan bagian dalam menggeser seluruh area. Area luar diredupkan.
+ * Hasil akhirnya otomatis ditegakkan jadi persegi panjang bersudut 90° (lihat [Pdf.warp]).
+ */
 class CropView(ctx: Context) : View(ctx) {
     private var shown: Bitmap? = null
-    val crop = RectF(0f, 0f, 1f, 1f)
+    /** 4 titik sudut (pecahan 0..1): KiriAtas, KananAtas, KananBawah, KiriBawah. */
+    var quad: FloatArray = Quad.full()
+        private set
     var onChange: (() -> Unit)? = null
+    /** Dipanggil saat jari diangkat setelah menggeser (untuk riwayat/hint). */
+    var onRelease: (() -> Unit)? = null
 
     private val img = RectF()
     private val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val dim = Paint().apply { color = 0x99000000.toInt() }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = ctx.dp(2).toFloat()
+        color = C.GOLD; style = Paint.Style.STROKE; strokeWidth = ctx.dp(2).toFloat(); strokeJoin = Paint.Join.ROUND
     }
     private val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0x66FFFFFF; style = Paint.Style.STROKE; strokeWidth = ctx.dp(1).toFloat()
@@ -65,10 +86,16 @@ class CropView(ctx: Context) : View(ctx) {
     private val hRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = C.ACCENT; style = Paint.Style.STROKE; strokeWidth = ctx.dp(3).toFloat()
     }
+    private val hActive = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C.GOLD }
+    private val bad = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = C.RED; style = Paint.Style.STROKE; strokeWidth = ctx.dp(3).toFloat()
+    }
+
+    // drag: 0 = tidak ada, 1..4 = sudut ke-(n-1), 11..14 = sisi ke-(n-11), 20 = geser semua
     private var drag = 0
     private var lx = 0f
     private var ly = 0f
-    private val minSize = 0.08f
+    private var rejected = false
 
     // Pratinjau Magic Color yang SEBENARNYA (normalisasi bayangan) dihitung di thread latar; sementara itu dipakai
     // pendekatan matriks warna supaya tidak ada kedipan. Urutan (filter lalu kecerahan/kontras) = sama dengan ekspor.
@@ -79,19 +106,24 @@ class CropView(ctx: Context) : View(ctx) {
     private var fBright = 0
     private var fContrast = 0
 
-    init { background = ctx.shape(0xFF283044.toInt(), 16) }
+    init { background = ctx.shape(C.NAVY_PANEL, 16) }
 
-    fun setBitmap(base: Bitmap, rot: Int, flip: Boolean, c: RectF, skew: Float = 0f) {
+    /** Gambar tampilan (sudah diputar/dibalik/diluruskan) — dipakai untuk pratinjau hasil. */
+    val bitmap: Bitmap? get() = shown
+
+    fun setBitmap(base: Bitmap, rot: Int, flip: Boolean, q: FloatArray, skew: Float = 0f) {
         val o = Pdf.orient(base, rot, flip)
         val d = Pdf.deskew(o, skew)
         if (o !== base && o !== d) o.recycle()
         shown = d
         magicBmp = null
         magicGen++
-        crop.set(c)
+        quad = q.copyOf()
         fit()
         invalidate()
     }
+
+    fun setQuad(q: FloatArray) { quad = q.copyOf(); invalidate() }
 
     private fun startMagic() {
         val src = shown ?: return
@@ -134,7 +166,7 @@ class CropView(ctx: Context) : View(ctx) {
     private fun fit() {
         val b = shown ?: return
         if (width == 0 || height == 0) return
-        val pad = context.dp(22).toFloat()
+        val pad = context.dp(24).toFloat()
         val aw = width - 2 * pad
         val ah = height - 2 * pad
         val s = minOf(aw / b.width, ah / b.height)
@@ -143,34 +175,51 @@ class CropView(ctx: Context) : View(ctx) {
         img.set((width - w) / 2f, (height - h) / 2f, (width + w) / 2f, (height + h) / 2f)
     }
 
-    private fun cropPx() = RectF(
-        img.left + crop.left * img.width(), img.top + crop.top * img.height(),
-        img.left + crop.right * img.width(), img.top + crop.bottom * img.height()
-    )
+    private fun px(i: Int) = img.left + quad[2 * i] * img.width()
+    private fun py(i: Int) = img.top + quad[2 * i + 1] * img.height()
+
+    private fun quadPath(): android.graphics.Path = android.graphics.Path().apply {
+        moveTo(px(0), py(0)); lineTo(px(1), py(1)); lineTo(px(2), py(2)); lineTo(px(3), py(3)); close()
+    }
 
     override fun onDraw(c: Canvas) {
         val b = shown ?: return
         c.drawBitmap(if (fMode == 3) (magicBmp ?: b) else b, null, img, imgPaint)
-        val r = cropPx()
-        c.drawRect(img.left, img.top, img.right, r.top, dim)
-        c.drawRect(img.left, r.bottom, img.right, img.bottom, dim)
-        c.drawRect(img.left, r.top, r.left, r.bottom, dim)
-        c.drawRect(r.right, r.top, img.right, r.bottom, dim)
-        for (i in 1..2) {
-            val x = r.left + r.width() * i / 3f
-            val y = r.top + r.height() * i / 3f
-            c.drawLine(x, r.top, x, r.bottom, grid)
-            c.drawLine(r.left, y, r.right, y, grid)
+
+        // Redupkan area di luar segi-empat
+        val outside = android.graphics.Path().apply {
+            fillType = android.graphics.Path.FillType.EVEN_ODD
+            addRect(img, android.graphics.Path.Direction.CW)
+            addPath(quadPath())
         }
-        c.drawRect(r, line)
-        val rad = context.dp(9).toFloat()
-        val cx = (r.left + r.right) / 2f
-        val cy = (r.top + r.bottom) / 2f
-        val pts = arrayOf(
-            r.left to r.top, r.right to r.top, r.left to r.bottom, r.right to r.bottom,
-            cx to r.top, cx to r.bottom, r.left to cy, r.right to cy
-        )
-        pts.forEach { (x, y) -> c.drawCircle(x, y, rad, hFill); c.drawCircle(x, y, rad, hRing) }
+        c.drawPath(outside, dim)
+
+        // Kisi perspektif 3x3 di dalam area
+        fun lerp(a: Float, b2: Float, t: Float) = a + (b2 - a) * t
+        for (k in 1..2) {
+            val t = k / 3f
+            c.drawLine(lerp(px(0), px(1), t), lerp(py(0), py(1), t), lerp(px(3), px(2), t), lerp(py(3), py(2), t), grid)
+            c.drawLine(lerp(px(0), px(3), t), lerp(py(0), py(3), t), lerp(px(1), px(2), t), lerp(py(1), py(2), t), grid)
+        }
+        c.drawPath(quadPath(), if (rejected) bad else line)
+
+        // Pegangan tengah sisi (kapsul kecil) & sudut (lingkaran besar)
+        val r = context.dp(5).toFloat()
+        for (k in 0 until 4) {
+            val j = (k + 1) % 4
+            val mx = (px(k) + px(j)) / 2f; val my = (py(k) + py(j)) / 2f
+            val ang = Math.toDegrees(kotlin.math.atan2((py(j) - py(k)).toDouble(), (px(j) - px(k)).toDouble())).toFloat()
+            c.save(); c.rotate(ang, mx, my)
+            val rr = RectF(mx - r * 3, my - r, mx + r * 3, my + r)
+            c.drawRoundRect(rr, r, r, if (drag == 11 + k) hActive else hFill)
+            c.drawRoundRect(rr, r, r, hRing)
+            c.restore()
+        }
+        val rad = context.dp(10).toFloat()
+        for (k in 0 until 4) {
+            c.drawCircle(px(k), py(k), rad, if (drag == 1 + k) hActive else hFill)
+            c.drawCircle(px(k), py(k), rad, hRing)
+        }
 
         // Lukis sensur hitam (blackout/redaksi)
         if (activeRedactions.isNotEmpty()) {
@@ -199,7 +248,7 @@ class CropView(ctx: Context) : View(ctx) {
             c.save()
             c.rotate(-32f, img.centerX(), img.centerY())
             val wmPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0x66DC2626.toInt()
+                color = 0x66B2402F.toInt()
                 textSize = minOf(img.width(), img.height()) * 0.08f
                 isFakeBoldText = true
                 textAlign = Paint.Align.CENTER
@@ -208,49 +257,39 @@ class CropView(ctx: Context) : View(ctx) {
             c.restore()
         }
 
-        if (drag != 0 && shown != null && !isRedactMode) {
-            val rx = when {
-                drag and 1 != 0 -> crop.left
-                drag and 4 != 0 -> crop.right
-                else -> (crop.left + crop.right) / 2f
+        // Kaca pembesar saat menggeser sudut / sisi (agar sudut kertas bisa dipaskan presisi)
+        if (drag in 1..4 || drag in 11..14) {
+            val (rx, ry) = if (drag in 1..4) quad[2 * (drag - 1)] to quad[2 * (drag - 1) + 1] else {
+                val k = drag - 11; val j = (k + 1) % 4
+                (quad[2 * k] + quad[2 * j]) / 2f to (quad[2 * k + 1] + quad[2 * j + 1]) / 2f
             }
-            val ry = when {
-                drag and 2 != 0 -> crop.top
-                drag and 8 != 0 -> crop.bottom
-                else -> (crop.top + crop.bottom) / 2f
-            }
-            val px = (rx * b.width).toInt().coerceIn(0, b.width - 1)
-            val py = (ry * b.height).toInt().coerceIn(0, b.height - 1)
-
-            val size = context.dp(44).toFloat()
-            val lCx = width - size - context.dp(16)
+            val bx = (rx * b.width).toInt().coerceIn(0, b.width - 1)
+            val by = (ry * b.height).toInt().coerceIn(0, b.height - 1)
+            val size = context.dp(48).toFloat()
+            // Kaca pembesar menjauhi jari: pindah ke sisi kiri bila jari di kanan atas
+            val fingerRight = img.left + rx * img.width() > width / 2f
+            val fingerTop = img.top + ry * img.height() < height / 2f
+            val lCx = if (fingerRight && fingerTop) size + context.dp(16) else width - size - context.dp(16)
             val lCy = size + context.dp(16)
 
             c.save()
             val path = android.graphics.Path().apply { addCircle(lCx, lCy, size, android.graphics.Path.Direction.CW) }
             c.clipPath(path)
             c.drawColor(Color.WHITE)
-
+            val half = (size / 2.5f) * (b.width / img.width()).coerceAtLeast(0.6f)
             val srcR = android.graphics.Rect(
-                (px - size / 2.5f).toInt().coerceAtLeast(0),
-                (py - size / 2.5f).toInt().coerceAtLeast(0),
-                (px + size / 2.5f).toInt().coerceAtMost(b.width),
-                (py + size / 2.5f).toInt().coerceAtMost(b.height)
+                (bx - half).toInt().coerceAtLeast(0), (by - half).toInt().coerceAtLeast(0),
+                (bx + half).toInt().coerceAtMost(b.width), (by + half).toInt().coerceAtMost(b.height)
             )
-            val dstR = RectF(lCx - size, lCy - size, lCx + size, lCy + size)
+            val dstR = RectF(
+                lCx - size * (bx - srcR.left) / half, lCy - size * (by - srcR.top) / half,
+                lCx + size * (srcR.right - bx) / half, lCy + size * (srcR.bottom - by) / half
+            )
             c.drawBitmap(b, srcR, dstR, imgPaint)
-
             c.drawLine(lCx - 16, lCy, lCx + 16, lCy, hRing)
             c.drawLine(lCx, lCy - 16, lCx, lCy + 16, hRing)
             c.restore()
-
             c.drawCircle(lCx, lCy, size, hRing)
-
-            val pText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE; textSize = context.dp(10).toFloat(); typeface = Fonts.label(context)
-            }
-            c.drawRoundRect(lCx - 18, lCy + size - 18, lCx + 18, lCy + size - 2, 8f, 8f, hFill)
-            c.drawText("2.5x", lCx - 12, lCy + size - 6, pText)
         }
     }
 
@@ -301,43 +340,63 @@ class CropView(ctx: Context) : View(ctx) {
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                val c = cropPx()
-                val t = context.dp(28).toFloat()
-                val inY = e.y > c.top - t && e.y < c.bottom + t
-                val inX = e.x > c.left - t && e.x < c.right + t
-                var m = 0
-                if (abs(e.x - c.left) < t && inY) m = m or 1 else if (abs(e.x - c.right) < t && inY) m = m or 4
-                if (abs(e.y - c.top) < t && inX) m = m or 2 else if (abs(e.y - c.bottom) < t && inX) m = m or 8
-                if (m == 0 && c.contains(e.x, e.y)) m = 16
-                drag = m
+                if (img.width() <= 0f) return false
+                val t = context.dp(30).toFloat()
+                var best = -1; var bestD = t * t
+                for (k in 0 until 4) {
+                    val dx = e.x - px(k); val dy = e.y - py(k); val d = dx * dx + dy * dy
+                    if (d < bestD) { bestD = d; best = 1 + k }
+                }
+                if (best < 0) {
+                    val te = context.dp(26).toFloat(); var bd = te * te
+                    for (k in 0 until 4) {
+                        val j = (k + 1) % 4
+                        val dx = e.x - (px(k) + px(j)) / 2f; val dy = e.y - (py(k) + py(j)) / 2f; val d = dx * dx + dy * dy
+                        if (d < bd) { bd = d; best = 11 + k }
+                    }
+                }
+                if (best < 0) {
+                    val r = android.graphics.Region()
+                    val bounds = android.graphics.Region(0, 0, width, height)
+                    r.setPath(quadPath(), bounds)
+                    if (r.contains(e.x.toInt(), e.y.toInt())) best = 20
+                }
+                drag = if (best < 0) 0 else best
                 lx = e.x; ly = e.y
-                if (m != 0) parent?.requestDisallowInterceptTouchEvent(true)
-                return m != 0
+                if (drag != 0) { parent?.requestDisallowInterceptTouchEvent(true); invalidate() }
+                return drag != 0
             }
             MotionEvent.ACTION_MOVE -> {
                 if (drag == 0 || img.width() <= 0f) return false
                 val dx = (e.x - lx) / img.width()
                 val dy = (e.y - ly) / img.height()
                 lx = e.x; ly = e.y
-                if (drag == 16) {
-                    val w = crop.width()
-                    val h = crop.height()
-                    val nl = (crop.left + dx).coerceIn(0f, 1f - w)
-                    val nt = (crop.top + dy).coerceIn(0f, 1f - h)
-                    crop.set(nl, nt, nl + w, nt + h)
-                } else {
-                    if (drag and 1 != 0) crop.left = (crop.left + dx).coerceIn(0f, crop.right - minSize)
-                    if (drag and 4 != 0) crop.right = (crop.right + dx).coerceIn(crop.left + minSize, 1f)
-                    if (drag and 2 != 0) crop.top = (crop.top + dy).coerceIn(0f, crop.bottom - minSize)
-                    if (drag and 8 != 0) crop.bottom = (crop.bottom + dy).coerceIn(crop.top + minSize, 1f)
+                val n = quad.copyOf()
+                when (drag) {
+                    in 1..4 -> { val k = drag - 1; n[2 * k] += dx; n[2 * k + 1] += dy }
+                    in 11..14 -> {
+                        val k = drag - 11; val j = (k + 1) % 4
+                        n[2 * k] += dx; n[2 * k + 1] += dy; n[2 * j] += dx; n[2 * j + 1] += dy
+                    }
+                    20 -> {
+                        val bb = Quad.bbox(quad)
+                        val mx = dx.coerceIn(-bb[0], 1f - bb[2]); val my = dy.coerceIn(-bb[1], 1f - bb[3])
+                        for (k in 0 until 4) { n[2 * k] += mx; n[2 * k + 1] += my }
+                    }
                 }
+                val cl = Quad.clamp(n)
+                // Tolak bentuk tidak sah (sudut saling silang / cekung): tetap di posisi terakhir yang sah.
+                rejected = !Quad.isValid(cl)
+                if (!rejected) { quad = cl; onChange?.invoke() }
                 invalidate()
-                onChange?.invoke()
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                drag = 0
+                val was = drag
+                drag = 0; rejected = false
                 parent?.requestDisallowInterceptTouchEvent(false)
+                invalidate()
+                if (was != 0) onRelease?.invoke()
             }
         }
         return true
@@ -359,6 +418,7 @@ class ScanEditActivity : AppCompatActivity() {
     private lateinit var brightLabel: TextView
     private lateinit var contrastLabel: TextView
     private lateinit var cropPanel: LinearLayout
+    private lateinit var cropHint: TextView
     private lateinit var filterPanel: LinearLayout
     private lateinit var segCrop: TextView
     private lateinit var segFilter: TextView
@@ -383,20 +443,17 @@ class ScanEditActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
             setPadding(dp(8), dp(8), dp(16), dp(8))
-            elevation = dp(2).toFloat()
         }
-        bar.add(icon(R.drawable.ic_close, C.TEXT, 24).apply {
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+        bar.add(icon(R.drawable.ic_close, C.TEXT, 24).asButton("Tutup editor scan").apply {
             setOnClickListener { askDiscard() }
-        }, w = dp(40), h = dp(40))
+        }, w = dp(48), h = dp(48))
         val tc = vbox()
         tc.add(tv("Edit Hasil Scan", 18f, C.TEXT, true))
         sub = tv("Hal 1 dari ${pages.size}", 12f, C.MUTED)
         tc.add(sub)
         bar.add(tc, w = 0, weight = 1f, side = 8)
 
-        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).apply {
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ScanEditActivity, v)
                 pm.menu.add(0, 1, 0, "🔊 Bacakan Teks OCR (Voice Reader)")
@@ -441,7 +498,7 @@ class ScanEditActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        seg.add(iconPill(R.drawable.ic_crop, "Potong Manual", C.ACCENT, C.BLUE_BG, 12f), w = WRAP)
+        seg.add(iconPill(R.drawable.ic_crop, "Potong Bebas", C.ACCENT, C.BLUE_BG, 12f), w = WRAP)
         seg.add(View(this), w = 0, weight = 1f)
         val sw = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -466,7 +523,7 @@ class ScanEditActivity : AppCompatActivity() {
         fun overlay(res: Int, label: String, f: () -> Unit) = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(0x99111827.toInt(), 100)
+            background = shape(0x99001156.toInt(), 100)
             setPadding(dp(12), dp(7), dp(14), dp(7))
             add(icon(res, Color.WHITE, 16), w = dp(16), h = dp(16))
             add(tv(label, 12f, Color.WHITE, true), w = WRAP, side = 6)
@@ -474,6 +531,7 @@ class ScanEditActivity : AppCompatActivity() {
         }
         ov.add(overlay(R.drawable.ic_full, "Penuh") { resetCrop() }, w = WRAP)
         ov.add(overlay(R.drawable.ic_rotate, "Reset") { resetAll() }, top = 8, w = WRAP)
+        ov.add(overlay(R.drawable.ic_check_ok, "Lihat Hasil") { previewResult() }, top = 8, w = WRAP)
         stage.addView(ov, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply { setMargins(dp(10), dp(10), 0, 0) })
         body.add(stage, top = 12, h = dp(380))
 
@@ -486,7 +544,7 @@ class ScanEditActivity : AppCompatActivity() {
         cropPanel = vbox()
         val tools = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = shape(C.SURFACE, 16, C.LINE, 1)
+            background = raised(C.SURFACE, 16, 2f)
             setPadding(dp(4), dp(12), dp(4), dp(12))
         }
         fun tool(res: Int, label: String, tint: Int = C.TEXT, f: () -> Unit) = LinearLayout(this).apply {
@@ -514,11 +572,11 @@ class ScanEditActivity : AppCompatActivity() {
 
         val secTools = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = shape(0xFFFFFBEB.toInt(), 16, 0xFFFCD34D.toInt(), 1)
+            background = shape(C.AMBER_BG, 16)
             setPadding(dp(4), dp(12), dp(4), dp(12))
         }
-        secTools.add(tool(R.drawable.ic_lock, "Sensur NIK/Data", 0xFFD97706.toInt()) { toggleRedactMode() }, w = 0, weight = 1f)
-        secTools.add(tool(R.drawable.ic_spark, "Cap Watermark", 0xFFD97706.toInt()) { showWatermarkDialog() }, w = 0, weight = 1f)
+        secTools.add(tool(R.drawable.ic_lock, "Sensur NIK/Data", C.AMBER) { toggleRedactMode() }, w = 0, weight = 1f)
+        secTools.add(tool(R.drawable.ic_spark, "Cap Watermark", C.AMBER) { showWatermarkDialog() }, w = 0, weight = 1f)
         secTools.add(tool(R.drawable.ic_trash, "Hapus Sensur", C.RED) { clearRedactions() }, w = 0, weight = 1f)
         cropPanel.add(secTools, top = 10)
 
@@ -529,12 +587,12 @@ class ScanEditActivity : AppCompatActivity() {
                 setOnClickListener { layoutKtpA4() }
             }
             val kRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            kRow.add(iconBadge(R.drawable.ic_user, C.ACCENT, Color.WHITE, 100, 20), w = dp(38), h = dp(38))
+            kRow.add(iconBadge(R.drawable.ic_user, C.ACCENT, C.SURFACE, 100, 20), w = dp(38), h = dp(38))
             val kCol = vbox()
             kCol.add(tv("Tata KTP 2-Sisi ke 1 Halaman A4", 14f, C.TEXT, true))
             kCol.add(tv("Gabung KTP Sisi Depan & Belakang dalam 1 lembar A4 siap cetak/upload", 11f, C.MUTED), top = 2)
             kRow.add(kCol, w = 0, weight = 1f, side = 8)
-            kRow.add(tv("Tata KTP A4", 11f, Color.WHITE, true).apply {
+            kRow.add(tv("Tata KTP A4", 12f, C.ON_PRIMARY, true).apply {
                 background = shape(C.ACCENT, 8)
                 setPadding(dp(10), dp(7), dp(10), dp(7))
             }, w = WRAP)
@@ -542,7 +600,8 @@ class ScanEditActivity : AppCompatActivity() {
             cropPanel.add(ktpBanner, top = 10)
         }
 
-        cropPanel.add(tv("Seret sudut atau sisi bingkai untuk memotong. Geser bagian dalam untuk memindahkan.", 12f, C.MUTED), top = 10)
+        cropHint = tv("", 12f, C.MUTED)
+        cropPanel.add(cropHint, top = 10)
         body.add(cropPanel, top = 12)
 
         // ---- panel Filter ----
@@ -565,8 +624,8 @@ class ScanEditActivity : AppCompatActivity() {
                 setOnClickListener { mode = m; paintFilters(); applyFilter() }
                 tag = m
             }
-            val bg = when (m) { 2 -> Color.BLACK; 1 -> 0xFFCBD5E1.toInt(); 3 -> 0xFFE0ECFF.toInt(); else -> 0xFFF1F5F9.toInt() }
-            val bc = when (m) { 2 -> Color.WHITE; 1 -> 0xFF475569.toInt(); else -> C.ACCENT }
+            val bg = when (m) { 2 -> Color.BLACK; 1 -> C.LINE_STRONG; 3 -> C.BLUE_BG; else -> C.SURFACE2 }
+            val bc = when (m) { 2 -> Color.WHITE; 1 -> 0xFF4B5468.toInt(); else -> C.ACCENT }
             val swatch = FrameLayout(this)
             val inner = vbox(8).apply { background = shape(bg, 10) }
             inner.add(View(this).apply { background = shape(bc, 3) }, h = dp(5))
@@ -608,9 +667,8 @@ class ScanEditActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
             setPadding(dp(16), dp(12), dp(16), dp(12))
-            elevation = dp(8).toFloat()
         }
-        foot.add(iconBadge(R.drawable.ic_camera, C.ACCENT, C.BLUE_BG, 12, 22).apply { setOnClickListener { retake() } }, w = dp(48), h = dp(48))
+        foot.add(iconBadge(R.drawable.ic_camera, C.ACCENT, C.BLUE_BG, 12, 22).apply { contentDescription = "Foto ulang halaman ini"; isFocusable = true; setOnClickListener { retake() } }, w = dp(48), h = dp(48))
         foot.add(btn("+ Halaman", false, C.ACCENT, R.drawable.ic_add_photo) { addPage() }, w = WRAP, side = 8)
         foot.add(btn("Selesai & Simpan", true, C.ACCENT, R.drawable.ic_pdf) { save() }, w = 0, weight = 1f, side = 0)
             .also { (foot.getChildAt(foot.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(8) }
@@ -629,9 +687,9 @@ class ScanEditActivity : AppCompatActivity() {
         cropPanel.visibility = if (i == 0) View.VISIBLE else View.GONE
         filterPanel.visibility = if (i == 1) View.VISIBLE else View.GONE
         segCrop.setTextColor(if (i == 0) C.ACCENT else C.MUTED)
-        segCrop.background = if (i == 0) shape(Color.WHITE, 10) else null
+        segCrop.background = if (i == 0) shape(C.SURFACE, 10) else null
         segFilter.setTextColor(if (i == 1) C.ACCENT else C.MUTED)
-        segFilter.background = if (i == 1) shape(Color.WHITE, 10) else null
+        segFilter.background = if (i == 1) shape(C.SURFACE, 10) else null
     }
 
     private fun sliderRow(res: Int, label: String, value: TextView, onChange: (Int) -> Unit): View {
@@ -664,7 +722,7 @@ class ScanEditActivity : AppCompatActivity() {
     private fun paintFilters() {
         filterCards.forEachIndexed { i, c ->
             val on = c.tag == mode
-            c.background = if (on) shape(C.BLUE_BG, 14, C.ACCENT, 2) else shape(C.SURFACE, 14, C.LINE, 1)
+            c.background = choiceBg(on, 14)
             checks[i].visibility = if (on) View.VISIBLE else View.INVISIBLE
         }
     }
@@ -683,22 +741,24 @@ class ScanEditActivity : AppCompatActivity() {
         cur = cur.coerceIn(0, pages.size - 1)
         val pg = pages[cur]
         val b = preview(pg) ?: return
-        cv.onChange = { pg.crop.set(cv.crop) }
-        cv.setBitmap(b, pg.rot, pg.flip, pg.crop, pg.skew)
+        cv.onChange = { pg.setQuad(cv.quad) }
+        cv.onRelease = { updateCropHint() }
+        cv.setBitmap(b, pg.rot, pg.flip, pg.quad, pg.skew)
+        updateCropHint()
         applyFilter()
         sub.text = "Hal ${cur + 1} dari ${pages.size}"
         chips.removeAllViews()
         dots.removeAllViews()
         pages.forEachIndexed { i, _ ->
             val on = i == cur
-            chips.add(tv("${i + 1}", 13f, if (on) Color.WHITE else C.MUTED, true).apply {
+            chips.add(tv("${i + 1}", 13f, if (on) C.ON_PRIMARY else C.MUTED, true).apply {
                 gravity = Gravity.CENTER
                 background = shape(if (on) C.ACCENT else C.SURFACE2, 100)
                 setOnClickListener { cur = i; show() }
             }, w = dp(36), h = dp(36), side = 0).also {
                 (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
             }
-            dots.add(View(this).apply { background = shape(if (on) C.ACCENT else 0xFFCBD5E1.toInt(), 100) },
+            dots.add(View(this).apply { background = shape(if (on) C.ACCENT else C.LINE_STRONG, 100) },
                 w = dp(if (on) 18 else 8), h = dp(8), side = 0).also {
                 (dots.getChildAt(dots.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(6)
             }
@@ -707,8 +767,7 @@ class ScanEditActivity : AppCompatActivity() {
 
     private fun rotate() {
         val pg = pages[cur]
-        val c = pg.crop
-        pg.crop.set(RectF(1f - c.bottom, c.left, 1f - c.top, c.right))
+        pg.setQuad(Quad.rot90(pg.quad))
         // Bila sudah dibalik, putar searah jarum jam di layar = kurangi putaran dasar.
         pg.rot = (pg.rot + (if (pg.flip) 270 else 90)) % 360
         show()
@@ -716,14 +775,13 @@ class ScanEditActivity : AppCompatActivity() {
 
     private fun flipPage() {
         val pg = pages[cur]
-        val c = pg.crop
-        pg.crop.set(RectF(1f - c.right, c.top, 1f - c.left, c.bottom))
+        pg.setQuad(Quad.flipH(pg.quad))
         pg.skew = -pg.skew
         pg.flip = !pg.flip
         show()
     }
 
-    private fun resetCrop() { pages[cur].crop.set(0f, 0f, 1f, 1f); show() }
+    private fun resetCrop() { pages[cur].setQuad(Quad.full()); show() }
 
     private fun resetAll() {
         val pg = pages[cur]
@@ -733,7 +791,7 @@ class ScanEditActivity : AppCompatActivity() {
             pg.file = orig
             pg.origFile = null
         }
-        pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.crop.set(0f, 0f, 1f, 1f)
+        pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.setQuad(Quad.full())
         show()
     }
 
@@ -908,7 +966,7 @@ class ScanEditActivity : AppCompatActivity() {
                 pg.file.delete()
                 pg.origFile?.delete(); pg.origFile = null
                 previews.remove(pg.file.absolutePath)
-                pg.file = f; pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.crop.set(0f, 0f, 1f, 1f)
+                pg.file = f; pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.setQuad(Quad.full())
                 show()
             } else f.delete()
         }
@@ -922,81 +980,111 @@ class ScanEditActivity : AppCompatActivity() {
     private fun cleanup() { pages.forEach { it.file.delete(); it.origFile?.delete() } }
 
     // ================= AUTO-CROP AI / LURUSKAN / OCR =================
-    private class Auto(val crop: RectF?, val skew: Float)
+    /** Hasil deteksi: 4 sudut dokumen (null = tidak ditemukan) dan kemiringan halus. */
+    private class Auto(val quad: FloatArray?, val skew: Float, val split: Boolean = false)
 
-    /** Jalankan di thread latar: deteksi tepi dokumen dan/atau kemiringan pada hasil putar/balik saat ini. */
+    /**
+     * Thread latar. AI mencari 4 sudut dokumen pada foto yang sudah diputar/dibalik — boleh miring atau
+     * berperspektif. Hasilnya ditaruh sebagai titik sudut yang MASIH BISA digeser pengguna, lalu saat disimpan
+     * otomatis ditegakkan jadi persegi panjang 90°. Bila tidak ada dokumen terdeteksi, kemiringan teks saja
+     * yang diluruskan (bila diminta).
+     */
     private fun detectFor(pg: ScanPage, doCrop: Boolean, doSkew: Boolean): Auto {
         val base = Pdf.decode(this, Uri.fromFile(pg.file), 1000)
         val o = Pdf.orient(base, pg.rot, pg.flip)
-        var d: Bitmap? = null
         try {
-            var skew = pg.skew
-            if (doSkew) skew = ScanAi.detectSkew(o, ScanAi.detectCrop(o))
-            d = Pdf.deskew(o, skew)
-            val crop = if (doCrop) ScanAi.detectCrop(d) else null
-            return Auto(crop, skew)
+            if (doCrop) {
+                val q = ScanAi.findDocument(o)
+                val split = q != null && ScanAi.lastSplit
+                val quad = q?.let { Quad.order(Quad.clamp(it)) }?.takeIf { Quad.isValid(it, 0.02f) }
+                if (quad != null) return Auto(quad, 0f, split)
+            }
+            if (!doSkew) return Auto(null, pg.skew)
+            val d = Pdf.deskew(o, pg.skew)
+            val area = Quad.bbox(pg.quad).let { RectF(it[0], it[1], it[2], it[3]) }
+            val delta = try { ScanAi.detectSkew(d, area.takeIf { !Quad.isFull(pg.quad) }) } finally { if (d !== o) d.recycle() }
+            return Auto(null, pg.skew + delta)
         } finally {
-            if (d != null && d !== o) d.recycle()
             if (o !== base) o.recycle()
             base.recycle()
         }
     }
 
     private fun autoDetect(list: List<ScanPage>, crop: Boolean, skew: Boolean, announce: Boolean) {
-        work("Mendeteksi tepi dokumen…", { list.map { detectFor(it, crop, skew) } }) { r ->
+        work(if (crop) "AI mendeteksi sudut dokumen…" else "Meluruskan halaman…", { list.map { detectFor(it, crop, skew) } }) { r ->
             r.onSuccess { res ->
-                var found = 0; var fixed = 0; var full = 0
+                var found = 0; var fixed = 0; var full = 0; var split = false
                 list.forEachIndexed { i, pg ->
                     val a = res[i]
-                    if (skew && kotlin.math.abs(a.skew - pg.skew) > 0.05f) { pg.skew = a.skew; fixed++ }
-                    if (crop) a.crop?.let { c ->
-                        pg.crop.set(c)
-                        if (c.width() * c.height() < 0.97f) found++ else full++
+                    val q = a.quad
+                    if (q != null) {
+                        pg.skew = 0f
+                        pg.setQuad(q)
+                        if (Quad.isFull(q, 0.03f)) full++ else found++
+                        if (a.split) split = true
+                    } else if (skew && kotlin.math.abs(a.skew - pg.skew) > 0.05f) {
+                        // Titik sudut ikut berputar bersama gambar supaya tetap menempel di dokumen.
+                        val b = preview(pg)
+                        val (w, h) = if (b != null) {
+                            if ((pg.rot / 90) % 2 == 1) b.height to b.width else b.width to b.height
+                        } else 1000 to 1400
+                        pg.setQuad(Quad.rotate(pg.quad, a.skew - pg.skew, w, h))
+                        pg.skew = a.skew
+                        fixed++
                     }
                 }
                 if (pages.isNotEmpty()) show()
-                if (announce) {
-                    if (found > 0) toast("Tepi terdeteksi di $found halaman" + if (fixed > 0) " · $fixed diluruskan" else "")
-                    else if (fixed > 0) toast("$fixed halaman diluruskan")
-                } else {
-                    if (crop && found == 0) toast(
-                        if (full > 0) "Dokumen sudah memenuhi bingkai." else "Tepi dokumen tidak terdeteksi. Atur bingkai secara manual."
-                    )
-                    if (crop && found > 0) toast("Tepi dokumen terdeteksi")
-                    if (!crop && skew) toast(if (fixed > 0) "Halaman diluruskan" else "Halaman sudah lurus")
+                when {
+                    split -> toast("Buku terbuka terdeteksi — sudut dipasang pada halaman yang dituju (yang berisi / utuh). Geser titik bila ingin halaman lain.")
+                    crop && found > 0 && announce -> toast("Sudut dokumen terdeteksi di $found halaman. Geser titik sudut bila perlu.")
+                    crop && found > 0 -> toast("Sudut dokumen terdeteksi. Geser titik sudut bila perlu — hasil otomatis jadi kotak 90°.")
+                    crop && full > 0 && !announce -> toast("Dokumen sudah memenuhi bingkai.")
+                    crop && !announce -> toast("Sudut dokumen tidak terdeteksi. Geser 4 titik sudut ke ujung dokumen secara manual.")
+                    !crop && skew -> toast(if (fixed > 0) "Halaman diluruskan" else "Halaman sudah lurus")
                 }
             }.onFailure { fail(it) }
         }
     }
 
-    /**
-     * Auto-crop AI ala CamScanner: cari 4 sudut dokumen; bila dokumen miring/berperspektif, foto "ditegakkan" jadi
-     * persegi panjang. Bila tidak (dokumen sudah lurus atau sudut tak yakin) jatuh ke potong kotak biasa.
-     */
-    private fun autoCrop() {
-        val pg = pages[cur]
-        work("Mendeteksi tepi dokumen…", { warpFor(pg) }) { r ->
-            r.onSuccess { f ->
-                if (f != null) { adoptWarped(pg, f); toast(if (ScanAi.lastSplit) "2 halaman terdeteksi, diambil 1 halaman yang berisi (Reset untuk batal)" else "Dokumen diluruskan (perspektif dikoreksi)") }
-                else autoDetect(listOf(pg), crop = true, skew = false, announce = false)
-            }.onFailure { autoDetect(listOf(pg), crop = true, skew = false, announce = false) }
+    /** Auto-crop AI ala CamScanner: pasang 4 titik sudut pada tepi dokumen (bisa disesuaikan pengguna). */
+    private fun autoCrop() = autoDetect(listOf(pages[cur]), crop = true, skew = false, announce = false)
+
+    /** Keterangan di bawah kanvas: menjelaskan apa yang akan terjadi pada hasil. */
+    private fun updateCropHint() {
+        if (!::cropHint.isInitialized) return
+        val q = pages.getOrNull(cur)?.quad ?: return
+        cropHint.text = when {
+            Quad.isFull(q) -> "Geser 4 titik sudut ke ujung dokumen — boleh miring atau tidak sejajar. Hasilnya otomatis diluruskan jadi kotak 90°."
+            Quad.isRect(q) -> "Area potong berbentuk kotak. Geser titik sudut secara bebas bila dokumen miring/berperspektif."
+            else -> "✓ Area miring akan otomatis diluruskan jadi persegi panjang 90° saat disimpan. Ketuk “Lihat Hasil” untuk pratinjau."
         }
     }
 
-    /** Thread latar. Berkas JPEG baru hasil koreksi perspektif, atau null = tidak perlu / tidak yakin. */
-    private fun warpFor(pg: ScanPage): File? {
-        val base = Pdf.decode(this, Uri.fromFile(pg.file), 1000)
-        val o = Pdf.orient(base, pg.rot, pg.flip)
-        val found: FloatArray? = try { ScanAi.detectQuad(o) } finally {
-            if (o !== base) o.recycle()
-            base.recycle()
+    /** Pratinjau cepat hasil luruskan dari gambar tampilan saat ini. */
+    private fun previewResult() {
+        val src = cv.bitmap ?: return
+        val pg = pages[cur]
+        val q = pg.quad
+        val res = try {
+            if (Quad.isRect(q)) {
+                val b = Quad.bbox(q)
+                val x = (b[0] * src.width).toInt().coerceIn(0, src.width - 2); val y = (b[1] * src.height).toInt().coerceIn(0, src.height - 2)
+                Bitmap.createBitmap(src, x, y, ((b[2] - b[0]) * src.width).toInt().coerceIn(2, src.width - x), ((b[3] - b[1]) * src.height).toInt().coerceIn(2, src.height - y))
+            } else Pdf.warp(src, q, 1400)
+        } catch (t: Throwable) { fail(t); return }
+        sheet { body, dismiss ->
+            sheetHeader(body, R.drawable.ic_check_ok, C.ACCENT, C.BLUE_BG, "Pratinjau Hasil", "${res.width} × ${res.height} px · sudut 90°", dismiss)
+            val iv = android.widget.ImageView(this).apply {
+                adjustViewBounds = true
+                setImageBitmap(res)
+                background = shape(C.NAVY_PANEL, 12)
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+            }
+            val pad = vbox().apply { setPadding(dp(16), 0, dp(16), dp(20)) }
+            pad.add(iv, h = dp(380))
+            pad.add(btn("Oke, lanjut edit", true, C.ACCENT) { dismiss() }, top = 12)
+            body.add(pad)
         }
-        val q = found ?: return null
-        val out = newFile()
-        try {
-            Pdf.warpQuad(this, pg.file, pg.rot, pg.flip, q, 3000, out)
-        } catch (t: Throwable) { out.delete(); throw t }
-        return out
     }
 
     /**
@@ -1016,16 +1104,6 @@ class ScanEditActivity : AppCompatActivity() {
                 if (!isFinishing && !isDestroyed && et.text.toString() == default) et.setText(name)
             }
         }.start()
-    }
-
-    /** Ganti foto halaman dengan hasil luruskan; foto ASLI pertama disimpan supaya "Reset" bisa memulihkannya. */
-    private fun adoptWarped(pg: ScanPage, f: File) {
-        previews.remove(pg.file.absolutePath)
-        if (pg.origFile == null) pg.origFile = pg.file else pg.file.delete()
-        pg.file = f
-        pg.rot = 0; pg.flip = false; pg.skew = 0f
-        pg.crop.set(0f, 0f, 1f, 1f)
-        show()
     }
 
     private fun straighten() = autoDetect(listOf(pages[cur]), crop = false, skew = true, announce = false)
@@ -1066,9 +1144,9 @@ class ScanEditActivity : AppCompatActivity() {
             // Ringkasan Poin-Poin Utama Dokumen
             val summary = Pdf.extractDocSummary(res.text)
             if (summary.dates.isNotEmpty() || summary.numbers.isNotEmpty() || summary.amounts.isNotEmpty()) {
-                val sCard = card(12, 12).apply { background = shape(0xFFFEF3C7.toInt(), 12, 0xFFD97706.toInt(), 1) }
+                val sCard = card(12, 12).apply { background = shape(C.AMBER_BG, 12, C.AMBER, 1) }
                 val sCol = vbox()
-                sCol.add(tv("📌 RINGKASAN POIN KRUSIAL DOKUMEN", 12f, 0xFFD97706.toInt(), true))
+                sCol.add(tv("📌 RINGKASAN POIN KRUSIAL DOKUMEN", 12f, C.AMBER, true))
                 if (summary.numbers.isNotEmpty()) sCol.add(tv("Nomor/Pasal: ${summary.numbers.joinToString(", ")}", 12f, C.TEXT, true), top = 2)
                 if (summary.dates.isNotEmpty()) sCol.add(tv("Tanggal: ${summary.dates.joinToString(", ")}", 12f, C.TEXT, true), top = 2)
                 if (summary.amounts.isNotEmpty()) sCol.add(tv("Nominal: ${summary.amounts.joinToString(", ")}", 12f, C.TEXT, true), top = 2)
@@ -1079,11 +1157,11 @@ class ScanEditActivity : AppCompatActivity() {
             // Deteksi Struk / Nota Keuangan
             val receipt = Pdf.parseReceipt(res.text)
             if (receipt.total != "Rp 0") {
-                val rCard = card(12, 12).apply { background = shape(0xFFE0F2FE.toInt(), 12, 0xFF0284C7.toInt(), 1) }
+                val rCard = card(12, 12).apply { background = shape(C.BLUE_BG, 12, C.INDIGO, 1) }
                 val rCol = vbox()
-                rCol.add(tv("🧾 DETEKSI STRUK / NOTA KEUANGAN", 12f, 0xFF0284C7.toInt(), true))
+                rCol.add(tv("🧾 DETEKSI STRUK / NOTA KEUANGAN", 12f, C.INDIGO, true))
                 rCol.add(tv("Merchant: ${receipt.merchant} • Tanggal: ${receipt.date}", 12f, C.TEXT, true), top = 2)
-                rCol.add(tv("Total Bayar: ${receipt.total}", 15f, 0xFF0284C7.toInt(), true), top = 2)
+                rCol.add(tv("Total Bayar: ${receipt.total}", 15f, C.INDIGO, true), top = 2)
                 rCard.add(rCol)
                 rCard.add(btn("Ekspor Struk ke Excel (.xlsx)", true, C.TEAL, R.drawable.ic_sheet) {
                     dismiss()
@@ -1140,7 +1218,7 @@ class ScanEditActivity : AppCompatActivity() {
         val r = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(C.SURFACE, 12, C.LINE, 1)
+            background = raised(C.SURFACE, 12, 2f)
             setPadding(dp(14), dp(12), dp(10), dp(12))
         }
         val col = vbox()
@@ -1150,8 +1228,8 @@ class ScanEditActivity : AppCompatActivity() {
         val sw = androidx.appcompat.widget.SwitchCompat(this).apply {
             isChecked = checked
             val st = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
-            trackTintList = ColorStateList(st, intArrayOf(0x661E60D5, 0xFFCBD5E1.toInt()))
-            thumbTintList = ColorStateList(st, intArrayOf(C.ACCENT, 0xFFF8FAFC.toInt()))
+            trackTintList = ColorStateList(st, intArrayOf((C.PRIMARY and 0x00FFFFFF) or 0x66000000, C.LINE_STRONG))
+            thumbTintList = ColorStateList(st, intArrayOf(C.ACCENT, C.BG))
             setOnCheckedChangeListener { _, on -> onChange(on) }
         }
         r.add(sw, w = WRAP, side = 8)
@@ -1196,7 +1274,7 @@ class ScanEditActivity : AppCompatActivity() {
                 setHintTextColor(C.MUTED); setTextColor(C.TEXT); textSize = 14f
                 typeface = Fonts.body(this@ScanEditActivity)
                 inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-                background = shape(C.SURFACE, 12, C.LINE, 1)
+                background = raised(C.SURFACE, 12, 2f, pressed = true)
                 setPadding(dp(14), dp(12), dp(14), dp(12))
             }
 
@@ -1226,13 +1304,13 @@ class ScanEditActivity : AppCompatActivity() {
             fun paintOpts() {
                 optCards.forEachIndexed { i, c ->
                     val on = i == opt
-                    c.background = if (on) shape(C.BLUE_BG, 12, C.ACCENT, 2) else shape(C.SURFACE, 12, C.LINE, 1)
+                    c.background = choiceBg(on, 14)
                     if (on) { marks[i].setImageResource(R.drawable.ic_check_ok); marks[i].setColorFilter(C.ACCENT) }
                     else {
                         marks[i].clearColorFilter()
                         marks[i].setImageDrawable(android.graphics.drawable.GradientDrawable().apply {
                             shape = android.graphics.drawable.GradientDrawable.OVAL
-                            setColor(Color.WHITE); setStroke(dp(2), 0xFFCBD5E1.toInt()); setSize(dp(22), dp(22))
+                            setColor(C.SURFACE2); setSize(dp(22), dp(22))
                         })
                     }
                 }
@@ -1292,7 +1370,7 @@ class ScanEditActivity : AppCompatActivity() {
             fun paintFmt() {
                 val cardIdx = when (fmt) { Export.F_PDF -> 0; Export.F_JPG -> 1; else -> 2 }
                 fmtCards.forEachIndexed { i, c ->
-                    c.background = if (i == cardIdx) shape(C.BLUE_BG, 14, C.ACCENT, 2) else shape(C.SURFACE, 14, C.LINE, 1)
+                    c.background = choiceBg(i == cardIdx, 14)
                 }
                 ext.text = when (fmt) { Export.F_PDF -> ".pdf"; Export.F_WORD -> ".docx"; else -> ".jpg" }
                 opt = if (fmt == Export.F_WORD) 0 else 1
@@ -1302,7 +1380,7 @@ class ScanEditActivity : AppCompatActivity() {
             fun paintAspect() {
                 aspectChips.forEachIndexed { i, c ->
                     val on = i == aIdx
-                    c.setTextColor(if (on) Color.WHITE else C.MUTED)
+                    c.setTextColor(if (on) C.ON_PRIMARY else C.MUTED)
                     c.background = shape(if (on) C.ACCENT else C.SURFACE2, 100)
                 }
             }
@@ -1334,7 +1412,7 @@ class ScanEditActivity : AppCompatActivity() {
             val nameRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = shape(C.SURFACE, 12, C.LINE, 1)
+                background = raised(C.SURFACE, 12, 2f, pressed = true)
                 setPadding(dp(14), dp(4), dp(10), dp(4))
             }
             nameRow.add(icon(R.drawable.ic_doc, C.MUTED, 20), w = dp(20), h = dp(20))

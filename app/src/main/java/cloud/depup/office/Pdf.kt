@@ -562,36 +562,33 @@ object Pdf {
         val o = orient(raw, rot, flip)
         if (o !== raw) raw.recycle()
         try {
-            val w = o.width.toFloat()
-            val h = o.height.toFloat()
-            val pts = FloatArray(8) { if (it % 2 == 0) q[it] * w else q[it] * h }
-            fun dist(i: Int, j: Int): Float {
-                val dx = pts[2 * i] - pts[2 * j]; val dy = pts[2 * i + 1] - pts[2 * j + 1]
-                return kotlin.math.sqrt(dx * dx + dy * dy)
-            }
-            var ow = max(dist(0, 1), dist(3, 2))
-            var oh = max(dist(0, 3), dist(1, 2))
-            if (ow < 16f || oh < 16f) throw IOException("Sudut dokumen tidak valid")
-            val ratio = max(ow, oh) / min(ow, oh)
-            for (std in floatArrayOf(297f / 210f, 85.6f / 54f)) {
-                if (kotlin.math.abs(ratio / std - 1f) < 0.04f) {
-                    if (ow >= oh) ow = oh * std else oh = ow * std
-                    break
-                }
-            }
-            val s = min(1f, maxDim / max(ow, oh))
-            val outW = (ow * s).toInt().coerceAtLeast(32)
-            val outH = (oh * s).toInt().coerceAtLeast(32)
-            val dst = floatArrayOf(0f, 0f, outW.toFloat(), 0f, outW.toFloat(), outH.toFloat(), 0f, outH.toFloat())
-            val m = Matrix()
-            if (!m.setPolyToPoly(pts, 0, dst, 0, 4)) throw IOException("Perspektif tidak bisa dihitung")
-            val res = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
-            res.eraseColor(Color.WHITE)
-            Canvas(res).drawBitmap(o, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+            val res = warp(o, q, maxDim)
             try {
                 FileOutputStream(out).use { res.compress(Bitmap.CompressFormat.JPEG, 95, it) }
             } finally { res.recycle() }
         } finally { o.recycle() }
+    }
+
+    /**
+     * Tegakkan segi-empat [q] (pecahan 0..1 pada [o], urutan KiriAtas, KananAtas, KananBawah, KiriBawah) menjadi
+     * persegi panjang bersudut 90° (koreksi perspektif). Bitmap BARU; [o] tidak diubah.
+     */
+    fun warp(o: Bitmap, q: FloatArray, maxDim: Int): Bitmap {
+        val w = o.width.toFloat()
+        val h = o.height.toFloat()
+        val pts = FloatArray(8) { if (it % 2 == 0) q[it] * w else q[it] * h }
+        val (ow, oh) = Quad.outputSize(pts)
+        if (ow < 16f || oh < 16f) throw IOException("Sudut dokumen tidak valid")
+        val s = min(1f, maxDim / max(ow, oh))
+        val outW = (ow * s).toInt().coerceAtLeast(32)
+        val outH = (oh * s).toInt().coerceAtLeast(32)
+        val dst = floatArrayOf(0f, 0f, outW.toFloat(), 0f, outW.toFloat(), outH.toFloat(), 0f, outH.toFloat())
+        val m = Matrix()
+        if (!m.setPolyToPoly(pts, 0, dst, 0, 4)) throw IOException("Perspektif tidak bisa dihitung")
+        val res = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        res.eraseColor(Color.WHITE)
+        Canvas(res).drawBitmap(o, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+        return res
     }
 
     /** Halaman scan -> JPG di Galeri (Pictures/Depup Office). Mengembalikan jumlah gambar. */
@@ -637,15 +634,32 @@ object Pdf {
         val raw = decode(ctx, Uri.fromFile(pg.file), maxDim)
         val oriented = orient(raw, pg.rot, pg.flip)
         if (oriented !== raw) raw.recycle()
-        val rotated = deskew(oriented, pg.skew)
+        var rotated = deskew(oriented, pg.skew)
         if (rotated !== oriented) oriented.recycle()
-        val w = rotated.width
-        val h = rotated.height
-        val x = (pg.crop.left * w).toInt().coerceIn(0, w - 2)
-        val y = (pg.crop.top * h).toInt().coerceIn(0, h - 2)
-        val cw = ((pg.crop.right - pg.crop.left) * w).toInt().coerceIn(2, w - x)
-        val ch = ((pg.crop.bottom - pg.crop.top) * h).toInt().coerceIn(2, h - y)
-        val cropped = Bitmap.createBitmap(rotated, x, y, cw, ch)
+
+        // Sensur hitam ditandai pada gambar utuh (seperti terlihat di editor), jadi dilukis SEBELUM dipotong/diluruskan.
+        if (pg.redactions.isNotEmpty()) {
+            if (!rotated.isMutable) {
+                val m = rotated.copy(Bitmap.Config.ARGB_8888, true)
+                rotated.recycle(); rotated = m
+            }
+            val canvas = Canvas(rotated)
+            val bPaint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
+            for (r in pg.redactions) {
+                canvas.drawRect(r.left * rotated.width, r.top * rotated.height, r.right * rotated.width, r.bottom * rotated.height, bPaint)
+            }
+        }
+
+        val cropped = if (Quad.isRect(pg.quad)) {
+            val b = Quad.bbox(pg.quad)
+            val w = rotated.width
+            val h = rotated.height
+            val x = (b[0] * w).toInt().coerceIn(0, w - 2)
+            val y = (b[1] * h).toInt().coerceIn(0, h - 2)
+            val cw = ((b[2] - b[0]) * w).toInt().coerceIn(2, w - x)
+            val ch = ((b[3] - b[1]) * h).toInt().coerceIn(2, h - y)
+            Bitmap.createBitmap(rotated, x, y, cw, ch)
+        } else warp(rotated, pg.quad, maxDim)
         if (cropped !== rotated) rotated.recycle()
 
         val baseBmp = if (bright != 0 || contrast != 0) {
@@ -656,21 +670,13 @@ object Pdf {
             o
         } else cropped
 
-        // Lukis sensur hitam (blackout) jika ada
-        if (pg.redactions.isNotEmpty()) {
-            val canvas = Canvas(baseBmp)
-            val bPaint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
-            for (r in pg.redactions) {
-                val rx1 = r.left * baseBmp.width
-                val ry1 = r.top * baseBmp.height
-                val rx2 = r.right * baseBmp.width
-                val ry2 = r.bottom * baseBmp.height
-                canvas.drawRect(rx1, ry1, rx2, ry2, bPaint)
-            }
-        }
-
         // Lukis watermark diagonal jika ada
         if (!pg.watermark.isNullOrBlank()) {
+            if (!baseBmp.isMutable) {
+                val m = baseBmp.copy(Bitmap.Config.ARGB_8888, true)
+                baseBmp.recycle()
+                return drawWatermark(m, pg.watermark!!)
+            }
             val canvas = Canvas(baseBmp)
             canvas.save()
             canvas.rotate(-32f, baseBmp.width / 2f, baseBmp.height / 2f)
@@ -685,6 +691,21 @@ object Pdf {
         }
 
         return baseBmp
+    }
+
+    private fun drawWatermark(b: Bitmap, text: String): Bitmap {
+        val canvas = Canvas(b)
+        canvas.save()
+        canvas.rotate(-32f, b.width / 2f, b.height / 2f)
+        val wmPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x55DC2626.toInt()
+            textSize = min(b.width, b.height) * 0.08f
+            isFakeBoldText = true
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText(text, b.width / 2f, b.height / 2f, wmPaint)
+        canvas.restore()
+        return b
     }
 
     /** Halaman scan yang sudah diedit -> PDF. mode: 0 warna, 1 abu-abu, 2 dokumen hitam-putih. */
