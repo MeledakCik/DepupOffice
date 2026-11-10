@@ -247,7 +247,7 @@ class DocEditorActivity : AppCompatActivity() {
         return when (intent.getStringExtra(EXTRA_TEMPLATE)) {
             TEMPLATE_SURAT -> { docName = "Surat Lamaran Kerja"; buildDoc(::templateSurat) }
             TEMPLATE_CV -> { docName = "Curriculum Vitae"; buildDoc(::templateCv) }
-            else -> { docName = "Dokumen Baru"; buildDoc { it.paragraph("") } }
+            else -> DocTemplates.byId(intent.getStringExtra(EXTRA_TEMPLATE))?.let { t -> docName = t.title; buildDoc(t.fill) } ?: run { docName = "Dokumen Baru"; buildDoc { it.paragraph("") } }
         }
     }
 

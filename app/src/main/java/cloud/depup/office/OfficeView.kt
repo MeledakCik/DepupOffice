@@ -84,7 +84,7 @@ object OfficeView {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    fun webView(ctx: Context, doc: RenderedDoc): WebView {
+    fun webView(ctx: Context, doc: RenderedDoc, onReady: (() -> Unit)? = null): WebView {
         val wv = WebView(ctx)
         wv.settings.apply {
             javaScriptEnabled = true          // hanya skrip tata letak buatan kita sendiri (pemenggalan halaman, tab)
@@ -113,6 +113,14 @@ object OfficeView {
                 }
                 val data = doc.res[Uri.decode(path)] ?: doc.res[path] ?: return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
                 return WebResourceResponse(mimeFor(path), null, ByteArrayInputStream(data))
+            }
+
+            private var readyFired = false
+            override fun onPageFinished(view: WebView, url: String?) {
+                if (readyFired || onReady == null) return
+                readyFired = true
+                // Beri waktu skrip pemenggalan halaman & font selesai sebelum dicetak.
+                view.postDelayed({ onReady() }, 900L)
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {

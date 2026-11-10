@@ -734,6 +734,12 @@ class MainActivity : AppCompatActivity() {
         tpl(R.drawable.ic_user, C.DOC_FG, C.DOC_BG, "CV / Resume", "Riwayat hidup rapi") {
             startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_CV))
         }
+        DocTemplates.all.forEach { t ->
+            val icon = when (t.id) { "hadir" -> R.drawable.ic_grid; "undangan" -> R.drawable.ic_mail; "notulen" -> R.drawable.ic_note; else -> R.drawable.ic_doc }
+            tpl(icon, C.DOC_FG, C.DOC_BG, t.title, t.sub) {
+                startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_TEMPLATE, t.id))
+            }
+        }
         tpl(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Kuitansi / Invoice", "Nota & pembayaran") {
             startActivity(Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_INVOICE))
         }
@@ -870,7 +876,24 @@ class MainActivity : AppCompatActivity() {
             tile(R.drawable.ic_crop, C.PDF_FG, C.PDF_BG, "Susun halaman", "Urutkan, putar, atau hapus halaman") { pickFile(arrayOf(PDF)) { organizePdfFlow(it) } },
             tile(R.drawable.ic_compress, C.PDF_FG, C.PDF_BG, "Kompres PDF", "Target < 200 KB / 500 KB / 1 MB", "CPNS", C.PDF_FG, C.PDF_BG) { pickFile(arrayOf(PDF)) { compressFlow(it) } },
             tile(R.drawable.ic_image, C.PDF_FG, C.PDF_BG, "PDF ke JPG", "Tiap halaman jadi gambar") { pickFile(arrayOf(PDF)) { pdfToJpgFlow(it) } },
-            tile(R.drawable.ic_img_add, C.PDF_FG, C.PDF_BG, "Ambil gambar", "Simpan foto di dalam PDF") { pickFile(arrayOf(PDF)) { extractImagesFlow(it) } }
+            tile(R.drawable.ic_img_add, C.PDF_FG, C.PDF_BG, "Ambil gambar", "Simpan foto di dalam PDF") { pickFile(arrayOf(PDF)) { extractImagesFlow(it) } },
+            tile(R.drawable.ic_bright, C.PDF_FG, C.PDF_BG, "Coret-coret PDF", "Stabilo, pena, catatan, TTD", "Baru", C.PDF_FG, C.PDF_BG) {
+                pickFile(arrayOf(PDF)) { annotateFlow(it) }
+            },
+            tile(R.drawable.ic_wand, C.PDF_FG, C.PDF_BG, "Watermark PDF", "Teks diagonal di tiap halaman") { pickFile(arrayOf(PDF)) { watermarkFlow(it) } }
+        )
+        section("Konversi",
+            tile(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "PDF ke Word", "Teks bisa diedit (OCR)") { pickFile(arrayOf(PDF)) { pdfToWordFlow(it) } },
+            tile(R.drawable.ic_search, C.DOC_FG, C.DOC_BG, "PDF bisa dicari", "Tanam teks OCR, bisa di-copy") { pickFile(arrayOf(PDF)) { rebuildPdfFlow(it, lock = false) } },
+            tile(R.drawable.ic_pdf, C.DOC_FG, C.DOC_BG, "Word/Excel ke PDF", "Tampilan asli, simpan PDF") {
+                pickFile(arrayOf(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    "application/msword", "application/vnd.ms-excel"
+                )) { officeToPdfFlow(it) }
+            },
+            tile(R.drawable.ic_image, C.DOC_FG, C.DOC_BG, "Gambar ke PDF", "Gabung foto jadi satu PDF") { jpgToPdfFlow() }
         )
         section("Gambar & foto",
             tile(R.drawable.ic_pdf, C.IMG_FG, C.IMG_BG, "Foto ke PDF", "Gabung foto jadi satu PDF") { jpgToPdfFlow() },
@@ -880,6 +903,7 @@ class MainActivity : AppCompatActivity() {
         )
         section("Tanda tangan & keamanan",
             tile(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Gambar lalu tempel ke halaman") { pickFile(arrayOf(PDF)) { signFlow(it) } },
+            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Password PDF", "Kunci PDF dengan kata sandi") { pickFile(arrayOf(PDF)) { rebuildPdfFlow(it, lock = true) } },
             tile(R.drawable.ic_lock, C.PRIMARY, C.PRIMARY_C, "Kunci berkas", "Enkripsi ke Brankas AES-256") { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } },
             tile(R.drawable.ic_qr, C.PRIMARY, C.PRIMARY_C, "QR Code", "Pindai atau buat QR") { showQrDialog() },
             tile(R.drawable.ic_scan, C.XLS_FG, C.XLS_BG, "Scan struk", "Total belanja ke Excel") { startScan() }
@@ -1958,6 +1982,140 @@ class MainActivity : AppCompatActivity() {
                 r.onSuccess { showResult("Tanda tangan ditempel", out, PDF) }.onFailure { fail(it) }
             }
         }
+    }
+
+
+    // ================= ALAT PDF TAMBAHAN =================
+
+    /** PDF terkunci password tidak bisa dirender PdfRenderer — beri tahu dengan jelas daripada gagal samar. */
+    private fun guardUnlocked(uri: Uri): Boolean {
+        if (Pdf.isLocked(this, uri)) { toast("PDF ini sudah dikunci password. Buka kuncinya dulu."); return false }
+        return true
+    }
+
+    private fun annotateFlow(uri: Uri) {
+        if (!guardUnlocked(uri)) return
+        startActivity(Intent(this, PdfAnnotateActivity::class.java).putExtra(PdfAnnotateActivity.EXTRA_URI, uri.toString()))
+    }
+
+    private fun watermarkFlow(uri: Uri) {
+        if (!guardUnlocked(uri)) return
+        val text = field("Teks watermark").apply { setText("RAHASIA") }
+        var style = 0
+        var colorIdx = 0
+        var opacity = 1
+        val colors = intArrayOf(0xFFDC2626.toInt(), 0xFF6B7280.toInt(), 0xFF2563EB.toInt())
+        val alphas = intArrayOf(45, 80, 130)
+        val box = vbox(20)
+        box.add(tv("Contoh: RAHASIA, SALINAN, DRAF, \"Hanya untuk pendaftaran CPNS\"", 13f, C.MUTED))
+        box.add(text, top = 8)
+        val quick = hbox()
+        listOf("RAHASIA", "SALINAN", "DRAF", "CONTOH").forEach { q ->
+            quick.add(filterChip(q, false) { text.setText(q); text.setSelection(q.length) }, w = WRAP, side = 3)
+        }
+        box.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 8)
+        val styleHolder = vbox(); val colorHolder = vbox(); val opHolder = vbox()
+        fun refresh() {
+            styleHolder.removeAllViews(); colorHolder.removeAllViews(); opHolder.removeAllViews()
+            styleHolder.add(segmented(listOf("Satu besar", "Berulang"), style) { style = it; refresh() })
+            colorHolder.add(segmented(listOf("Merah", "Abu-abu", "Biru"), colorIdx) { colorIdx = it; refresh() })
+            opHolder.add(segmented(listOf("Tipis", "Sedang", "Tebal"), opacity) { opacity = it; refresh() })
+        }
+        refresh()
+        box.add(tv("Gaya", 13f, C.MUTED), top = 14); box.add(styleHolder, top = 6)
+        box.add(tv("Warna", 13f, C.MUTED), top = 12); box.add(colorHolder, top = 6)
+        box.add(tv("Ketebalan", 13f, C.MUTED), top = 12); box.add(opHolder, top = 6)
+        val d = AlertDialog.Builder(this).setTitle("Watermark PDF")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Terapkan", null).setNegativeButton("Batal", null).create()
+        d.show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val t = text.text.toString().trim()
+            if (t.isEmpty()) { toast("Teks watermark masih kosong"); return@setOnClickListener }
+            d.dismiss()
+            val out = Files.newOut(this, Files.baseName(Files.nameOf(this, uri)) + "_watermark", "pdf")
+            work("Menambahkan watermark…", { PdfTools.watermark(this, uri, t, style, colors[colorIdx], alphas[opacity], out) }) { r ->
+                r.onSuccess { showResult("Watermark ditambahkan", out, PDF) }.onFailure { fail(it) }
+            }
+        }
+    }
+
+    /**
+     * lock = true: kunci PDF dengan password (opsional tanam teks OCR).
+     * lock = false: jadikan PDF hasil scan bisa dicari (OCR), opsional sekalian dikunci.
+     */
+    private fun rebuildPdfFlow(uri: Uri, lock: Boolean) {
+        if (!guardUnlocked(uri)) return
+        val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { fail(t); return }
+        val box = vbox(20)
+        val pw = field("Password", pin = false).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val pw2 = field("Ulangi password").apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val useLock = android.widget.CheckBox(this).apply { text = "Kunci dengan password"; isChecked = lock; setTextColor(C.TEXT) }
+        val useOcr = android.widget.CheckBox(this).apply { text = "Tanam teks OCR (bisa dicari & di-copy)"; isChecked = !lock; setTextColor(C.TEXT) }
+        val pwBox = vbox().apply { add(pw); add(pw2, top = 8) }
+        fun sync() { pwBox.visibility = if (useLock.isChecked) View.VISIBLE else View.GONE }
+        useLock.setOnCheckedChangeListener { _, _ -> sync() }
+        box.add(tv("$pages halaman. Halaman disimpan ulang sebagai gambar berkualitas tinggi" +
+            (if (lock) "; PDF hanya bisa dibuka dengan password." else "; teks hasil OCR ditaruh tak terlihat di bawahnya."), 13f, C.MUTED))
+        box.add(useLock, top = 10)
+        box.add(pwBox, top = 4)
+        box.add(useOcr, top = 8)
+        if (pages > 20) box.add(tv("OCR untuk $pages halaman bisa memakan beberapa menit.", 12f, C.MUTED), top = 4)
+        sync()
+        val d = AlertDialog.Builder(this).setTitle(if (lock) "Password PDF" else "PDF bisa dicari")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Proses", null).setNegativeButton("Batal", null).create()
+        d.show()
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val password = if (useLock.isChecked) {
+                val a = pw.text.toString()
+                if (a.length < 4) { toast("Password minimal 4 karakter"); return@setOnClickListener }
+                if (a != pw2.text.toString()) { toast("Password tidak sama"); return@setOnClickListener }
+                a
+            } else null
+            val ocr = useOcr.isChecked
+            if (password == null && !ocr) { toast("Pilih minimal satu: password atau OCR"); return@setOnClickListener }
+            d.dismiss()
+            val suffix = if (password != null) "_terkunci" else "_ocr"
+            val out = Files.newOut(this, Files.baseName(Files.nameOf(this, uri)) + suffix, "pdf")
+            val msg = if (ocr) "Membaca teks tiap halaman…" else "Mengunci PDF…"
+            work(msg, { PdfTools.rebuild(this, uri, out, password, ocr) }) { r ->
+                r.onSuccess {
+                    showResult(if (password != null) "PDF dikunci" else "PDF bisa dicari", out, PDF,
+                        if (password != null) "Simpan password Anda baik-baik — PDF tidak bisa dibuka tanpanya." else "")
+                }.onFailure { fail(it) }
+            }
+        }
+    }
+
+    private fun pdfToWordFlow(uri: Uri) {
+        if (!guardUnlocked(uri)) return
+        val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { fail(t); return }
+        confirm("PDF ke Word", "$pages halaman akan dibaca dengan OCR lalu disusun jadi dokumen Word yang bisa diedit " +
+            "(paragraf & tabel). Halaman yang sulit dibaca disertakan sebagai gambar." +
+            (if (pages > 20) "\n\nDokumen panjang bisa memakan beberapa menit." else ""), "Konversi") {
+            val out = Files.newOut(this, Files.baseName(Files.nameOf(this, uri)), "docx")
+            work("Mengubah PDF ke Word…", { PdfTools.toWord(this, uri, out) }) { r ->
+                r.onSuccess { showResult("PDF diubah ke Word", out, Files.byName(out.name)) }.onFailure { fail(it) }
+            }
+        }
+    }
+
+    /** Word/Excel/PowerPoint -> PDF lewat pembaca (tampilan asli), lalu dialog cetak "Simpan sebagai PDF". */
+    private fun officeToPdfFlow(uri: Uri) {
+        val name = Files.nameOf(this, uri).lowercase()
+        if (name.endsWith(".doc") || name.endsWith(".xls") || name.endsWith(".ppt")) {
+            toast("Format lama (.doc/.xls/.ppt) belum didukung. Simpan ulang sebagai .docx/.xlsx/.pptx.")
+            return
+        }
+        toast("Pilih \"Simpan sebagai PDF\" di dialog cetak")
+        startActivity(Intent(this, ViewerActivity::class.java).setData(uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .putExtra(ViewerActivity.EXTRA_AUTO_PRINT, true))
     }
 
     // ================= SIMPAN =================

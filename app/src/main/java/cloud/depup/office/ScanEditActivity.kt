@@ -541,6 +541,7 @@ class ScanEditActivity : AppCompatActivity() {
         chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         hs.addView(chips)
         body.add(hs, top = 12)
+        if (pages.size > 1) body.add(tv("Tahan nomor halaman lalu geser untuk mengubah urutan", 12f, C.MUTED), top = 4)
 
         // ---- panel Potong ----
         cropPanel = vbox()
@@ -762,6 +763,21 @@ class ScanEditActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER
                 background = shape(if (on) C.ACCENT else C.SURFACE2, 100)
                 setOnClickListener { cur = i; show() }
+                contentDescription = "Halaman ${i + 1}${if (on) ", sedang dibuka" else ""}. Tahan lalu geser untuk memindah urutan"
+                // Tahan lalu geser ke nomor lain untuk menyusun ulang urutan halaman.
+                if (pages.size > 1) setOnLongClickListener { v ->
+                    v.startDragAndDrop(android.content.ClipData.newPlainText("page", "$i"), View.DragShadowBuilder(v), i, 0)
+                    true
+                }
+                setOnDragListener { v, e ->
+                    when (e.action) {
+                        android.view.DragEvent.ACTION_DRAG_STARTED -> e.localState is Int
+                        android.view.DragEvent.ACTION_DRAG_ENTERED -> { v.scaleX = 1.2f; v.scaleY = 1.2f; true }
+                        android.view.DragEvent.ACTION_DRAG_EXITED, android.view.DragEvent.ACTION_DRAG_ENDED -> { v.scaleX = 1f; v.scaleY = 1f; true }
+                        android.view.DragEvent.ACTION_DROP -> { movePage(e.localState as Int, i); true }
+                        else -> true
+                    }
+                }
             }, w = dp(36), h = dp(36), side = 0).also {
                 (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
             }
@@ -770,6 +786,17 @@ class ScanEditActivity : AppCompatActivity() {
                 (dots.getChildAt(dots.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(6)
             }
         }
+    }
+
+    /** Pindahkan halaman [from] ke posisi [to]; halaman yang sedang dibuka tetap diikuti. */
+    private fun movePage(from: Int, to: Int) {
+        if (from == to || from !in pages.indices || to !in pages.indices) return
+        val curPage = pages[cur]
+        val pg = pages.removeAt(from)
+        pages.add(to, pg)
+        cur = pages.indexOf(curPage).coerceAtLeast(0)
+        toast("Halaman ${from + 1} dipindah ke urutan ${to + 1}")
+        show()
     }
 
     private fun rotate() {

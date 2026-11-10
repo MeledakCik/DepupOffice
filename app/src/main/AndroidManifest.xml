@@ -82,6 +82,11 @@
 
         <activity android:name=".PrivacyPolicyActivity" android:exported="false" />
 
+        <activity
+            android:name=".PdfAnnotateActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

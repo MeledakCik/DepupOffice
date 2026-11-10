@@ -81,6 +81,11 @@ class PinchScroll(ctx: Context) : HorizontalScrollView(ctx) {
 
 /** Pembaca PDF ringan: halaman dirender satu per satu saat di-scroll. Pinch / ketuk dua kali untuk zoom. */
 class ViewerActivity : AppCompatActivity() {
+    companion object {
+        /** Langsung buka dialog cetak (Simpan sebagai PDF) setelah dokumen Office selesai tampil. */
+        const val EXTRA_AUTO_PRINT = "auto_print"
+    }
+
     private var pfd: ParcelFileDescriptor? = null
     private var renderer: PdfRenderer? = null
     private val lock = Any()
@@ -374,7 +379,12 @@ class ViewerActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 r.onSuccess { doc ->
-                    val wv = try { Result.success(OfficeView.webView(this, doc)) } catch (e: Throwable) { Result.failure(e) }
+                    val auto = intent.getBooleanExtra(EXTRA_AUTO_PRINT, false)
+                    val wv = try {
+                        Result.success(OfficeView.webView(this, doc, if (!auto) null else {
+                            { if (!isFinishing && !isDestroyed) officeWeb?.let { OfficeView.print(this, it, name) } }
+                        }))
+                    } catch (e: Throwable) { Result.failure(e) }
                     wv.onSuccess {
                         officeWeb = it
                         holder.removeAllViews()
