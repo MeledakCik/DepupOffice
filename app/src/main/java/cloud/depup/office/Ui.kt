@@ -189,7 +189,13 @@ const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 fun View.dp(v: Int): Int = context.dp(v)
 
-fun Context.toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+/** Notifikasi kapsul kaca buram di atas layar aktif; tanpa Activity (mis. konteks aplikasi) pakai Toast sistem. */
+fun Context.toast(s: String) {
+    var c: Context? = this
+    while (c is android.content.ContextWrapper && c !is android.app.Activity) c = c.baseContext
+    val act = c as? android.app.Activity
+    if (act != null) GlassToast.show(act, s) else Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+}
 
 /** Bentuk rounded-rect. [strokeColor]/[strokeDp] menggambar garis tepi bila diisi. */
 fun Context.shape(color: Int, radiusDp: Int = 16, strokeColor: Int = 0, strokeDp: Int = 0): GradientDrawable =

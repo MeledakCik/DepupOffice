@@ -380,7 +380,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
         }
 
         private fun toast(ctx: Context, msg: String) {
-            android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+            ctx.toast(msg)
         }
     }
 }
