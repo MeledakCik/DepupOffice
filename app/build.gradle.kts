@@ -13,8 +13,9 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "2.2.2"
+        // versionCode = mayor*10000 + minor*100 + patch (2.9.1 -> 20901): selalu naik, mudah dibaca.
+        versionCode = 20901
+        versionName = "2.9.1"
         // App hanya berbahasa Indonesia (values/ tunggal, tanpa values-xx). Tanpa baris ini, string
         // terjemahan dari AndroidX/Play Services/CameraX untuk puluhan bahasa lain tetap ikut terbundel.
         // (Sengaja TIDAK membatasi density: mipmap launcher sudah kecil, dan membatasi density
@@ -25,7 +26,7 @@ android {
         localeFilters += listOf("id", "en")
     }
 
-    base.archivesName.set("DepupOffice_v2.2.2")
+    base.archivesName.set("DepupOffice_v${defaultConfig.versionName}")
 
     // Kredensial TIDAK boleh hardcode. Isi keystore.properties (di-gitignore) atau env var DEPUP_*.
     val keystoreProps = Properties().apply {
