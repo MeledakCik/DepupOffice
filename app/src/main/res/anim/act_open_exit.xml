@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Layar lama mundur sedikit ke kiri & sedikit meredup (kesan berlapis), seirama layar baru. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android" android:shareInterpolator="false">
+    <translate android:fromXDelta="0" android:toXDelta="-3%" android:duration="350"
+        android:interpolator="@interpolator/emphasized_decelerate" />
+    <alpha android:fromAlpha="1" android:toAlpha="0.9" android:duration="350"
+        android:interpolator="@interpolator/emphasized_decelerate" />
+</set>

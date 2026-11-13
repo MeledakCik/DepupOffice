@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Depup Line: ikon garis 24dp, tebal 1.75, ujung & sambungan membulat. Warna diatur lewat tint di kode. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#FF000000" android:pathData="M7 2v11h3v9l7-12h-4l4-8z"/>
+    <path android:pathData="M13.2 3.5 5.5 13.5h6l-.7 7 7.7-10h-6z" android:fillColor="#00000000" android:strokeColor="#FF111111" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" />
 </vector>

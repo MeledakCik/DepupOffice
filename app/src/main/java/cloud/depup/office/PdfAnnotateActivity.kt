@@ -239,7 +239,7 @@ class PdfAnnotateActivity : AppCompatActivity() {
         counter = tv("", 12f, C.MUTED)
         col.add(counter)
         bar.add(col, w = 0, weight = 1f, side = 4)
-        bar.add(iconBtn(R.drawable.ic_rotate, "Urungkan coretan terakhir") { undo() }, w = dp(48), h = dp(48))
+        bar.add(iconBtn(R.drawable.ic_undo, "Urungkan coretan terakhir") { undo() }, w = dp(48), h = dp(48))
         bar.add(btn("Simpan", true, C.ACCENT) { save() }, w = WRAP, side = 4)
         root.add(bar)
 
@@ -262,7 +262,7 @@ class PdfAnnotateActivity : AppCompatActivity() {
         tools.add(colorRow, top = 8)
         root.add(tools)
 
-        setContentView(root)
+        setContentView(Glass.scaffold(root))
         refreshTools()
         go(0)
     }

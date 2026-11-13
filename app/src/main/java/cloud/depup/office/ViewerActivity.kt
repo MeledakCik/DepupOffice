@@ -27,6 +27,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /** Pembungkus scroll horizontal + pinch-zoom + ketuk dua kali. Zoom memperbesar lebar halaman (tajam, bukan sekadar membesarkan gambar). */
 class PinchScroll(ctx: Context) : HorizontalScrollView(ctx) {
@@ -95,6 +97,12 @@ class ViewerActivity : AppCompatActivity() {
     }
     private var baseW = 1080
     private var zoom = 1f
+    /**
+     * Tinggi/lebar halaman. Halaman yang belum dirender langsung diberi tinggi perkiraan (rasio halaman pertama, lalu
+     * rasio aslinya begitu diketahui) — saat menggulir, halaman tidak lagi "melompat" dari 320dp ke tinggi sebenarnya.
+     */
+    @Volatile private var aspect0 = 1.4142f
+    @Volatile private var aspects = FloatArray(0)
     @Volatile private var gen = 0
     private val trimHook: () -> Unit = { runOnUiThread { cache.evictAll() } }
     private lateinit var rv: RecyclerView
@@ -109,9 +117,20 @@ class ViewerActivity : AppCompatActivity() {
     private lateinit var counter: TextView
     private lateinit var moonBtn: ImageView
     private lateinit var markBtn: ImageView
-    private lateinit var modeLabel: TextView
-    private lateinit var progLabel: TextView
-    private lateinit var progHolder: FrameLayout
+    /** Bilah atas (satu untuk SEMUA jenis berkas — dulu PDF & Office punya susunan berbeda). */
+    private lateinit var bar: LinearLayout
+    private lateinit var subTv: TextView
+    /** Tombol-tombol bilah atas (ukurannya dipadatkan saat layar mendatar). */
+    private val barBtns = ArrayList<View>()
+    private var editBtn: View? = null
+    private var printBtn: View? = null
+    private var signBtn: View? = null
+    /** Garis kemajuan baca tipis di bawah bilah atas (pengganti baris status PDF yang memakan tempat). */
+    private var progFill: View? = null
+    private var progLine: View? = null
+    /** Kontrol melayang PDF (navigasi halaman & bilah zoom). Saat HP dimiringkan, disembunyikan selama menggulir. */
+    private val floats = ArrayList<View>()
+    private val showFloats = Runnable { setFloatsShown(true) }
     private lateinit var pageBadge: TextView
     private lateinit var zoomLabel: TextView
     private val invert = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
@@ -131,8 +150,43 @@ class ViewerActivity : AppCompatActivity() {
         setContentView(openingView(Files.nameOf(this, rawUri)))
         Thread {
             val uri = Files.cacheCopy(this, rawUri)
-            runOnUiThread { if (!isFinishing && !isDestroyed) build(rawUri, uri) }
+            // PDF juga DIBUKA di latar: PdfRenderer membaca struktur seluruh berkas, untuk PDF ratusan halaman bisa
+            // ratusan milidetik — dulu dikerjakan di main thread sehingga layar sempat membeku.
+            val pdf = openPdf(uri)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) pdf.close() else build(rawUri, uri, pdf)
+            }
         }.start()
+    }
+
+    /** Hasil membuka PDF di thread latar. [aspect] = tinggi/lebar halaman pertama (0 bila tidak diketahui). */
+    private class OpenedPdf(val pfd: ParcelFileDescriptor?, val renderer: PdfRenderer?, val locked: Boolean, val aspect: Float) {
+        fun close() {
+            try { renderer?.close() } catch (_: Exception) {}
+            try { pfd?.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun openPdf(uri: android.net.Uri): OpenedPdf {
+        var fd: ParcelFileDescriptor? = null
+        return try {
+            fd = contentResolver.openFileDescriptor(uri, "r")
+            if (fd == null) OpenedPdf(null, null, false, 0f) else {
+                val r = PdfRenderer(fd)
+                var a = 0f
+                if (r.pageCount > 0) try {
+                    val pg = r.openPage(0)
+                    try { if (pg.width > 0) a = pg.height.toFloat() / pg.width } finally { pg.close() }
+                } catch (_: Exception) {}
+                OpenedPdf(fd, r, false, a)
+            }
+        } catch (_: SecurityException) {
+            try { fd?.close() } catch (_: Exception) {}
+            OpenedPdf(null, null, true, 0f)
+        } catch (_: Exception) {
+            try { fd?.close() } catch (_: Exception) {}
+            OpenedPdf(null, null, false, 0f)
+        }
     }
 
     private fun openingView(name: String): View {
@@ -144,7 +198,7 @@ class ViewerActivity : AppCompatActivity() {
         return box
     }
 
-    private fun build(rawUri: android.net.Uri, uri: android.net.Uri) {
+    private fun build(rawUri: android.net.Uri, uri: android.net.Uri, pdf: OpenedPdf) {
 
         val name = Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
         val mime = intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
@@ -157,44 +211,56 @@ class ViewerActivity : AppCompatActivity() {
         uriStr = uri.toString()
 
         var isPdfLoaded = false
-        var isPasswordProtected = false
-        try {
-            pfd = contentResolver.openFileDescriptor(uri, "r")
-            if (pfd != null) {
-                renderer = PdfRenderer(pfd!!)
-                total = renderer!!.pageCount
-                isPdfLoaded = true
-            }
-        } catch (e: SecurityException) {
-            isPasswordProtected = true
-            toast("Dokumen ini dilindungi kata sandi (Password Protected)")
-        } catch (_: Exception) {}
+        synchronized(lock) { pfd = pdf.pfd; renderer = pdf.renderer }
+        pdf.renderer?.let { r ->
+            total = r.pageCount
+            isPdfLoaded = true
+            aspect0 = if (pdf.aspect > 0f) pdf.aspect else 1.4142f
+            aspects = FloatArray(total)
+        }
+        if (pdf.locked) toast("Dokumen ini dilindungi kata sandi (Password Protected)")
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(C.CANVAS) }
 
-        val bar = LinearLayout(this).apply {
+        bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
-            setPadding(dp(4), dp(8), dp(4), dp(8))
         }
-        bar.add(icon(R.drawable.ic_back, C.TEXT, 24).asButton("Kembali").apply {
-            setOnClickListener { finish() }
-        }, w = dp(48), h = dp(48))
+        // Gaya kaca yang sama dengan editor: tombol kembali bulat, semua aksi dalam satu kapsul ikon
+        val caps = navCapsule()
+        fun barBtn(v: View, @Suppress("UNUSED_PARAMETER") w: Int = 40): View {
+            val p = dp(9); v.setPadding(p, p, p, p)
+            v.background = rippleBg(100)
+            caps.add(v, w = dp(40), h = dp(40)); barBtns.add(v); return v
+        }
+        bar.add(navCircle(R.drawable.ic_back, "Kembali") { finish() }, w = dp(40), h = dp(40))
         val tcol = vbox()
         val trow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         trow.add(tv(name, 16f, C.TEXT, true).apply {
             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-        }, w = WRAP)
-        counter = pill(if (isPdfLoaded) "Hal 1 / $total" else "Dokumen", C.ACCENT, C.BLUE_BG, 10f)
+        }, w = 0, weight = 1f)
+        counter = pill(if (isPdfLoaded) "Hal 1 / $total" else "", C.ACCENT, C.BLUE_BG, 10f).apply { visibility = if (isPdfLoaded) View.VISIBLE else View.GONE }
         trow.add(counter, w = WRAP, side = 6)
         tcol.add(trow)
-        tcol.add(tv("Depup Office Reader", 12f, C.MUTED))
-        bar.add(tcol, w = 0, weight = 1f)
+        // keterangan jenis berkas yang konsisten (dulu: "Depup Office Reader" di bilah + label terpisah di strip)
+        subTv = tv(when {
+            isPdfLoaded -> "PDF • $total halaman"
+            mime.startsWith("image/") -> "Gambar"
+            else -> when (OfficeView.kindOf(name, mime)) { "docx" -> "Dokumen Word"; "xlsx" -> "Lembar kerja Excel"; "pptx" -> "Presentasi PowerPoint"; else -> "Dokumen" }
+        }, 12f, C.MUTED).apply { maxLines = 1 }
+        tcol.add(subTv)
+        bar.add(tcol, w = 0, weight = 1f, side = 10)
         moonBtn = icon(R.drawable.ic_moon, C.TEXT, 22).asButton("Mode baca malam").apply {
             setOnClickListener { toggleNight() }
         }
-        bar.add(moonBtn, w = dp(48), h = dp(48))
+        barBtn(moonBtn).visibility = if (isPdfLoaded) View.VISIBLE else View.GONE
+        paintMoon()
+        // aksi dokumen Office (diaktifkan oleh renderOffice) — dulu di strip kedua yang memakan tinggi layar
+        editBtn = barBtn(icon(R.drawable.ic_edit, C.ACCENT, 22).asButton("Edit dokumen")).apply { visibility = View.GONE }
+        printBtn = barBtn(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak / simpan PDF").apply {
+            setOnClickListener { officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } ?: toast("Dokumen masih disiapkan") }
+        }).apply { visibility = View.GONE }
         marked = Meta.isMarked(this, uriStr)
         markBtn = icon(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off, if (marked) C.ACCENT else C.TEXT, 22).asButton(if (marked) "Hapus tanda" else "Tandai dokumen").apply {
             setOnClickListener {
@@ -204,28 +270,28 @@ class ViewerActivity : AppCompatActivity() {
                 setColorFilter(if (marked) C.ACCENT else C.TEXT)
             }
         }
-        bar.add(markBtn, w = dp(48), h = dp(48))
-        val editBtn = icon(R.drawable.ic_sign, C.ACCENT, 22).asButton("Tanda tangan & edit PDF").apply {
+        barBtn(markBtn)
+        signBtn = barBtn(icon(R.drawable.ic_sign, C.ACCENT, 22).asButton("Tanda tangan & edit PDF").apply {
             setOnClickListener { showPdfEditDialog(uri, name) }
-        }
-        bar.add(editBtn, w = dp(48), h = dp(48))
+        }).apply { visibility = if (isPdfLoaded) View.VISIBLE else View.GONE }
 
-        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
+        barBtn(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
+                val office = officeWeb != null
                 pm.menu.add(0, 1, 0, "Bagikan")
                 pm.menu.add(0, 2, 1, "🖨️ Cetak Dokumen")
-                pm.menu.add(0, 8, 2, "🔊 Bacakan Suara (Voice Reader)")
-                pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF")
+                if (isPdfLoaded) pm.menu.add(0, 8, 2, "🔊 Bacakan Suara (Voice Reader)")
+                if (isPdfLoaded) pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF")
                 pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
-                pm.menu.add(0, 5, 5, "Lompat Halaman")
-                pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
-                pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar")
+                if (isPdfLoaded) pm.menu.add(0, 5, 5, "Lompat Halaman")
+                if (isPdfLoaded) pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
+                if (isPdfLoaded) pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar")
                 pm.setOnMenuItemClickListener { m ->
                     try {
                         when (m.itemId) {
                             1 -> Files.share(this@ViewerActivity, uri, mime, false)
-                            2 -> PrintHelper.printPdf(this@ViewerActivity, uri, name)
+                            2 -> if (office) officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } else PrintHelper.printPdf(this@ViewerActivity, uri, name)
                             8 -> startVoiceReaderForPdf(uri, name)
                             3 -> showPdfEditDialog(uri, name)
                             4 -> showRenameDialog(rawUri, uri, name)
@@ -247,27 +313,21 @@ class ViewerActivity : AppCompatActivity() {
                 }
                 pm.show()
             }
-        }, w = dp(42), h = dp(40))
+        }, 42)
+        bar.addView(caps, LinearLayout.LayoutParams(WRAP, dp(42)))
         root.add(bar)
 
         val stage = FrameLayout(this)
 
+        // kemajuan baca: garis tipis selebar layar (dulu baris status sendiri ±36 dp) — PDF & dokumen Office sama
+        val line = FrameLayout(this).apply { setBackgroundColor(C.TRACK); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        progFill = View(this).apply { setBackgroundColor(C.ACCENT); pivotX = 0f; scaleX = 0f }
+        line.addView(progFill, FrameLayout.LayoutParams(MATCH, MATCH))
+        root.add(line, h = max(2, dp(1) * 3 / 2))
+        progLine = line
+        if (!isPdfLoaded) line.visibility = View.GONE
+
         if (isPdfLoaded) {
-            val st = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(14), dp(8), dp(14), dp(8))
-            }
-            modeLabel = tv("● Mode Siang • 100%", 11f, C.TEXT, true).apply {
-                background = shape(C.BLUE_BG, 100); setPadding(dp(12), dp(5), dp(12), dp(5))
-            }
-            st.add(modeLabel, w = WRAP)
-            st.add(View(this), w = 0, h = dp(1), weight = 1f)
-            progLabel = tv("0% selesai", 11f, C.MUTED, true)
-            st.add(progLabel, w = WRAP)
-            progHolder = FrameLayout(this)
-            st.add(progHolder, w = dp(56), h = dp(6), side = 8)
-            root.add(st)
             updateProgress(0)
 
             val lm = LinearLayoutManager(this)
@@ -279,6 +339,12 @@ class ViewerActivity : AppCompatActivity() {
                     override fun onScrolled(r: RecyclerView, dx: Int, dy: Int) {
                         val p = lm.findFirstVisibleItemPosition()
                         if (p >= 0) { curPage = p; counter.text = "Hal ${p + 1} / $total"; pageBadge.text = "${p + 1}"; updateProgress(p) }
+                    }
+                    override fun onScrollStateChanged(r: RecyclerView, state: Int) {
+                        // lanskap: layar pendek — kontrol melayang minggir selama halaman digulir, kembali saat berhenti
+                        r.removeCallbacks(showFloats)
+                        if (state == RecyclerView.SCROLL_STATE_IDLE) r.postDelayed(showFloats, 1200L)
+                        else if (isLandscape()) setFloatsShown(false)
                     }
                 })
             }
@@ -294,7 +360,7 @@ class ViewerActivity : AppCompatActivity() {
             val nav = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                background = raised(C.SURFACE, 24, 3f)
+                floating(24)
                 setPadding(dp(4), dp(6), dp(4), dp(6))
             }
             nav.add(icon(R.drawable.ic_up, C.MUTED, 22).asButton("Halaman sebelumnya").apply { setOnClickListener { goTo(curPage - 1) } }, w = dp(48), h = dp(48))
@@ -309,11 +375,12 @@ class ViewerActivity : AppCompatActivity() {
             nav.add(tv("/$total", 10f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 2)
             nav.add(icon(R.drawable.ic_down, C.MUTED, 22).asButton("Halaman berikutnya").apply { setOnClickListener { goTo(curPage + 1) } }, w = dp(48), h = dp(48), top = 2)
             stage.addView(nav, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = dp(8) })
+            floats.add(nav)
 
             val tb = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = raised(C.SURFACE, 100, 3f)
+                floating(100)
                 setPadding(dp(10), dp(6), dp(6), dp(6))
             }
             tb.add(icon(R.drawable.ic_zoom_out, C.TEXT, 22).asButton("Perkecil").apply {
@@ -334,15 +401,71 @@ class ViewerActivity : AppCompatActivity() {
                 setOnClickListener { try { Files.share(this@ViewerActivity, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
             }, w = dp(44), h = dp(44), side = 4)
             stage.addView(tb, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(16) })
+            floats.add(tb)
         } else {
             renderNonPdf(uri, name, mime, stage)
         }
 
         root.add(stage, w = MATCH, h = 0, weight = 1f)
-        setContentView(root)
+        applyChromeDensity()
+        setContentView(Glass.scaffold(root))
+    }
+
+    /**
+     * Kepadatan bilah atas mengikuti orientasi layar. Saat HP dimiringkan (mis. membaca dokumen landscape), bilah atas
+     * dulu tetap setinggi ±104 dp (bilah + strip/baris status) — hampir sepertiga layar yang pendek. Sekarang ±48 dp.
+     */
+    private fun applyChromeDensity() {
+        if (!::bar.isInitialized) return
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val v = if (land) dp(3) else dp(6)
+        bar.setPadding(dp(12), v, dp(12), v)
+        subTv.visibility = if (land) View.GONE else View.VISIBLE
+    }
+
+    private fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    private var floatsShown = true
+
+    private fun setFloatsShown(show: Boolean) {
+        if (show == floatsShown) return
+        floatsShown = show
+        for (v in floats) {
+            v.animate().cancel()
+            if (show) {
+                v.visibility = View.VISIBLE
+                if (Motion.on()) v.animate().alpha(1f).setDuration(Motion.MED).start() else v.alpha = 1f
+            } else if (Motion.on()) {
+                v.animate().alpha(0f).setDuration(Motion.MED).withEndAction { if (v.alpha < 0.01f) v.visibility = View.INVISIBLE }.start()
+            } else { v.alpha = 0f; v.visibility = View.INVISIBLE }
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        setFloatsShown(true)
+        applyChromeDensity()
+        // PDF: lebar halaman ikut lebar layar baru (dulu tetap selebar layar tegak → halaman sempit saat HP dimiringkan)
+        val w = resources.displayMetrics.widthPixels
+        if (::rv.isInitialized && w > 0 && w != baseW) {
+            val page = curPage
+            baseW = w
+            gen++
+            cache.evictAll()
+            rv.layoutParams = FrameLayout.LayoutParams((baseW * zoom).toInt(), MATCH)
+            pageAdapter.notifyDataSetChanged()
+            rv.post {
+                (rv.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(page, 0)
+                if (::scroll.isInitialized) scroll.scrollTo(0, 0)
+            }
+        }
     }
 
     private var officeWeb: android.webkit.WebView? = null
+    /** Dokumen Office yang tampil — memegang berkas zip terbuka untuk gambar; ditutup di [onDestroy]. */
+    private var officeDoc: RenderedDoc? = null
+    /** WebView yang disiapkan selagi dokumen diurai (lihat [renderOffice]). */
+    private var preWeb: android.webkit.WebView? = null
 
     /**
      * DOCX / XLSX / PPTX ditampilkan semirip mungkin dengan aslinya (halaman, font, tabel, gambar, slide) lewat
@@ -351,21 +474,20 @@ class ViewerActivity : AppCompatActivity() {
     private fun renderOffice(uri: android.net.Uri, name: String, mime: String, kind: String, stage: FrameLayout) {
         stage.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val strip = hbox().apply { setPadding(dp(8), dp(6), dp(8), dp(6)); setBackgroundColor(C.SURFACE) }
-        val label = when (kind) { "docx" -> "Dokumen Word"; "xlsx" -> "Lembar kerja Excel"; else -> "Presentasi PowerPoint" }
-        strip.add(tv(label, 12f, C.MUTED), w = 0, weight = 1f, side = 6)
-        if (kind == "docx" || kind == "xlsx") {
-            strip.add(btn(if (kind == "docx") "Edit Word" else "Edit Excel", false, C.ACCENT) {
-                val i = if (kind == "docx") android.content.Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_URI, uri.toString())
-                else android.content.Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_URI, uri.toString())
-                startActivity(i); finish()
-            }, w = WRAP)
+        // aksi Office kini di bilah atas yang sama dengan PDF (tanpa strip kedua)
+        if (::subTv.isInitialized) subTv.text = when (kind) { "docx" -> "Dokumen Word"; "xlsx" -> "Lembar kerja Excel"; else -> "Presentasi PowerPoint" }
+        printBtn?.visibility = View.VISIBLE
+        editBtn?.let { b ->
+            if (kind == "docx" || kind == "xlsx") {
+                b.visibility = View.VISIBLE
+                b.contentDescription = if (kind == "docx") "Edit dokumen Word" else "Edit lembar Excel"
+                b.setOnClickListener {
+                    val i = if (kind == "docx") android.content.Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_URI, uri.toString())
+                    else android.content.Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_URI, uri.toString())
+                    startActivity(i); finish()
+                }
+            } else b.visibility = View.GONE
         }
-        val printBtn = btn("Cetak / PDF", true, C.ACCENT, R.drawable.ic_print) {
-            officeWeb?.let { OfficeView.print(this, it, name) } ?: toast("Dokumen masih disiapkan")
-        }
-        strip.add(printBtn, w = WRAP, side = 4)
-        col.add(strip)
         val holder = FrameLayout(this).apply { setBackgroundColor(C.CANVAS) }
         val loading = vbox().apply { gravity = Gravity.CENTER }
         loading.add(android.widget.ProgressBar(this), w = dp(40), h = dp(40))
@@ -373,24 +495,47 @@ class ViewerActivity : AppCompatActivity() {
         holder.addView(loading, FrameLayout.LayoutParams(MATCH, MATCH))
         col.add(holder, h = 0, weight = 1f)
         stage.addView(col, FrameLayout.LayoutParams(MATCH, MATCH))
+        // WebView disiapkan SELAGI dokumen diurai di latar (memuat mesin Chromium pertama kali butuh ratusan ms) —
+        // sesudah layar memuat tampil, bukan sesudah penguraian selesai. Dokumen jadi tampil lebih cepat.
+        var parsed = false
+        holder.post {
+            if (parsed || isFinishing || isDestroyed) return@post
+            preWeb = try { OfficeView.newWebView(this, kind) } catch (_: Throwable) { null }
+        }
         // tumpukan besar: dokumen bertingkat dalam (tabel di dalam tabel, grup shape) aman dari StackOverflow
         Thread(null, {
             val r = try { Result.success(OfficeView.render(this, uri, name, kind)) } catch (e: Throwable) { Result.failure(e) }
             runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                parsed = true
+                val ready = preWeb
+                preWeb = null
+                if (isFinishing || isDestroyed) { try { ready?.destroy() } catch (_: Throwable) {}; r.getOrNull()?.close(); return@runOnUiThread }
                 r.onSuccess { doc ->
+                    officeDoc?.close(); officeDoc = doc
                     val auto = intent.getBooleanExtra(EXTRA_AUTO_PRINT, false)
                     val wv = try {
-                        Result.success(OfficeView.webView(this, doc, if (!auto) null else {
+                        Result.success(OfficeView.load(ready ?: OfficeView.newWebView(this, doc.kind), doc, if (!auto) null else {
                             { if (!isFinishing && !isDestroyed) officeWeb?.let { OfficeView.print(this, it, name) } }
+                        }, onCrash = {
+                            officeWeb = null
+                            if (!isFinishing && !isDestroyed) officeError(holder, uri, name, mime, stage, "Tampilan dokumen terhenti",
+                                IllegalStateException("Dokumen terlalu berat/rumit untuk mesin tampilan perangkat ini"))
                         }))
                     } catch (e: Throwable) { Result.failure(e) }
                     wv.onSuccess {
                         officeWeb = it
                         holder.removeAllViews()
                         holder.addView(it, FrameLayout.LayoutParams(MATCH, MATCH))
-                    }.onFailure { e -> officeError(holder, uri, name, mime, stage, "Tampilan dokumen gagal dimuat", e) }
-                }.onFailure { e -> officeError(holder, uri, name, mime, stage, "Berkas tidak bisa ditampilkan", e) }
+                        // garis kemajuan baca yang sama dengan PDF, mengikuti posisi gulir dokumen
+                        progLine?.visibility = View.VISIBLE
+                        progFill?.scaleX = 0f
+                        it.setOnScrollChangeListener { v, _, y, _, _ ->
+                            val w = v as android.webkit.WebView
+                            @Suppress("DEPRECATION") val range = w.contentHeight * w.scale - w.height
+                            progFill?.scaleX = if (range <= 1f) 1f else (y / range).coerceIn(0f, 1f)
+                        }
+                    }.onFailure { e -> try { ready?.destroy() } catch (_: Throwable) {}; officeError(holder, uri, name, mime, stage, "Tampilan dokumen gagal dimuat", e) }
+                }.onFailure { e -> try { ready?.destroy() } catch (_: Throwable) {}; officeError(holder, uri, name, mime, stage, "Berkas tidak bisa ditampilkan", e) }
             }
         }, "office-render", 64L * 1024 * 1024).start()
     }
@@ -398,6 +543,7 @@ class ViewerActivity : AppCompatActivity() {
     /** Kegagalan ditampilkan jelas (dengan nama error) — bukan diam-diam jatuh ke pratinjau teks yang tanpa tabel. */
     private fun officeError(holder: FrameLayout, uri: android.net.Uri, name: String, mime: String, stage: FrameLayout, title: String, e: Throwable) {
         holder.removeAllViews()
+        progLine?.visibility = View.GONE
         val box = vbox().apply { gravity = Gravity.CENTER; setPadding(dp(24), dp(24), dp(24), dp(24)) }
         box.add(tv(title, 16f, C.TEXT, true).apply { gravity = Gravity.CENTER })
         box.add(tv("${e.javaClass.simpleName}: ${e.message?.take(160) ?: "-"}", 12f, C.MUTED).apply { gravity = Gravity.CENTER; setTextIsSelectable(true) }, top = 8)
@@ -427,16 +573,25 @@ class ViewerActivity : AppCompatActivity() {
                 banner.add(btn("Tutup Pembaca", true, C.RED) { finish() }, top = 16)
                 paper.add(banner)
             }
-            mime.startsWith("image/") || name.endsWith(".jpg") || name.endsWith(".png") || name.endsWith(".jpeg") -> {
-                val bmp = try { Pdf.decode(this, uri, if (Perf.low) 1600 else 2400) } catch (_: Exception) { null }
-                if (bmp != null) {
-                    val iv = ImageView(this).apply {
-                        adjustViewBounds = true
-                        setImageBitmap(bmp)
+            mime.startsWith("image/") || name.lowercase().let { n -> listOf(".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".heic", ".tif", ".tiff").any { n.endsWith(it) } } -> {
+                // Didekode di LATAR (foto 50 MP dulu membekukan layar sesaat); TIFF hasil pindai juga bisa tampil.
+                val iv = ImageView(this).apply { adjustViewBounds = true; minimumHeight = dp(160) }
+                val spin = android.widget.ProgressBar(this)
+                paper.add(spin, w = dp(36), h = dp(36))
+                paper.add(iv, w = MATCH, h = WRAP)
+                val maxDim = if (Perf.low) 1600 else 2400
+                Perf.io.execute {
+                    val bmp = try { Pdf.decode(this, uri, maxDim) } catch (_: Throwable) { null } ?: try {
+                        contentResolver.openInputStream(uri)?.use { it.readBytes() }?.let { raw ->
+                            Tiff.decode(raw, maxDim)?.let { r -> Bitmap.createBitmap(r.px, r.w, r.h, Bitmap.Config.ARGB_8888) }
+                        }
+                    } catch (_: Throwable) { null }
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        spin.visibility = View.GONE
+                        if (bmp != null) iv.setImageBitmap(bmp)
+                        else { iv.visibility = View.GONE; paper.add(tv("Tidak dapat memuat gambar", 14f, C.MUTED)) }
                     }
-                    paper.add(iv, w = MATCH, h = WRAP)
-                } else {
-                    paper.add(tv("Tidak dapat memuat gambar", 14f, C.MUTED))
                 }
             }
             mime.contains("sheet") || name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".csv") -> {
@@ -730,7 +885,7 @@ class ViewerActivity : AppCompatActivity() {
                 setOnClickListener {
                     paperTheme = idx
                     night = (idx == 1)
-                    moonBtn.setColorFilter(if (night) C.ACCENT else C.TEXT)
+                    paintMoon()
                     refreshMode()
                     pageAdapter.notifyDataSetChanged()
                     dismiss()
@@ -744,21 +899,25 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     private fun updateProgress(p: Int) {
-        val pct = if (total <= 0) 0 else ((p + 1) * 100 / total)
-        progLabel.text = "$pct% selesai"
-        progHolder.removeAllViews()
-        progHolder.addView(progressBar(pct / 100f, C.ACCENT, C.TRACK, 6), FrameLayout.LayoutParams(MATCH, MATCH))
+        progFill?.scaleX = if (total <= 0) 0f else ((p + 1).toFloat() / total).coerceIn(0f, 1f)
+    }
+
+    /** Tombol mode malam tampak "menyala" (isi abu di dalam kapsul) — dulu hanya warna ikon yang sama persis. */
+    private fun paintMoon() {
+        moonBtn.setColorFilter(C.TEXT)
+        moonBtn.background = if (night) android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE3, 100), null)
+            else rippleBg(100)
+        moonBtn.contentDescription = if (night) "Mode baca malam, aktif" else "Mode baca malam"
     }
 
     private fun toggleNight() {
         night = !night
-        moonBtn.setColorFilter(if (night) C.ACCENT else C.TEXT)
+        paintMoon()
         refreshMode()
         pageAdapter.notifyDataSetChanged()
     }
 
     private fun refreshMode() {
-        modeLabel.text = "● Mode ${if (night) "Malam" else "Siang"} • ${(zoom * 100).toInt()}%"
         zoomLabel.text = "${(zoom * 100).toInt()}%"
     }
 
@@ -794,15 +953,27 @@ class ViewerActivity : AppCompatActivity() {
 
     private class VH(val iv: ImageView) : RecyclerView.ViewHolder(iv)
 
+    /** Lebar [tw] & tinggi halaman [pos] (rasio aslinya bila sudah diketahui, selain itu perkiraan). */
+    private fun sizePage(iv: ImageView, pos: Int, tw: Int) {
+        val a = aspects.getOrNull(pos)?.takeIf { it > 0f } ?: aspect0
+        val th = max(1, (tw * a).roundToInt())
+        (iv.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+            if (lp.width != tw || lp.height != th) { lp.width = tw; lp.height = th; iv.layoutParams = lp }
+        }
+    }
+
     private inner class PageAdapter : RecyclerView.Adapter<VH>() {
+        /** Jumlah percobaan ulang per halaman yang gagal dirender. */
+        val retries = java.util.concurrent.ConcurrentHashMap<Int, Int>()
         override fun getItemCount() = total
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
             val iv = ImageView(parent.context).apply {
-                adjustViewBounds = true
                 setBackgroundColor(Color.WHITE)
-                minimumHeight = dp(320)
-                layoutParams = RecyclerView.LayoutParams(MATCH, WRAP).apply { setMargins(dp(8), dp(4), dp(8), dp(4)) }
+                // bayangan tipis seperti halaman Word/slide di pembaca Office — tampilan halaman seragam antarformat
+                elevation = dp(1).toFloat()
+                scaleType = ImageView.ScaleType.FIT_XY   // bitmap selalu berasio sama dengan kotaknya
+                layoutParams = RecyclerView.LayoutParams(MATCH, dp(320)).apply { setMargins(dp(8), dp(4), dp(8), dp(4)) }
             }
             return VH(iv)
         }
@@ -828,12 +999,7 @@ class ViewerActivity : AppCompatActivity() {
                 }
             }
             val tw = (baseW * zoom).toInt() - dp(16)
-            (h.iv.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
-                if (lp.width != tw) {
-                    lp.width = tw
-                    h.iv.layoutParams = lp
-                }
-            }
+            sizePage(h.iv, pos, tw)
             val c = cache.get(pos)
             if (c != null) { h.iv.setImageBitmap(c); return }
             h.iv.setImageDrawable(null)
@@ -842,17 +1008,35 @@ class ViewerActivity : AppCompatActivity() {
                 // Saat di-scroll cepat, halaman yang sudah lewat tidak perlu dirender lagi.
                 if (myGen != gen || h.iv.tag != pos) return@execute
                 cache.get(pos)?.let { c -> runOnUiThread { if (h.iv.tag == pos && myGen == gen) h.iv.setImageBitmap(c) }; return@execute }
-                val bmp = try {
-                    synchronized(lock) {
-                        val r = renderer
-                        if (r == null) null else Pdf.render(r, pos, 1f, tw, Perf.pageMaxPx()).bmp
-                    }
-                } catch (_: OutOfMemoryError) {
-                    cache.evictAll(); null
+                fun once(maxPx: Int) = synchronized(lock) {
+                    val r = renderer
+                    if (r == null) null else Pdf.render(r, pos, 1f, tw, maxPx).also { rd ->
+                        val a = aspects
+                        if (pos < a.size && rd.pw > 0) a[pos] = rd.ph.toFloat() / rd.pw
+                    }.bmp
+                }
+                // Halaman penuh foto bisa kehabisan memori: dulu halaman itu dibiarkan KOSONG. Sekarang cache dikosongkan
+                // lalu dicoba lagi dengan resolusi lebih kecil.
+                val bmp = try { once(Perf.pageMaxPx()) } catch (_: OutOfMemoryError) {
+                    cache.evictAll()
+                    try { once(Perf.pageMaxPx() * 2 / 3) } catch (_: Throwable) { null }
                 } catch (_: Throwable) { null }
+                if (bmp == null && myGen == gen) {
+                    // gagal sementara (mis. renderer sibuk/memori): coba sekali lagi saat halaman masih terlihat
+                    val tries = (retries[pos] ?: 0) + 1
+                    retries[pos] = tries
+                    if (tries <= 2) runOnUiThread { h.iv.postDelayed({ if (h.iv.tag == pos && myGen == gen && cache.get(pos) == null) notifyItemChanged(pos) }, 350L * tries) }
+                }
                 if (bmp != null && myGen == gen) {
                     cache.put(pos, bmp)
-                    runOnUiThread { if (h.iv.tag == pos && myGen == gen) h.iv.setImageBitmap(bmp) }
+                    runOnUiThread {
+                        if (h.iv.tag == pos && myGen == gen) {
+                            sizePage(h.iv, pos, tw)   // halaman berukuran lain dari perkiraan: tingginya dikoreksi
+                            h.iv.setImageBitmap(bmp)
+                            // satu gambar → pudar tanpa lapisan offscreen (aman di dalam wadah kaca)
+                            if (Motion.on()) { h.iv.forceHasOverlappingRendering(false); h.iv.alpha = 0f; h.iv.animate().alpha(1f).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start() }
+                        }
+                    }
                 }
             }
         }
@@ -860,8 +1044,12 @@ class ViewerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         Perf.removeTrim(trimHook)
+        if (::rv.isInitialized) rv.removeCallbacks(showFloats)
         try { officeWeb?.destroy() } catch (_: Exception) {}
         officeWeb = null
+        officeDoc?.close(); officeDoc = null
+        try { preWeb?.destroy() } catch (_: Exception) {}
+        preWeb = null
         exec.shutdownNow()
         synchronized(lock) {
             try { renderer?.close() } catch (_: Exception) {}

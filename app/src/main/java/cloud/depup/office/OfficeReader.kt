@@ -121,145 +121,116 @@ object OfficeReader {
     // ================= XLSX =================
 
     /** Membaca sheet pertama. Baris/kolom kosong di ujung dipangkas. */
-    fun readXlsx(ctx: Context, uri: Uri): Sheet? {
-        val entries = readZip(ctx, uri) { name ->
-            name == "xl/workbook.xml" ||
-                name == "xl/sharedStrings.xml" ||
-                (name.startsWith("xl/worksheets/sheet") && name.endsWith(".xml"))
+    /**
+     * Lembar pertama (urutan tab di workbook) — dibaca MENGALIR langsung dari zip & berhenti setelah [maxRows] baris;
+     * sharedStrings hanya dibaca sampai indeks tertinggi yang dipakai baris-baris itu. Dulu seluruh lembar (dan semua
+     * lembar lain) didekompresi ke memori, dan lembar > 12 MB malah dilewati sama sekali.
+     */
+    fun readXlsx(ctx: Context, uri: Uri, maxRows: Int = SHEET_MAX_ROWS): Sheet? = withZip(ctx, uri) { z ->
+        fun entry(n: String) = z.getEntry(n) ?: z.entries().asSequence().firstOrNull { it.name.replace('\\', '/').trimStart('/').equals(n, true) }
+        // workbook → lembar pertama & namanya
+        var sheetName = "Sheet1"; var firstRid: String? = null
+        entry("xl/workbook.xml")?.let { e -> z.getInputStream(e).use { ins -> pull(ins) { p ->
+            if (p.eventType == XmlPullParser.START_TAG && localName(p) == "sheet" && firstRid == null) {
+                p.getAttributeValue(null, "name")?.takeIf { it.isNotBlank() }?.let { sheetName = it }
+                firstRid = (0 until p.attributeCount).firstOrNull { p.getAttributeName(it).endsWith("id") && p.getAttributeName(it).contains(':') }?.let { p.getAttributeValue(it) }
+                false
+            } else true
+        } } }
+        var sheetPath: String? = null
+        var sstPath = "xl/sharedStrings.xml"
+        entry("xl/_rels/workbook.xml.rels")?.let { e -> z.getInputStream(e).use { ins -> pull(ins) { p ->
+            if (p.eventType == XmlPullParser.START_TAG && localName(p) == "relationship") {
+                val id = p.getAttributeValue(null, "Id"); val t = p.getAttributeValue(null, "Target").orEmpty(); val type = p.getAttributeValue(null, "Type").orEmpty()
+                val path = if (t.startsWith("/")) t.trimStart('/') else "xl/" + t.removePrefix("./")
+                if (id != null && id == firstRid) sheetPath = path
+                if (type.endsWith("/sharedStrings")) sstPath = path
+            }
+            true
+        } } }
+        val sheetEntry = sheetPath?.let { entry(it) }
+            ?: z.entries().asSequence().filter { it.name.startsWith("xl/worksheets/sheet") && it.name.endsWith(".xml") }
+                .minByOrNull { it.name.removePrefix("xl/worksheets/sheet").removeSuffix(".xml").toIntOrNull() ?: Int.MAX_VALUE }
+            ?: return@withZip null
+        val raw = HashMap<Int, HashMap<Int, String>>()      // isi sel; untuk t="s" berisi indeks
+        val sIdx = HashMap<Int, HashMap<Int, Int>>()
+        var maxRow = -1; var maxCol = -1; var maxS = -1
+        z.getInputStream(sheetEntry).use { ins ->
+            var row = -1; var col = -1; var type = ""; var inV = false; var inIs = false
+            val v = StringBuilder()
+            pull(ins) { p ->
+                when (p.eventType) {
+                    XmlPullParser.START_TAG -> when (localName(p)) {
+                        "row" -> { row = p.getAttributeValue(null, "r")?.toIntOrNull()?.minus(1) ?: (row + 1); col = -1; if (row >= maxRows) return@pull false }
+                        "c" -> { type = p.getAttributeValue(null, "t").orEmpty(); col = p.getAttributeValue(null, "r")?.let { columnIndex(it) } ?: (col + 1); v.setLength(0) }
+                        "v" -> inV = true
+                        "is" -> inIs = true
+                        "t" -> if (inIs) inV = true
+                    }
+                    XmlPullParser.TEXT -> if (inV) v.append(p.text.orEmpty())
+                    XmlPullParser.END_TAG -> when (localName(p)) {
+                        "v" -> inV = false
+                        "t" -> if (inIs) inV = false
+                        "is" -> inIs = false
+                        "c" -> if (row in 0 until maxRows && col in 0 until SHEET_MAX_COLS && v.isNotEmpty()) {
+                            if (type == "s") { val k = v.toString().trim().toIntOrNull(); if (k != null) { sIdx.getOrPut(row) { HashMap() }[col] = k; if (k > maxS) maxS = k } }
+                            else raw.getOrPut(row) { HashMap() }[col] = v.toString()
+                            if (row > maxRow) maxRow = row
+                            if (col > maxCol) maxCol = col
+                        }
+                    }
+                }
+                true
+            }
         }
-        val sheetEntry = entries.keys
-            .filter { it.startsWith("xl/worksheets/sheet") && it.endsWith(".xml") }
-            .minByOrNull { it }
-            ?: return null
-
-        val shared = entries["xl/sharedStrings.xml"]?.let { parseSharedStrings(it) } ?: emptyList()
-        val sheetName = entries["xl/workbook.xml"]?.let { parseSheetName(it) } ?: "Sheet1"
-        val rows = parseWorksheet(entries.getValue(sheetEntry), shared)
-        if (rows.isEmpty()) return Sheet(sheetName, emptyList())
-        return Sheet(sheetName, rows, setOf(0))
-    }
-
-    private fun parseSharedStrings(data: ByteArray): List<String> {
-        val out = ArrayList<String>()
-        try {
-            val p = Xml.newPullParser()
-            p.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-            p.setInput(ByteArrayInputStream(data), "UTF-8")
-            var inSi = false
-            var inText = false
+        // sharedStrings: berhenti setelah indeks terbesar yang dibutuhkan
+        val shared = ArrayList<String>()
+        if (maxS >= 0) entry(sstPath)?.let { e -> z.getInputStream(e).use { ins ->
+            var inSi = false; var inT = false; var inRph = false
             val sb = StringBuilder()
-            var event = p.eventType
-            while (event != XmlPullParser.END_DOCUMENT) {
-                when (event) {
-                    XmlPullParser.START_TAG -> when (localName(p)) {
-                        "si" -> { inSi = true; sb.setLength(0) }
-                        "t" -> if (inSi) inText = true
-                    }
-                    XmlPullParser.TEXT -> if (inSi && inText) sb.append(p.text.orEmpty())
+            pull(ins) { p ->
+                when (p.eventType) {
+                    XmlPullParser.START_TAG -> when (localName(p)) { "si" -> { inSi = true; sb.setLength(0) }; "t" -> if (inSi && !inRph) inT = true; "rph" -> inRph = true }
+                    XmlPullParser.TEXT -> if (inT) sb.append(p.text.orEmpty())
                     XmlPullParser.END_TAG -> when (localName(p)) {
-                        "t" -> inText = false
-                        "si" -> {
-                            inSi = false
-                            out.add(sb.toString())
-                        }
+                        "t" -> inT = false; "rph" -> inRph = false
+                        "si" -> { inSi = false; shared.add(sb.toString()); if (shared.size > maxS) return@pull false }
                     }
                 }
-                event = p.next()
+                true
             }
-        } catch (_: Exception) {
-        }
-        return out
+        } }
+        for ((r, m) in sIdx) for ((c, k) in m) shared.getOrNull(k)?.takeIf { it.isNotEmpty() }?.let { raw.getOrPut(r) { HashMap() }[c] = it }
+        if (maxRow < 0 || maxCol < 0) return@withZip Sheet(sheetName, emptyList())
+        val out = ArrayList<List<String>>(maxRow + 1)
+        for (r in 0..maxRow) { val src = raw[r]; out.add(List(maxCol + 1) { c -> src?.get(c).orEmpty() }) }
+        Sheet(sheetName, out, setOf(0))
     }
 
-    private fun parseSheetName(data: ByteArray): String? {
+    /** Zip dengan akses acak: berkas lokal langsung; content:// disalin dulu ke cache (cepat, mengalir). */
+    private fun <T> withZip(ctx: Context, uri: Uri, block: (java.util.zip.ZipFile) -> T?): T? {
+        var tmp: java.io.File? = null
         return try {
-            val p = Xml.newPullParser()
-            p.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-            p.setInput(ByteArrayInputStream(data), "UTF-8")
-            var event = p.eventType
-            while (event != XmlPullParser.END_DOCUMENT) {
-                if (event == XmlPullParser.START_TAG && localName(p) == "sheet") {
-                    val name = p.getAttributeValue(null, "name")
-                    if (!name.isNullOrBlank()) return name
-                }
-                event = p.next()
+            val f = if (uri.scheme == "file" && uri.path != null) java.io.File(uri.path!!) else {
+                val t = java.io.File(ctx.cacheDir, "read-" + System.nanoTime() + ".zip"); tmp = t
+                ctx.contentResolver.openInputStream(uri)?.use { ins -> t.outputStream().use { ins.copyTo(it, 64 * 1024) } } ?: return null
+                t
             }
-            null
-        } catch (_: Exception) {
-            null
-        }
+            java.util.zip.ZipFile(f).use { block(it) }
+        } catch (_: Throwable) { null } finally { tmp?.delete() }
     }
 
-    private fun parseWorksheet(data: ByteArray, shared: List<String>): List<List<String>> {
-        val cells = HashMap<Int, HashMap<Int, String>>()
-        var maxRow = -1
-        var maxCol = -1
+    /** Jalankan pengurai tarik atas [ins]; [onEvent] mengembalikan false untuk berhenti. */
+    private fun pull(ins: InputStream, onEvent: (XmlPullParser) -> Boolean) {
         try {
             val p = Xml.newPullParser()
             p.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-            p.setInput(ByteArrayInputStream(data), "UTF-8")
-
-            var row = -1
-            var col = -1
-            var cellType = ""
-            var inValue = false
-            var inInline = false
-            var value = StringBuilder()
-
-            var event = p.eventType
-            while (event != XmlPullParser.END_DOCUMENT) {
-                when (event) {
-                    XmlPullParser.START_TAG -> when (localName(p)) {
-                        "row" -> {
-                            row = p.getAttributeValue(null, "r")?.toIntOrNull()?.minus(1) ?: (row + 1)
-                            col = -1
-                            // Baris sudah lebih dari yang bisa ditampilkan: hentikan, sisa lembar kerja tak perlu diurai.
-                            if (row >= SHEET_MAX_ROWS) break
-                        }
-                        "c" -> {
-                            cellType = p.getAttributeValue(null, "t").orEmpty()
-                            val ref = p.getAttributeValue(null, "r")
-                            col = ref?.let { columnIndex(it) } ?: (col + 1)
-                            value = StringBuilder()
-                        }
-                        "v" -> inValue = true
-                        "is" -> inInline = true
-                        "t" -> if (inInline) inValue = true
-                    }
-                    XmlPullParser.TEXT -> if (inValue) value.append(p.text.orEmpty())
-                    XmlPullParser.END_TAG -> when (localName(p)) {
-                        "v" -> inValue = false
-                        "t" -> if (inInline) inValue = false
-                        "is" -> inInline = false
-                        "c" -> {
-                            if (row in 0 until SHEET_MAX_ROWS && col in 0 until SHEET_MAX_COLS) {
-                                var text = value.toString()
-                                if (cellType == "s") {
-                                    text = shared.getOrNull(text.trim().toIntOrNull() ?: -1).orEmpty()
-                                }
-                                if (text.isNotEmpty()) {
-                                    cells.getOrPut(row) { HashMap() }[col] = text
-                                    if (row > maxRow) maxRow = row
-                                    if (col > maxCol) maxCol = col
-                                }
-                            }
-                        }
-                    }
-                }
-                event = p.next()
+            p.setInput(ins.buffered(64 * 1024), null)
+            while (p.eventType != XmlPullParser.END_DOCUMENT) {
+                if (!onEvent(p)) return
+                p.next()
             }
-        } catch (_: Exception) {
-        }
-
-        if (maxRow < 0 || maxCol < 0) return emptyList()
-        val out = ArrayList<List<String>>(maxRow + 1)
-        for (r in 0..maxRow) {
-            val src = cells[r]
-            val row = ArrayList<String>(maxCol + 1)
-            for (c in 0..maxCol) row.add(src?.get(c).orEmpty())
-            out.add(row)
-        }
-        return out
+        } catch (_: Exception) {}
     }
 
     /** "AB12" -> indeks kolom 27 (0-based). */

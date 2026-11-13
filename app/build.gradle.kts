@@ -19,7 +19,10 @@ android {
         // terjemahan dari AndroidX/Play Services/CameraX untuk puluhan bahasa lain tetap ikut terbundel.
         // (Sengaja TIDAK membatasi density: mipmap launcher sudah kecil, dan membatasi density
         // berisiko menghilangkan ikon yang pas untuk sebagian perangkat demi penghematan tak berarti.)
-        resourceConfigurations += listOf("id", "en")
+    }
+
+    androidResources {
+        localeFilters += listOf("id", "en")
     }
 
     base.archivesName.set("DepupOffice_v2.2.2")
@@ -60,7 +63,26 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+
+    // Berkas metadata pustaka yang tidak dipakai saat aplikasi berjalan (versi AndroidX, modul/builtins Kotlin untuk
+    // kotlin-reflect yang tidak dipakai) tidak ikut dikemas -> APK sedikit lebih kecil.
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/*.version",
+                "META-INF/*.kotlin_module",
+                "kotlin/**",
+                "DebugProbesKt.bin",
+                "META-INF/{AL2.0,LGPL2.1}",
+            )
+        }
+    }
+
+    // Blok metadata dependensi hanya berguna untuk Play Console (bundle); APK yang dibagikan langsung tidak memuatnya.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = true
+    }
 
     // Fix relative keystore paths injected by Android Studio or Gradle CLI (-Pandroid.injected.signing.store.file)
     if (project.hasProperty("android.injected.signing.store.file")) {
@@ -93,14 +115,20 @@ android {
     }
 }
 
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 // Sengaja minim: tanpa Compose, tanpa library PDF pihak ketiga -> APK kecil & ringan.
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("androidx.recyclerview:recyclerview:1.4.0")
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
     // Viewfinder kamera sendiri
-    val camerax = "1.4.2"
+    val camerax = "1.6.2"
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
@@ -108,7 +136,10 @@ dependencies {
     // OCR offline & QR Code Scanner
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
-    implementation("com.google.android.gms:play-services-tasks:18.2.0")
+    implementation("com.google.android.gms:play-services-tasks:18.4.1")
     // Encoder QR asli (ringan, murni Java) + fallback decoder foto.
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.zxing:core:3.5.4")
+    // Memasang Baseline Profile (src/main/baseline-prof.txt) juga untuk APK yang dipasang di luar Play Store:
+    // kode dikompilasi lebih dulu (AOT) -> buka aplikasi lebih cepat, gulir & animasi pertama tidak tersendat.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 }

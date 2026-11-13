@@ -1,0 +1,5 @@
+# Baseline Profile Depup Office (ditulis manual).
+# Seluruh kode aplikasi ditandai panas (H), dipakai saat mulai (S) & sesudahnya (P): ART mengompilasinya lebih dulu
+# (AOT) saat dipasang, jadi aplikasi terbuka lebih cepat dan layar/animasi yang pertama kali dibuka tidak tersendat
+# menunggu JIT. Profil bawaan AndroidX (core, appcompat, recyclerview, camera) ikut digabung otomatis.
+HSPLcloud/depup/office/**->**(**)**

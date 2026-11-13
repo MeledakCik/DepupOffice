@@ -26,6 +26,9 @@ import kotlin.math.min
 /**
  * Notifikasi kapsul "kaca buram": latar di belakang kapsul diambil dengan PixelCopy (GPU, ikut menangkap pratinjau
  * kamera), diperkecil 1/8 lalu di-blur — murah bahkan di HP kelas bawah — dan dilapisi warna transparan + garis tipis.
+ * Android 13+: latar buram itu dilewatkan lensa kaca cair ([LiquidGlass.lens]): refraksi tepi, dispersi, kilau tepi
+ * & tint adaptif — digambar sebagai cat dari bitmap (bukan efek GPU), jadi selalu utuh. Kapsul selalu diletakkan di
+ * atas kaca bawah yang melayang — tidak ada kaca di atas kaca.
  *
  * Toast sistem tidak bisa diberi tampilan khusus sejak Android 11, jadi kapsul ini digambar di atas Activity.
  * Bila Activity sedang ditutup (pola `toast(...); finish()`), otomatis kembali ke Toast sistem agar pesan tidak hilang.
@@ -66,19 +69,23 @@ object GlassToast {
         }
         val glass = ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_XY }
         capsule.addView(glass, FrameLayout.LayoutParams(0, 0))   // ukuran diisi setelah teks diukur
+        // Kaca notifikasi = tangkapan layar statis yang di-blur (PixelCopy), bukan efek GPU hidup: notifikasi
+        // berumur pendek, dan cara ini paling aman di semua HP.
         // Lapisan warna kaca: cukup tembus pandang agar blur terlihat, cukup pekat agar teks tetap terbaca.
         val tint = View(ctx).apply {
             background = GradientDrawable().apply {
                 cornerRadius = radius
-                setColor(if (dark) Color.argb(150, 28, 30, 38) else Color.argb(150, 255, 255, 255))
-                setStroke(ctx.dp(1), if (dark) Color.argb(70, 255, 255, 255) else Color.argb(110, 255, 255, 255))
+                val ink = C.PANEL
+                // alfa bawaan 224, digeser setelan transparansi kaca (Saya → Tampilan)
+                setColor(Color.argb(Glass.toneAlpha(224), Color.red(ink), Color.green(ink), Color.blue(ink)))
+                setStroke(ctx.dp(1), if (dark) Color.argb(40, 0, 0, 0) else Color.argb(36, 255, 255, 255))
             }
         }
         capsule.addView(tint, FrameLayout.LayoutParams(0, 0))
         val text = TextView(ctx).apply {
             this.text = msg
             textSize = 14f
-            setTextColor(if (dark) Color.WHITE else Color.rgb(17, 24, 39))
+            setTextColor(C.ON_PANEL)
             gravity = Gravity.CENTER
             maxLines = 4
             setPadding(ctx.dp(20), ctx.dp(12), ctx.dp(20), ctx.dp(12))
@@ -88,7 +95,10 @@ object GlassToast {
 
         val insets = ViewCompat.getRootWindowInsets(decor)
             ?.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
-        val bottom = (insets?.bottom ?: 0) + ctx.dp(84)
+        // tidak ada kaca di atas kaca: kapsul notifikasi selalu duduk di atas navigasi/kapsul kaca yang melayang
+        val scaffold = GlassContent.find(decor)?.parent as? GlassScaffold
+        val glassTop = scaffold?.floatingTop()
+        val bottom = max((insets?.bottom ?: 0) + ctx.dp(84), if (glassTop != null && decor.height > 0) decor.height - glassTop + ctx.dp(12) else 0)
         val side = ctx.dp(24)
         val maxW = min(decor.width - side * 2, ctx.dp(440)).takeIf { it > 0 } ?: WRAP
         decor.addView(capsule, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
@@ -106,14 +116,21 @@ object GlassToast {
                 // Ukuran gambar kaca dikunci ke ukuran kapsul — tanpa ini bitmap kecil ikut "mengembangkan" kapsul.
                 if (bmp != null) {
                     glass.layoutParams = FrameLayout.LayoutParams(capsule.width, capsule.height)
-                    glass.setImageBitmap(bmp)
+                    // Android 13+: latar buram dilewatkan lensa kaca cair (refraksi tepi, dispersi, kilau, tint
+                    // adaptif yang menjaga teks terang tetap terbaca) — lapisan warna pekat tidak diperlukan lagi
+                    val lens = if (android.os.Build.VERSION.SDK_INT >= 33) LiquidGlass.lens(ctx, bmp, true, C.PANEL, Glass.toneTint(0.5f)) else null
+                    if (lens != null) { glass.setImageDrawable(lens); tint.background = null }
+                    else glass.setImageBitmap(bmp)
                 }
                 else tint.background = GradientDrawable().apply {   // tanpa tangkapan: kaca lebih pekat
                     cornerRadius = radius
-                    setColor(if (dark) Color.argb(225, 28, 30, 38) else Color.argb(230, 255, 255, 255))
+                    setColor(C.PANEL)
                 }
-                capsule.translationY = ctx.dp(12).toFloat()
-                capsule.animate().alpha(1f).translationY(0f).setDuration(180).start()
+                // naik sedikit sambil menebal, mendarat lembut — tanpa pantulan
+                capsule.translationY = ctx.dp(12).toFloat(); capsule.scaleX = 0.96f; capsule.scaleY = 0.96f
+                scaffold?.holdWhole(Motion.SLOW + 200L)   // bayangan kapsul yang bergerak bisa menyentuh kaca di bawahnya
+                capsule.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(Motion.SLOW)
+                    .setInterpolator(Motion.ENTER).start()
                 capsule.announceForAccessibility(msg)
             }
             main.postDelayed({ dismiss(capsule) }, if (long) 3200L else 2000L)
@@ -122,8 +139,9 @@ object GlassToast {
 
     private fun dismiss(v: View) {
         if (!v.isAttachedToWindow) return
+        ((v.parent as? ViewGroup)?.let { GlassContent.find(it) }?.parent as? GlassScaffold)?.holdWhole(Motion.FAST + 200L)
         v.animate().cancel()
-        v.animate().alpha(0f).translationY(v.dp(8).toFloat()).setDuration(160).withEndAction {
+        v.animate().alpha(0f).translationY(v.dp(8).toFloat()).setDuration(Motion.FAST).setInterpolator(Motion.EXIT).withEndAction {
             (v.parent as? ViewGroup)?.removeView(v)
             ((v as? ViewGroup)?.getChildAt(0) as? ImageView)?.setImageDrawable(null)
         }.start()
@@ -138,7 +156,11 @@ object GlassToast {
         val bmp = Bitmap.createBitmap(max(1, src.width() / DOWNSCALE), max(1, src.height() / DOWNSCALE), Bitmap.Config.ARGB_8888)
         try {
             PixelCopy.request(act.window, src, bmp, { res ->
-                if (res == PixelCopy.SUCCESS) { boxBlur(bmp, 2); boxBlur(bmp, 2); done(bmp) } else { bmp.recycle(); done(null) }
+                if (res == PixelCopy.SUCCESS) {
+                    val r = Glass.softRadius()   // kekuatan blur dari setelan (0 = tajam)
+                    if (r > 0) { boxBlur(bmp, r); boxBlur(bmp, r) }
+                    done(bmp)
+                } else { bmp.recycle(); done(null) }
             }, main)
         } catch (_: Throwable) { bmp.recycle(); done(null) }
     }

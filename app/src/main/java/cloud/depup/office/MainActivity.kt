@@ -20,6 +20,7 @@ import android.widget.GridLayout
 import android.widget.TextView
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioButton
@@ -31,6 +32,9 @@ import androidx.appcompat.app.AppCompatActivity
 import java.io.File
 import java.text.NumberFormat
 import java.util.Locale
+
+/** CameraX sudah disiapkan di proses ini (lihat [MainActivity.warmCamera]). */
+private var cameraWarm = false
 
 class MainActivity : AppCompatActivity() {
 
@@ -76,13 +80,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var content: FrameLayout
     private lateinit var barTitle: TextView
     private lateinit var barLogo: View
-    private val navItems = mutableMapOf<Int, Triple<View, ImageView, TextView>>()
+    private lateinit var tabBar: TabBar
+    /** Layar pembuka sedang tampil: isi pertama belum dianimasikan (menunggu [intro]). */
+    private var splashing = false
     private var tab = 0
     private var sv: ScrollView? = null
     private var renderedTab = -1
-    private val scrollMemo = mutableMapOf<Int, Int>()
     private var query = ""
-    private var recentBox: LinearLayout? = null
+    private var glass: GlassScaffold? = null
+    private var docsList: LinearLayout? = null
     private var docsMode = 0          // 0 terkini, 1 ditandai, 2 hasil olahan
     private var docsCat = "Semua"
     private var focusSearch = false
@@ -92,12 +98,15 @@ class MainActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
         outState.putInt("tab", tab)
         outState.putInt("docsMode", docsMode)
+        sv?.let { outState.putInt("scrollY", it.scrollY) }   // dibangun ulang (tema/efek kaca) → posisi gulir tetap
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tab = savedInstanceState?.getInt("tab") ?: 0
         docsMode = savedInstanceState?.getInt("docsMode") ?: 0
+        prefetchSizes()
+        restoreY = savedInstanceState?.getInt("scrollY", 0) ?: 0
         val mainView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(C.BG)
@@ -109,8 +118,16 @@ class MainActivity : AppCompatActivity() {
         mainView.add(bottomNav())
 
         val root = FrameLayout(this)
-        root.addView(mainView, FrameLayout.LayoutParams(MATCH, MATCH))
+        val screen = Glass.scaffold(mainView, floatBottom = true)
+        glass = screen as? GlassScaffold
+        // Navigasi = kapsul kaca tinta: kontras tinggi terhadap halaman (hitam di tema terang, terang di tema gelap).
+        // Navigasi = kapsul liquid glass ala iOS 26 (terang di tema terang, gelap di tema gelap); panel tinta
+        // kontras tinggi dipakai di isi halaman (kartu Scan & ubin angka).
+        glass?.bottomBar?.apply { tintColor = { C.SURFACE }; tintAlpha = 232 }
+        glass?.watchContent = true   // isi beranda tidak pernah kosong polos → ikut diawasi penjaga kaca
+        root.addView(screen, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(root)
+        splashing = savedInstanceState == null && Motion.on()
         select(tab)
         freshlyBuilt = true
 
@@ -118,13 +135,45 @@ class MainActivity : AppCompatActivity() {
             val splash = buildSplash()
             root.addView(splash, FrameLayout.LayoutParams(MATCH, MATCH))
             Theme.apply(this, if (C.dark) C.BG else C.PRIMARY)
-            splash.postDelayed({
-                splash.animate().alpha(0f).setDuration(220).withEndAction {
+            var gone = false
+            val finishSplash = {
+                if (!gone) {
+                    gone = true
+                    intro()   // pengaman bila animasi pembuka terlewat
                     root.removeView(splash)
                     Theme.apply(this)
-                }.start()
-            }, 550L)
-        } else Theme.apply(this)
+                    // Latar jendela bawaan layar pembuka berwarna gelap; ganti ke latar aplikasi supaya area bilah
+                    // status ikut terang dan tidak pernah terlihat hitam bila isi sedang digambar ulang.
+                    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(C.BG))
+                }
+            }
+            // layar pembuka memudar sementara isi beranda & navigasi naik bersama ke tempatnya (satu gerakan)
+            splash.postDelayed({ intro(); splash.animate().alpha(0f).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).withEndAction { finishSplash() }.start() }, 550L)
+            splash.postDelayed({ finishSplash() }, 1200L)   // pengaman bila animasi tidak selesai
+        } else {
+            Theme.apply(this)
+            window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(C.BG))
+        }
+    }
+
+    /**
+     * Layar pembuka mulai memudar: isi beranda, kapsul navigasi & "Lanjutkan" naik ke tempatnya dalam SATU gerakan —
+     * mulai bersamaan, berhenti bersamaan, satu kurva. Tidak ada yang bergelombang, memantul, atau menyusul.
+     */
+    private fun intro() {
+        if (!splashing) return
+        splashing = false
+        if (!Motion.on()) return
+        val dur = Motion.SLOW + 100L
+        hold(dur + 600L)   // halaman tab lain disiapkan SETELAH animasi pembuka selesai
+        (sv?.getChildAt(0))?.shiftIn(dyDp = 16, duration = dur)   // isi sudah utuh di balik layar pembuka, hanya bergeser naik
+        listOfNotNull(glass?.bottomBar, glass?.miniBar?.takeIf { it.visibility == View.VISIBLE }).forEach { b ->
+            b.animate().cancel()
+            b.translationY = dp(24).toFloat()
+            // kaca digambar ulang tiap frame selama naik: isi buram di dalamnya tetap selaras dengan layar
+            b.animate().translationY(0f).setStartDelay(0).setDuration(dur).setInterpolator(Motion.STANDARD)
+                .setUpdateListener { b.invalidate() }.start()
+        }
     }
 
     /** Layar pembuka singkat (±0,5 detik). Animasi otomatis nonaktif bila "Hapus animasi" aktif di HP. */
@@ -136,16 +185,22 @@ class MainActivity : AppCompatActivity() {
         }
         val fg = if (C.dark) C.TEXT else C.ON_PRIMARY
         val center = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
-        val logo = ImageView(this).apply { setImageResource(R.drawable.ic_logo); alpha = 0f; scaleX = 0.85f; scaleY = 0.85f }
+        // ubin logo = ikon aplikasi (biru Depup + logo putih), jadi transisi dari ikon peluncur terasa menyambung
+        val logo = ImageView(this).apply { setImageResource(R.drawable.ic_logo_tile); alpha = 0f; scaleX = 0.92f; scaleY = 0.92f }
         center.add(logo, w = dp(88), h = dp(88))
-        val name = tv("Depup Office", 28f, fg, true).apply { gravity = Gravity.CENTER; alpha = 0f }
+        // nama dengan gaya logo: huruf kecil, "office" abu (sama dengan logo pada paket logo)
+        val wordmark = android.text.SpannableString("depup office").apply {
+            setSpan(android.text.style.ForegroundColorSpan(if (C.dark) C.MUTED else 0xFFA9A6A0.toInt()), 6, 12, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val name = tv("", 28f, fg, true).apply { text = wordmark; contentDescription = "Depup Office"; gravity = Gravity.CENTER; alpha = 0f }
         center.add(name, top = 18, w = WRAP)
         val tag = tv("Kantor saku · 100% offline", 15f, fg).apply { gravity = Gravity.CENTER; alpha = 0f }
         center.add(tag, top = 4, w = WRAP)
         splash.addView(center, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
-        logo.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(320).start()
-        name.animate().alpha(1f).setStartDelay(80).setDuration(300).start()
-        tag.animate().alpha(0.9f).setStartDelay(140).setDuration(300).start()
+        // satu irama: logo membesar sedikit sambil menebal, nama & tagline menebal bersama sesaat kemudian
+        logo.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Motion.SLOW).setInterpolator(Motion.STANDARD).start()
+        name.animate().alpha(1f).setStartDelay(80).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
+        tag.animate().alpha(0.9f).setStartDelay(80).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
         return splash
     }
 
@@ -155,7 +210,24 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (freshlyBuilt) { freshlyBuilt = false; return }
-        if (::content.isInitialized) render()
+        if (!::content.isInitialized) return
+        prefetchSizes()   // berkas bisa berubah selama di layar lain (mis. disunting): ukurannya diperbarui di latar
+        // Data bisa berubah selama di layar lain (berkas terbaru, tanda, hasil). Diperbarui SETELAH animasi kembali
+        // selesai & layar diam, lalu diganti tanpa kedip — frame transisi tidak terbebani pembangunan halaman.
+        for (t in 0..3) if (t != tab) pageKey[t] = null
+        content.removeCallbacks(resumeRefresh)
+        content.postDelayed(resumeRefresh, 420L)
+    }
+
+    /** Ukuran berkas di riwayat dibaca di thread latar, jadi daftar Dokumen dibangun tanpa menunggu penyedia berkas. */
+    private fun prefetchSizes() = Files.prefetchSizes(this, Recent.load(this).map { it[0] })
+
+    private val resumeRefresh: Runnable = object : Runnable {
+        override fun run() {
+            if (isFinishing || isDestroyed) return
+            if (busy()) { content.postDelayed(this, 300L); return }
+            render()
+        }
     }
 
     private fun topBar(): View {
@@ -166,12 +238,60 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(16), dp(6), dp(6), dp(6))
             minimumHeight = dp(60)
         }
-        barLogo = ImageView(this).apply { setImageResource(R.drawable.ic_logo); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-        bar.add(barLogo, w = dp(32), h = dp(32), side = 0)
-        barTitle = headingTv("Depup Office", 22f)
-        bar.add(barTitle, w = 0, weight = 1f, side = 10)
-        bar.add(iconBtn(R.drawable.ic_search, "Cari dokumen", C.TEXT) { openSearch() }, w = dp(48), h = dp(48))
+        setBarCompact(bar)
+        barLogo = ImageView(this).apply { setImageResource(R.drawable.ic_logo_tile); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        bar.add(FrameLayout(this).apply { addView(barLogo, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER_VERTICAL)) }, w = dp(48), h = dp(44), side = 0)
+        // Judul kecil di tengah: baru terlihat setelah judul besar halaman tergulir ke balik kaca.
+        barTitle = tv("Beranda", 17f, C.TEXT, true).apply { gravity = Gravity.CENTER; maxLines = 1; alpha = 0f; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        bar.add(barTitle, w = 0, weight = 1f, side = 0)
+        bar.add(iconBtn(R.drawable.ic_search, "Cari dokumen", C.TEXT, 20) { openSearch() }.apply {
+            background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
+        }, w = dp(44), h = dp(44), side = 0)
         return bar
+    }
+
+    /** Teks angka di dalam ubin statistik (anak pertama baris atas). */
+    private fun statValue(tile: View): TextView? =
+        ((tile as? android.view.ViewGroup)?.getChildAt(0) as? android.view.ViewGroup)?.getChildAt(0) as? TextView
+
+    private fun setBarCompact(bar: LinearLayout) {
+        bar.setPadding(dp(12), dp(2), dp(4), dp(2))
+        bar.minimumHeight = dp(48)
+    }
+
+    /** Kapsul "Lanjutkan": dokumen terakhir dibuka, melayang di atas navigasi. Ketuk untuk membukanya lagi. */
+    private var continueKey: String? = null
+
+    private fun refreshContinueBar() {
+        val g = glass ?: return
+        val e = Recent.load(this).firstOrNull()
+        val key = e?.joinToString("\u0001")
+        val shown = g.miniBar.visibility == View.VISIBLE
+        if (key == continueKey && (e != null) == shown) return   // tidak berubah → tidak dibangun ulang
+        continueKey = key
+        if (e == null) { g.setAccessory(null); return }
+        val (label, fg, _) = typeOf(e[2], e[1])
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(6), dp(6), dp(6))
+            minimumHeight = dp(56)
+        }
+        fun openIt() { try { Files.open(this, Uri.parse(e[0]), e[2]) } catch (_: Exception) { toast("File tidak lagi tersedia") } }
+        row.tappable("Lanjutkan ${e[1]}, ${readableType(label)}") { openIt() }
+        row.add(cover(fg, 0, null, 10).apply {
+            addView(tv(label, 11f, fg, true).apply { gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO },
+                FrameLayout.LayoutParams(MATCH, MATCH))
+        }, w = dp(44), h = dp(44))
+        val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+        col.add(tv(e[1], 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+        val t = Files.relTime(e[3].toLongOrNull() ?: 0L)
+        col.add(tv(if (t.isBlank()) "Lanjutkan" else "Lanjutkan • $t", 13f, C.MUTED).apply { maxLines = 1 }, top = 1)
+        row.add(col, w = 0, weight = 1f, side = 10)
+        if (e[2].contains("word") || e[2].contains("sheet") || e[1].endsWith(".docx", true) || e[1].endsWith(".xlsx", true))
+            row.add(iconBtn(R.drawable.ic_note, "Edit ${e[1]}", C.TEXT, 22) { editDoc(e[0], e[1], e[2]) }, w = dp(44), h = dp(44))
+        row.add(iconBtn(R.drawable.ic_next, "Buka ${e[1]}", C.TEXT, 22) { openIt() }, w = dp(44), h = dp(44))
+        if (shown) g.miniBar.box.swapContent { g.setAccessory(row) } else g.setAccessory(row)
     }
 
     private fun rupiah(value: Long): String =
@@ -407,91 +527,343 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Navigasi bawah: 4 tujuan + tombol Scan di tengah. Label selalu tampil; status terpilih diumumkan TalkBack. */
+    /**
+     * Navigasi bawah minimalis: kapsul putih melayang berisi ikon garis. Tab aktif = pil tinta (hitam) yang
+     * memuat ikon + nama; tab lain hanya ikon abu (nama tetap dibacakan TalkBack).
+     */
     private fun bottomNav(): View {
-        val nav = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        // Pil tinta meluncur cair antar-tab; nama tab membuka/menutup halus; Scan = lingkaran tinta (aksi, bukan tab).
+        val nav = TabBar(this).apply {
             setBackgroundColor(C.SURFACE)
-            setPadding(dp(4), dp(6), dp(4), dp(8))
+            setPadding(dp(8), dp(8), dp(8), dp(8))
         }
-        fun item(idx: Int, res: Int, label: String): View {
-            val ind = FrameLayout(this)
-            val ic = icon(res, C.MUTED, 24)
-            ind.addView(ic, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
-            val l = tv(label, 12f, C.MUTED, true).apply { gravity = Gravity.CENTER; maxLines = 1; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-            navItems[idx] = Triple(ind, ic, l)
-            return LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                isClickable = true
-                isFocusable = true
-                contentDescription = label
-                background = rippleBg(16)
-                minimumHeight = dp(56)
-                setOnClickListener { select(idx) }
-                add(ind, w = dp(60), h = dp(32))
-                add(l, top = 4, w = WRAP)
+        tabBar = nav
+        val items = listOf(
+            Triple(0, R.drawable.ic_home, "Beranda"), Triple(1, R.drawable.ic_folder, "Dokumen"),
+            Triple(-1, R.drawable.ic_scan, "Scan"), Triple(2, R.drawable.ic_tools, "Alat"), Triple(3, R.drawable.ic_user, "Saya"))
+        items.forEachIndexed { k, (idx, res, label) ->
+            if (k > 0) nav.gap()
+            if (idx < 0) nav.addAction(res, "Scan dokumen dengan kamera") { startScan() }
+            else nav.addTab(idx, res, label) {
+                if (idx == tab) { sv?.smoothScrollTo(0, 0); nav.beat() }   // tab yang sedang dibuka: kembali ke atas
+                else select(idx)
             }
         }
-        nav.add(item(0, R.drawable.ic_home, "Beranda"), w = 0, weight = 1f)
-        nav.add(item(1, R.drawable.ic_folder, "Dokumen"), w = 0, weight = 1f)
-        // Tombol Scan: aksi paling sering, menonjol di tengah.
-        val scan = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            isClickable = true
-            isFocusable = true
-            contentDescription = "Scan dokumen dengan kamera"
-            background = rippleBg(16)
-            minimumHeight = dp(56)
-            setOnClickListener { startScan() }
-            val fabBox = FrameLayout(this@MainActivity).apply { background = shape(C.PRIMARY, 16) }
-            fabBox.addView(icon(R.drawable.ic_scan, C.ON_PRIMARY, 26), FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
-            add(fabBox, w = dp(56), h = dp(40))
-            add(tv("Scan", 12f, C.PRIMARY, true).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, top = 2, w = WRAP)
-        }
-        nav.add(scan, w = 0, weight = 1f)
-        nav.add(item(2, R.drawable.ic_tools, "Alat"), w = 0, weight = 1f)
-        nav.add(item(3, R.drawable.ic_user, "Saya"), w = 0, weight = 1f)
         return nav
     }
 
     private fun select(i: Int) {
+        val changed = i != tab
+        if (changed && ::content.isInitialized) content.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
         tab = i
-        barTitle.text = if (i == 0) "Depup Office" else tabNames[i]
-        barLogo.visibility = if (i == 0) View.VISIBLE else View.GONE
-        navItems.forEach { (idx, v) ->
-            val on = idx == i
-            v.first.background = if (on) shape(C.PRIMARY_C, 100) else null
-            v.second.setColorFilter(if (on) C.ON_PRIMARY_C else C.MUTED)
-            v.third.setTextColor(if (on) C.TEXT else C.MUTED)
-            v.third.typeface = if (on) Fonts.head(this) else Fonts.label(this)
-            (v.first.parent as? View)?.isSelected = on
-        }
-        render()
+        showLogo(i == 0, changed)
+        tabBar.select(i, changed)
+        switchTo(i, changed)
+        setBarTitle(tabNames[i], sv?.let { barAlpha(it.scrollY) } ?: 0f, changed)
     }
 
+    private var titleAnim = false
+
+    /**
+     * Judul kecil di bilah atas: berganti tanpa lompatan. Bila sedang tampak, judul lama memudar dulu lalu judul baru
+     * muncul ke tingkat yang sesuai posisi gulir halaman tujuan.
+     */
+    private fun setBarTitle(text: String, target: Float, animate: Boolean) {
+        barTitle.animate().cancel()
+        if (!animate || !Motion.on()) { barTitle.text = text; barTitle.alpha = target; titleAnim = false; return }
+        barTitle.noLayer()
+        titleAnim = true
+        val done = Runnable { titleAnim = false }
+        // total selalu = durasi larut halaman (MED): judul lama pergi 100 ms, judul baru datang 150 ms
+        if (barTitle.text != text && barTitle.alpha > 0.01f) {
+            barTitle.animate().alpha(0f).setStartDelay(0).setDuration(100L).setInterpolator(Motion.STANDARD).withEndAction {
+                barTitle.text = text
+                barTitle.animate().alpha(target).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD).withEndAction(done).start()
+            }.start()
+        } else {
+            barTitle.text = text
+            barTitle.animate().alpha(target).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).withEndAction(done).start()
+        }
+    }
+
+    /** Logo di bilah atas (khusus Beranda) menebal sambil membesar sedikit, pergi dengan kebalikannya — tanpa pantulan. */
+    private fun showLogo(show: Boolean, animate: Boolean) {
+        val v = barLogo
+        v.animate().cancel()
+        if (!animate || !Motion.on()) {
+            v.visibility = if (show) View.VISIBLE else View.INVISIBLE
+            v.alpha = 1f; v.scaleX = 1f; v.scaleY = 1f
+            return
+        }
+        if (show) {
+            if (v.visibility != View.VISIBLE) { v.alpha = 0f; v.scaleX = 0.9f; v.scaleY = 0.9f }
+            v.visibility = View.VISIBLE
+            v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD)
+                .setUpdateListener(null).start()
+        } else {
+            v.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD)
+                .setUpdateListener(null).withEndAction { v.visibility = View.INVISIBLE; v.alpha = 1f; v.scaleX = 1f; v.scaleY = 1f }.start()
+        }
+    }
+
+    // ================= HALAMAN TAB (disimpan & dipakai ulang) =================
+    /*
+     * Tiap tab punya halaman sendiri yang dibangun SEKALI lalu disimpan (tersembunyi) di wadah isi. Pindah tab hanya
+     * menampilkan halaman yang sudah siap — tidak ada ratusan tampilan dibangun di tengah animasi, jadi geraknya
+     * tetap mulus. Halaman yang datanya mungkin berubah ditandai basi dan dibangun ulang diam-diam saat aplikasi
+     * menganggur (tidak sedang disentuh, digulir, atau beranimasi).
+     */
+    private val pages = arrayOfNulls<ScrollView>(4)
+    private val pageKey = arrayOfNulls<String>(4)
+    private val orphans = ArrayList<ScrollView>()   // versi lama halaman yang sedang memudar keluar
+    private var swapGen = 0
+    private var swapping = false
+    private var lastTouch = 0L
+    private var lastScroll = 0L
+    /** Sampai kapan animasi besar sedang berjalan (pekerjaan berat ditunda agar tidak menyendat). */
+    private var holdUntil = 0L
+    private var restoreY = 0
+    private var docsSearch: EditText? = null
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        lastTouch = android.os.SystemClock.uptimeMillis()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /** Pengguna sedang menyentuh/menggulir atau transisi berjalan → tunda pekerjaan berat. */
+    private fun busy(): Boolean {
+        val now = android.os.SystemClock.uptimeMillis()
+        return swapping || now < holdUntil || now - maxOf(lastTouch, lastScroll) < 600L
+    }
+
+    private fun hold(ms: Long) { holdUntil = maxOf(holdUntil, android.os.SystemClock.uptimeMillis() + ms) }
+
+    private fun keyFor(t: Int) = if (t == 1) "$docsMode/$docsCat" else ""
+    private fun fresh(t: Int) = pages[t] != null && pageKey[t] == keyFor(t)
+    private fun barAlpha(y: Int) = ((y - dp(26)) / dp(22).toFloat()).coerceIn(0f, 1f)
+
+    /** Bangun halaman tab [t] (tanpa animasi di dalamnya). */
+    private fun buildPage(t: Int): ScrollView {
+        val quiet = Motion.quiet
+        Motion.quiet = true
+        try {
+            val page = vbox().apply { setPadding(dp(20), dp(4), dp(20), dp(40)); clipChildren = false; clipToPadding = false }
+            // Judul besar ala pustaka (Beranda diawali tanggal). Dibungkus satu wadah: wadahnya ikut gerak halaman,
+            // isinya dipakai efek menyusut saat digulir — keduanya tidak bentrok.
+            val head = vbox()
+            val date: View? = if (t == 0) tv(java.text.SimpleDateFormat("EEEE, d MMMM", java.util.Locale("id")).format(java.util.Date()), 14f, C.MUTED)
+                .also { head.add(it) } else null
+            val big = if (t == 0) largeTitle("${greeting()},", "mau kerjakan apa?") else largeTitle(tabNames[t])
+            head.add(big, top = if (t == 0) 4 else 0)
+            page.add(head, top = 4)
+            when (t) {
+                0 -> buildHome(page)
+                1 -> buildDocs(page)
+                2 -> buildTools(page)
+                else -> buildMe(page)
+            }
+            val scroller = ScrollView(this).apply {
+                isFillViewport = true
+                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                setBackgroundColor(C.BG)   // buram: saat memudar masuk, halaman baru menutupi halaman lama (tanpa layar kosong)
+                outlineProvider = null     // tanpa bayangan ketika dinaikkan di atas halaman lain
+                addView(page)
+            }
+            // Saat digulir: judul besar menyusut & memudar ke arah bilah, judul kecil di bilah kaca menggantikannya.
+            big.noLayer(); date?.noLayer()
+            val shrink = dp(72).toFloat()
+            scroller.setOnScrollChangeListener { _, _, y, _, _ ->
+                lastScroll = android.os.SystemClock.uptimeMillis()
+                if (sv === scroller && !swapping) barTitle.alpha = barAlpha(y)
+                val f = (y / shrink).coerceIn(0f, 1f)
+                big.pivotX = 0f; big.pivotY = big.height.toFloat()
+                big.alpha = 1f - 0.8f * f
+                big.scaleX = 1f - 0.07f * f; big.scaleY = big.scaleX
+                date?.alpha = 1f - f
+            }
+            pageKey[t] = keyFor(t)
+            return scroller
+        } finally { Motion.quiet = quiet }
+    }
+
+    /** Simpan halaman [s] untuk tab [t] di lapisan paling bawah wadah isi (tidak pernah menghalangi sentuhan). */
+    private fun install(t: Int, s: ScrollView, shown: Boolean) {
+        val prev = pages[t]
+        pages[t] = s
+        s.visibility = if (shown) View.VISIBLE else View.INVISIBLE
+        content.addView(s, 0)
+        glass?.pin(s)
+        if (prev != null && prev !== sv) drop(prev)
+    }
+
+    private fun drop(p: ScrollView) {
+        p.animate().cancel()
+        glass?.unpin(p)
+        content.removeView(p)
+    }
+
+    /**
+     * Tampilkan halaman tab [i]. Transisi "larut": halaman tujuan (berlatar buram) menebal di atas halaman asal
+     * sementara seluruh isinya bergeser sedikit dari arah tab tujuan sebagai SATU blok — searah & seirama dengan pil
+     * navigasi (kurva & durasi sama). Halaman asal diam di bawahnya lalu disembunyikan. Tidak pernah ada frame yang
+     * kosong/gelap, tidak ada yang bergelombang, dan tidak ada yang dibangun di tengah animasi.
+     */
+    private fun switchTo(i: Int, animate: Boolean) {
+        val from = sv
+        if (from != null && from === pages[i]) {            // tab yang sama
+            if (!fresh(i)) render()
+            afterShow(i)
+            return
+        }
+        if (!fresh(i)) install(i, buildPage(i), shown = false)
+        val to = pages[i] ?: return
+        if (from == null) {
+            if (restoreY > 0) { val y = restoreY; restoreY = 0; to.beforeDraw { to.scrollTo(0, y) } }
+            refreshContinueBar()
+        }
+        sv = to
+        val dir = if (i > renderedTab) 1 else -1
+        renderedTab = i
+        val gen = ++swapGen
+        if (animate && from != null && Motion.on() && !splashing) {
+            swapping = true
+            hold(Motion.SLOW + 450L)
+            val shift = dp(Motion.SHIFT_DP).toFloat()
+            if (to.visibility == View.VISIBLE && from.alpha < 1f) {
+                // berbalik di tengah transisi: halaman yang sedang menebal memudar kembali, tujuan sudah ada di bawahnya
+                from.animate().alpha(0f).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD).setUpdateListener(null)
+                    .withEndAction { if (gen == swapGen) settlePages() }.start()
+                (to.getChildAt(0) as? ViewGroup)?.let { pg -> pg.animate().cancel(); pg.animate().translationX(0f).setStartDelay(0)
+                    .setDuration(Motion.MED).setInterpolator(Motion.STANDARD).setUpdateListener(null).start() }
+            } else {
+                for (p in pages) if (p != null) p.translationZ = 0f
+                from.translationZ = 1f; to.translationZ = 2f   // tujuan di atas, asal tepat di bawahnya (diam)
+                to.noLayer()
+                to.animate().cancel()
+                to.alpha = 0f
+                to.visibility = View.VISIBLE
+                to.animate().alpha(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).setUpdateListener(null)
+                    .withEndAction { if (gen == swapGen) settlePages() }.start()
+                // seluruh isi halaman tujuan bergeser masuk sebagai satu blok, seirama dengan pil navigasi
+                (to.getChildAt(0) as? ViewGroup)?.let { pg ->
+                    pg.animate().cancel()
+                    pg.translationX = dir * shift
+                    pg.animate().translationX(0f).setStartDelay(0).setDuration(Motion.SLOW).setInterpolator(Motion.STANDARD)
+                        .setUpdateListener(null).withEndAction { pg.translationX = 0f }.start()
+                }
+            }
+        } else settlePages()
+        afterShow(i)
+    }
+
+    /** Akhir transisi: hanya halaman aktif yang tampil; lapisan, transparansi & posisi kembali normal. */
+    private fun settlePages() {
+        swapping = false
+        val cur = sv
+        for (p in pages) {
+            if (p == null) continue
+            p.animate().cancel()
+            p.translationZ = 0f
+            p.alpha = 1f
+            if (p !== cur) {
+                (p.getChildAt(0) as? ViewGroup)?.let { pg -> pg.animate().cancel(); pg.translationX = 0f }
+                p.visibility = View.INVISIBLE
+            } else p.visibility = View.VISIBLE
+        }
+        for (o in orphans) drop(o)
+        orphans.clear()
+        if (!titleAnim) cur?.let { barTitle.alpha = barAlpha(it.scrollY) }
+    }
+
+    private fun afterShow(i: Int) {
+        if (focusSearch && i == 1) {
+            focusSearch = false
+            docsSearch?.let { s -> s.post {
+                s.requestFocus()
+                (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.showSoftInput(s, 0)
+            } }
+        }
+        glass?.refresh()
+        GlassGuard.poke()
+        schedulePrebuild()
+    }
+
+    /**
+     * Data halaman yang sedang tampil berubah: bangun ulang & gantikan tanpa kedip (versi baru menebal di atas versi
+     * lama, posisi gulir — termasuk korsel — dipertahankan). Halaman tab lain ditandai basi.
+     */
     private fun render() {
-        sv?.let { scrollMemo[renderedTab] = it.scrollY }
-        content.removeAllViews()
-        recentBox = null
-        val page = vbox().apply { setPadding(dp(16), dp(8), dp(16), dp(32)) }
-        when (tab) {
-            0 -> buildHome(page)
-            1 -> buildDocs(page)
-            2 -> buildTools(page)
-            else -> buildMe(page)
+        if (!::content.isInitialized) return
+        val t = tab
+        val old = pages[t]
+        val s = buildPage(t)
+        pages[t] = s
+        content.addView(s)          // di atas versi lama: sentuhan langsung ke versi baru
+        glass?.pin(s)
+        s.visibility = View.VISIBLE
+        old?.let { o ->
+            val y = o.scrollY
+            if (y > 0) s.beforeDraw { s.scrollTo(0, y) }
+            keepCarousels(o, s)
         }
-        val scroller = ScrollView(this).apply {
-            isFillViewport = true
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-            addView(page)
+        sv = s; renderedTab = t
+        if (old != null && old.parent === content && old.visibility == View.VISIBLE && Motion.on() && !splashing) {
+            hold(450L)
+            run {
+                orphans.add(old)
+                val gen = swapGen
+                s.noLayer(); s.alpha = 0f
+                s.animate().alpha(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).setUpdateListener(null)
+                    .withEndAction { if (gen == swapGen) { orphans.remove(old); drop(old) } }.start()
+            }
+        } else old?.let { drop(it) }
+        for (k in 0..3) if (k != t) pageKey[k] = null
+        refreshContinueBar()
+        glass?.refresh()
+        schedulePrebuild()
+    }
+
+    /** Posisi gulir korsel mendatar ikut dipindah ke versi baru halaman (tidak melompat ke awal). */
+    private fun keepCarousels(from: View, to: View) {
+        fun collect(v: View, out: MutableList<android.widget.HorizontalScrollView>) {
+            if (v is android.widget.HorizontalScrollView) out.add(v)
+            if (v is ViewGroup) for (i in 0 until v.childCount) collect(v.getChildAt(i), out)
         }
-        sv = scroller
-        renderedTab = tab
-        content.addView(scroller)
-        val y = scrollMemo[tab] ?: 0
-        if (y > 0) scroller.post { scroller.scrollTo(0, y) }
+        val a = ArrayList<android.widget.HorizontalScrollView>(); collect(from, a)
+        val b = ArrayList<android.widget.HorizontalScrollView>(); collect(to, b)
+        if (a.size != b.size) return
+        for (k in a.indices) { val x = a[k].scrollX; if (x > 0) b[k].let { h -> h.beforeDraw { h.scrollTo(x, 0) } } }
+    }
+
+    private val prebuild = Runnable { prebuildNext() }
+
+    private fun schedulePrebuild(delay: Long = 700L) {
+        if (!::content.isInitialized) return
+        content.removeCallbacks(prebuild)
+        content.postDelayed(prebuild, delay)
+    }
+
+    /** Saat menganggur: siapkan satu halaman tab lain yang belum ada/basi (satu per giliran — tidak menyendat). */
+    private fun prebuildNext() {
+        if (isFinishing || isDestroyed) return
+        if (splashing || busy()) { schedulePrebuild(450L); return }
+        val t = (0..3).firstOrNull { it != tab && !fresh(it) } ?: run { warmCamera(); return }
+        val s = buildPage(t)
+        install(t, s, shown = true)
+        // tampil transparan sekejap agar tampilannya sudah "terekam" — saat pertama ditampilkan tidak menyendat
+        s.alpha = 0f
+        s.postOnAnimation { s.postOnAnimation { if (sv !== s && pages[t] === s && !swapping) { s.visibility = View.INVISIBLE; s.alpha = 1f } } }
+        schedulePrebuild(240L)
+    }
+
+    /**
+     * Saat beranda menganggur (semua tab sudah disiapkan), CameraX diinisialisasi di latar SEKALI per proses: layar
+     * pindai — fitur utama — terbuka lebih cepat. Kamera TIDAK dibuka (tanpa indikator kamera), hanya daftar kameranya.
+     */
+    private fun warmCamera() {
+        if (cameraWarm) return
+        cameraWarm = true
+        try { androidx.camera.lifecycle.ProcessCameraProvider.getInstance(applicationContext) } catch (_: Throwable) {}
     }
 
     private fun greeting(): String {
@@ -507,10 +879,14 @@ class MainActivity : AppCompatActivity() {
 
     /** Kumpulan baris dalam satu kartu dengan garis pemisah — lebih rapi daripada kartu bertumpuk. */
     private fun listCard(rows: List<View>): LinearLayout = vbox().apply {
-        background = raised(C.SURFACE, 16, 1f)
+        // sel berkelompok ala iOS: satu kartu bersudut kontinu, pemisah tipis mulai sejajar teks (bukan ikon)
+        background = squircle(C.SURFACE, 22)
+        clipToOutline = true
+        outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
         rows.forEachIndexed { i, r ->
+            r.setPadding(dp(14), r.paddingTop, r.paddingRight.coerceAtMost(dp(8)), r.paddingBottom)
             if (i > 0) add(View(context).apply { setBackgroundColor(C.LINE) }, h = 1, side = 0).also {
-                (getChildAt(childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(72)
+                (getChildAt(childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(66)
             }
             add(r)
         }
@@ -533,7 +909,7 @@ class MainActivity : AppCompatActivity() {
 
 
     private fun metaLine(e: List<String>): String {
-        val size = Files.sizeOf(this, Uri.parse(e[0]))
+        val size = Files.sizeCached(this, Uri.parse(e[0]))   // ukuran sudah disiapkan di latar (lihat onCreate/onResume)
         return listOf(if (size >= 0) Files.fmtSize(size) else "", Files.relTime(e[3].toLongOrNull() ?: 0L))
             .filter { it.isNotBlank() }.joinToString(" • ")
     }
@@ -543,9 +919,10 @@ class MainActivity : AppCompatActivity() {
 
     /** Lencana jenis berkas (PDF/DOCX/XLSX/IMG): huruf tebal di wadah warna kategori. */
     private fun typeBadge(label: String, fg: Int, bg: Int): View =
-        tv(label, 12f, fg, true).apply {
+        tv(label, 11f, fg, true).apply {
             gravity = Gravity.CENTER
-            background = shape(bg, 12)
+            letterSpacing = 0.02f
+            background = squircle(C.SOFT, 12)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
 
@@ -563,7 +940,7 @@ class MainActivity : AppCompatActivity() {
         }
         val meta = metaLine(e)
         r.tappable("${e[1]}, ${readableType(label)}${if (meta.isBlank()) "" else ", $meta"}. Ketuk untuk membuka") { openIt() }
-        r.add(typeBadge(label, fg, bg), w = dp(44), h = dp(44))
+        r.add(typeBadge(label, fg, bg), w = dp(40), h = dp(40))
         val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
         col.add(tv(e[1], 15f, C.TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
         col.add(tv(if (meta.isBlank()) readableType(label) else meta, 13f, C.MUTED), top = 2)
@@ -573,6 +950,12 @@ class MainActivity : AppCompatActivity() {
         bm = iconBtn(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off,
             if (marked) "Hapus tanda ${e[1]}" else "Tandai ${e[1]}", if (marked) C.PRIMARY else C.MUTED, 22) {
             val on = Meta.toggleMark(this, uriStr)
+            haptic(bm)
+            // tanda: membesar sedikit lalu kembali mulus (tanpa pantulan)
+            if (Motion.on()) bm.animate().scaleX(1.15f).scaleY(1.15f).setStartDelay(0).setDuration(Motion.PRESS_DOWN)
+                .setInterpolator(Motion.STANDARD).withEndAction {
+                    bm.animate().scaleX(1f).scaleY(1f).setDuration(Motion.PRESS_UP).setInterpolator(Motion.STANDARD).start()
+                }.start()
             bm.setImageResource(if (on) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off)
             bm.setColorFilter(if (on) C.PRIMARY else C.MUTED)
             bm.contentDescription = if (on) "Hapus tanda ${e[1]}" else "Tandai ${e[1]}"
@@ -649,15 +1032,14 @@ class MainActivity : AppCompatActivity() {
 
     // ================= BERANDA =================
     private fun buildHome(p: LinearLayout) {
-        p.add(tv(greeting(), 15f, C.MUTED), top = 4)
-        p.add(headingTv("Mau kerjakan apa hari ini?", 24f), top = 2)
+        fun bleed(v: View) { (v.layoutParams as LinearLayout.LayoutParams).apply { leftMargin = -dp(20); rightMargin = -dp(20) } }
 
         // Kolom cari (membuka tab Dokumen) — ukuran sentuh penuh 52dp.
         val search = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 14, C.LINE, 1), null)
-            setPadding(dp(16), 0, dp(16), 0)
+            background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
+            setPadding(dp(18), 0, dp(18), 0)
             minimumHeight = dp(52)
             isClickable = true; isFocusable = true
             contentDescription = "Cari dokumen"
@@ -665,19 +1047,43 @@ class MainActivity : AppCompatActivity() {
             add(icon(R.drawable.ic_search, C.MUTED, 20), w = dp(20), h = dp(20))
             add(tv("Cari dokumen…", 15f, C.MUTED), w = 0, weight = 1f, side = 12)
         }
-        p.add(search, top = 16)
+        p.add(search, top = 12)
+
+        // Baru dibuka: korsel sampul besar, seperti deretan "baru diputar"
+        val recents = Recent.load(this)
+        if (recents.isNotEmpty()) {
+            p.add(sectionTitle("Baru dibuka", if (recents.size > 3) "Semua" else null) { docsMode = 0; select(1) }, top = 18)
+            val cards = recents.take(8).map { e ->
+                val (label, fg, _) = typeOf(e[2], e[1])
+                val ic = when (label) { "PDF" -> R.drawable.ic_pdf; "DOCX" -> R.drawable.ic_doc; "XLSX" -> R.drawable.ic_sheet; "IMG" -> R.drawable.ic_image; else -> R.drawable.ic_folder }
+                val meta = Files.relTime(e[3].toLongOrNull() ?: 0L)
+                coverCard(cover(fg, ic, label), e[1], if (meta.isBlank()) readableType(label) else meta, 156,
+                    "${e[1]}, ${readableType(label)}. Ketuk untuk membuka") {
+                    try { Files.open(this, Uri.parse(e[0]), e[2]) } catch (_: Exception) { toast("File tidak lagi tersedia") }
+                }
+            }
+            val c = carousel(cards)
+            p.add(c, top = 6); bleed(c)
+        }
 
         // Kartu Scan: aksi utama
         val h = hero()
         val hr = hbox()
         val hl = vbox()
-        hl.add(headingTv("Scan dokumen", 20f, C.ON_PRIMARY_C))
-        hl.add(tv("Foto kertas jadi PDF rapi. Sudut otomatis diluruskan.", 14f, C.ON_PRIMARY_C), top = 4)
+        hl.add(headingTv("Scan dokumen", 22f, C.ON_PANEL))
+        hl.add(tv("Foto kertas jadi PDF rapi. Sudut otomatis diluruskan.", 14f, C.ON_PANEL_MUTED), top = 4)
         hl.add(heroBtn("Mulai Scan", R.drawable.ic_camera) { startScan() }, top = 14, w = WRAP)
         hr.add(hl, w = 0, weight = 1f)
         hr.add(ScanFrameView(this), w = dp(92), h = dp(112), side = 6)
         h.add(hr)
         p.add(h, top = 16)
+
+        // Bento: dua ubin angka — abu lembut + tinta
+        val nRecent = Recent.load(this).size; val nOut = outFiles().size
+        val t1 = statTile("$nRecent", "Berkas terbaru", false, R.drawable.ic_folder) { docsMode = 0; select(1) }
+        val t2 = statTile("$nOut", "Hasil dibuat", true, R.drawable.ic_download) { docsMode = 2; select(1) }
+        p.add(twoCols(t1, t2), top = 12)
+        statValue(t1)?.countUp(nRecent, 260); statValue(t2)?.countUp(nOut, 300)
 
         // Buka berkas: 4 pintasan sejajar
         p.add(sectionTitle("Buka berkas"), top = 22)
@@ -717,16 +1123,9 @@ class MainActivity : AppCompatActivity() {
 
         // Template siap pakai (gulir mendatar)
         p.add(sectionTitle("Template siap pakai"), top = 18)
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), dp(4), dp(6)) }
-        fun tpl(res: Int, fg: Int, bg: Int, title: String, sub: String, f: () -> Unit) {
-            val c = vbox(14).apply {
-                background = rippleCard(16)
-                tappable("Template $title. $sub") { f() }
-            }
-            c.add(iconBadge(res, fg, bg, 12, 22), w = dp(40), h = dp(40))
-            c.add(tv(title, 15f, C.TEXT, true).apply { maxLines = 2 }, top = 10)
-            c.add(tv(sub, 13f, C.MUTED).apply { maxLines = 2 }, top = 2)
-            row.add(c, w = dp(170), side = 0).also { (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(10) }
+        val tplCards = ArrayList<View>()
+        fun tpl(res: Int, fg: Int, @Suppress("UNUSED_PARAMETER") bg: Int, title: String, sub: String, f: () -> Unit) {
+            tplCards.add(coverCard(cover(fg, res), title, sub, 132, "Template $title. $sub") { f() })
         }
         tpl(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "Surat Lamaran", "Format resmi HRD") {
             startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_TEMPLATE, DocEditorActivity.TEMPLATE_SURAT))
@@ -744,14 +1143,112 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_INVOICE))
         }
         tpl(R.drawable.ic_sign, C.IMG_FG, C.IMG_BG, "TTD Transparan", "Foto TTD jadi PNG") { extractTransparentSignatureFlow() }
-        p.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipToPadding = false; addView(row) }, top = 8)
+        val tc = carousel(tplCards)
+        p.add(tc, top = 6); bleed(tc)
+    }
 
-        // Terakhir dibuka
-        p.add(sectionTitle("Terakhir dibuka", if (Recent.load(this).size > 3) "Lihat semua" else null) { docsMode = 0; select(1) }, top = 14)
+    /** Baris setelan bersakelar: ikon · judul · keterangan · sakelar. Seluruh baris bisa diketuk (sekali). */
+    private fun switchRow(res: Int, title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
+        val sw = androidx.appcompat.widget.SwitchCompat(this).apply {
+            isChecked = checked
+            val st = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+            trackTintList = ColorStateList(st, intArrayOf((C.PRIMARY and 0x00FFFFFF) or 0x66000000, C.LINE_STRONG))
+            thumbTintList = ColorStateList(st, intArrayOf(C.ACCENT, C.BG))
+            isClickable = false; isFocusable = false   // ketukan ditangani baris
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(8), dp(12))
+            minimumHeight = dp(64)
+            fun state() = "$title, ${if (sw.isChecked) "aktif" else "nonaktif"}. $sub"
+            tappable(state()) {
+                if (!isEnabled) return@tappable
+                isEnabled = false
+                haptic(this)
+                sw.toggle()
+                contentDescription = state()
+                onChange(sw.isChecked)
+            }
+            add(iconBadge(res, C.PRIMARY, C.PRIMARY_C, 10, 22), w = dp(40), h = dp(40))
+            val c = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+            c.add(tv(title, 15f, C.TEXT, true))
+            c.add(tv(sub, 13f, C.MUTED), top = 1)
+            add(c, w = 0, weight = 1f, side = 12)
+            add(sw, w = WRAP, side = 0)
+        }
+    }
+
+    /**
+     * Tampilan kaca yang bisa diatur sesuka hati, seperti penggeser Liquid Glass di iOS 27: transparansi (bening ↔
+     * pekat, bawaan di tengah) dan kekuatan blur. Pratinjau memakai kaca sungguhan, dan bilah atas & navigasi di layar
+     * ini ikut berubah selagi penggeser ditarik.
+     */
+    private fun glassLookBlock(): View {
         val box = vbox()
-        recentBox = box
-        fillRecent(box, 3)
-        p.add(box, top = 8)
+        box.add(tv("Tampilan kaca", 15f, C.TEXT, true))
+        box.add(tv("Atur seberapa bening kaca dan seberapa kuat blurnya. Berlaku untuk bilah, navigasi & notifikasi.", 13f, C.MUTED), top = 2)
+        box.add(GlassPreview(this, listOf(R.drawable.ic_home, R.drawable.ic_doc, R.drawable.ic_folder), "Kaca"), h = dp(136), top = 12)
+        val tone = lookSlider(box, "Transparansi", "Bening", "Pekat", Glass.tone) { v, save -> Glass.setLook(this, tone = v, save = save) }
+        val blur = lookSlider(box, "Blur", "Tajam", "Buram", Glass.blurAmt) { v, save -> Glass.setLook(this, blur = v, save = save) }
+        box.add(tv("Kembalikan bawaan", 14f, C.ACCENT, true).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            minHeight = dp(44)
+            setPadding(0, 0, dp(12), 0)
+            tappable("Kembalikan tampilan kaca bawaan") {
+                haptic(this)
+                tone.progress = 50; blur.progress = 50
+                Glass.setLook(this@MainActivity, Glass.DEFAULT, Glass.DEFAULT, save = true)
+            }
+        }, w = WRAP, top = 4)
+        return box
+    }
+
+    /** Penggeser 0–100 dengan magnet di titik bawaan (50). [onChange]: nilai 0..1, save = simpan ke setelan. */
+    private fun lookSlider(parent: LinearLayout, title: String, left: String, right: String, value: Float,
+                           onChange: (Float, Boolean) -> Unit): android.widget.SeekBar {
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        head.add(tv(title, 14f, C.TEXT, true), w = 0, weight = 1f)
+        val valTv = tv("", 13f, C.MUTED)
+        head.add(valTv, w = WRAP)
+        parent.add(head, top = 14)
+        fun label(p: Int) = if (p == 50) "Bawaan" else "$p%"
+        val sb = android.widget.SeekBar(this).apply {
+            max = 100
+            progress = Math.round(value * 100f).coerceIn(0, 100)
+            progressTintList = ColorStateList.valueOf(C.ACCENT)
+            thumbTintList = ColorStateList.valueOf(C.ACCENT)
+            progressBackgroundTintList = ColorStateList.valueOf(C.LINE_STRONG)
+            contentDescription = "$title kaca, dari $left sampai $right"
+            minimumHeight = dp(40)
+        }
+        valTv.text = label(sb.progress)
+        var tracking = false
+        var snapping = false
+        sb.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: android.widget.SeekBar, p: Int, fromUser: Boolean) {
+                if (snapping) return
+                var q = p
+                // magnet ke titik bawaan: mudah kembali ke tampilan semula, dengan ketukan getar kecil
+                if (fromUser && q != 50 && kotlin.math.abs(q - 50) <= 2) {
+                    snapping = true; s.progress = 50; snapping = false; q = 50
+                    s.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                }
+                valTv.text = label(q)
+                if (android.os.Build.VERSION.SDK_INT >= 30) s.stateDescription = label(q)
+                // pembaca layar / keyboard mengubah nilai tanpa menyentuh: langsung disimpan
+                if (fromUser) onChange(q / 100f, !tracking)
+            }
+            override fun onStartTrackingTouch(s: android.widget.SeekBar) { tracking = true }
+            override fun onStopTrackingTouch(s: android.widget.SeekBar) { tracking = false; onChange(s.progress / 100f, true) }
+        })
+        parent.add(sb, top = 2)
+        val ends = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+        ends.add(tv(left, 12f, C.MUTED), w = 0, weight = 1f, side = 4)
+        ends.add(tv(right, 12f, C.MUTED).apply { gravity = Gravity.END }, w = 0, weight = 1f, side = 4)
+        parent.add(ends)
+        return sb
     }
 
     private fun createRow(res: Int, fg: Int, bg: Int, title: String, sub: String, f: () -> Unit): View =
@@ -761,7 +1258,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(14), dp(12), dp(12), dp(12))
             minimumHeight = dp(64)
             tappable("$title. $sub") { f() }
-            add(iconBadge(res, fg, bg, 12, 22), w = dp(44), h = dp(44))
+            add(iconBadge(res, fg, bg, 10, 22), w = dp(40), h = dp(40))
             val c = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
             c.add(tv(title, 15f, C.TEXT, true))
             c.add(tv(sub, 13f, C.MUTED), top = 1)
@@ -776,11 +1273,12 @@ class MainActivity : AppCompatActivity() {
             setText(query)
             setSelection(text.length)
             contentDescription = "Cari dokumen"
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
             compoundDrawablePadding = dp(10)
             setCompoundDrawablesRelative(getDrawable(R.drawable.ic_search)!!.mutate().also { it.setTint(C.MUTED); it.setBounds(0, 0, dp(20), dp(20)) }, null, null, null)
         }
         p.add(search, top = 4)
+        docsSearch = search
         val listBox = vbox()
         fun refresh() {
             when (docsMode) {
@@ -791,7 +1289,8 @@ class MainActivity : AppCompatActivity() {
         }
         search.addTextChangedListener(object : TextWatcher {
             // Tunda sebentar agar daftar tidak dibangun ulang di setiap ketukan huruf (berat di HP kelas bawah).
-            private val run = Runnable { refresh() }
+            // Saat mengetik cukup larut singkat di tempat (tanpa geser) — daftar tidak "melompat" tiap huruf.
+            private val run = Runnable { listBox.swapContent(0, 0) { refresh() } }
             override fun afterTextChanged(s: Editable?) {
                 query = s?.toString().orEmpty()
                 listBox.removeCallbacks(run)
@@ -800,19 +1299,23 @@ class MainActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
         })
-        p.add(segmented(listOf("Terkini", "Ditandai", "Hasil olahan"), docsMode) { docsMode = it; render() }, top = 12)
-        if (docsMode == 2) {
-            p.add(tv("Berkas yang dibuat aplikasi ini · folder sdcard/DepupOffice", 13f, C.MUTED), top = 10)
+        val outNote = tv("Berkas yang dibuat aplikasi ini · folder sdcard/DepupOffice", 13f, C.MUTED).apply {
+            visibility = if (docsMode == 2) View.VISIBLE else View.GONE
         }
-        p.add(listBox, top = 12)
-        refresh()
-        if (focusSearch) {
-            focusSearch = false
-            search.post {
-                search.requestFocus()
-                (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.showSoftInput(search, 0)
+        p.add(segmented(listOf("Terkini", "Ditandai", "Hasil olahan"), docsMode) {
+            if (it != docsMode) {
+                // daftar diganti di tempat tanpa kedip: kontrol segmen tetap hidup (ibu jarinya meluncur), daftar lama
+                // memudar di atas daftar baru yang hanyut halus ke tempatnya
+                docsMode = it
+                pageKey[1] = keyFor(1)
+                outNote.visibility = if (it == 2) View.VISIBLE else View.GONE
+                listBox.swapContent { refresh() }
             }
-        }
+        }, top = 12)
+        p.add(outNote, top = 10)
+        p.add(listBox, top = 12)
+        docsList = listBox
+        refresh()
     }
 
     private fun openAny() = pickFile(arrayOf("*/*")) { u -> remember(u); Files.open(this, u, Files.mimeOf(this, u)) }
@@ -931,7 +1434,7 @@ class MainActivity : AppCompatActivity() {
         onPick: (Int) -> Unit
     ) {
         row.removeAllViews()
-        row.addView(segmented(labels, selectedIndex, onPick), LinearLayout.LayoutParams(MATCH, WRAP))
+        row.addView(segmented(labels, selectedIndex, onPick = onPick), LinearLayout.LayoutParams(MATCH, WRAP))
     }
 
     private fun showWordFormatSettingsSheet() = sheet { body, dismiss ->
@@ -952,18 +1455,19 @@ class MainActivity : AppCompatActivity() {
         val spacingRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val fontRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
+        // dibangun sekali: kontrol segmen menyimpan pilihannya sendiri, ibu jari meluncur utuh sampai tujuan
         fun render() {
             settingsChips(sizeRow, sizes, sizes.indexOf(size), C.ACCENT) {
-                size = sizes[it]; DocSettings.setPageSize(this, size); render()
+                size = sizes[it]; DocSettings.setPageSize(this, size)
             }
             settingsChips(marginRow, margins, margin, C.ACCENT) {
-                margin = it; DocSettings.setMarginMode(this, margin); render()
+                margin = it; DocSettings.setMarginMode(this, margin)
             }
             settingsChips(spacingRow, spacings.map { "${it}x" }, spacings.indexOf(spacing), C.TEAL) {
-                spacing = spacings[it]; DocSettings.setLineSpacing(this, spacing); render()
+                spacing = spacings[it]; DocSettings.setLineSpacing(this, spacing)
             }
             settingsChips(fontRow, fonts, font.coerceIn(0, fonts.lastIndex), C.INDIGO) {
-                font = it; DocSettings.setFontFamily(this, font); render()
+                font = it; DocSettings.setFontFamily(this, font)
             }
         }
 
@@ -998,15 +1502,16 @@ class MainActivity : AppCompatActivity() {
         val currencyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val autoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
+        // dibangun sekali: kontrol segmen menyimpan pilihannya sendiri, ibu jari meluncur utuh sampai tujuan
         fun render() {
             settingsChips(gridRow, gridOptions, if (grid) 0 else 1, C.TEAL) {
-                grid = it == 0; SheetSettings.setShowGridlines(this, grid); render()
+                grid = it == 0; SheetSettings.setShowGridlines(this, grid)
             }
             settingsChips(currencyRow, currencies, currencies.indexOf(currency).coerceAtLeast(0), C.ACCENT) {
-                currency = currencies[it]; SheetSettings.setCurrencySymbol(this, currency); render()
+                currency = currencies[it]; SheetSettings.setCurrencySymbol(this, currency)
             }
             settingsChips(autoRow, autoOptions, if (autoSum) 0 else 1, C.INDIGO) {
-                autoSum = it == 0; SheetSettings.setAutoSum(this, autoSum); render()
+                autoSum = it == 0; SheetSettings.setAutoSum(this, autoSum)
             }
         }
 
@@ -1129,8 +1634,11 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun outFiles(): List<File> =
-        (Files.outDir(this).listFiles()?.filter { it.isFile } ?: emptyList()).sortedByDescending { it.lastModified() }
+    /** Hasil olahan, terbaru dulu. Waktu ubah dibaca SEKALI per berkas (bukan berulang di setiap perbandingan urut). */
+    private fun outFiles(): List<File> {
+        val fs = Files.outDir(this).listFiles() ?: return emptyList()
+        return fs.filter { it.isFile }.map { it to it.lastModified() }.sortedByDescending { it.second }.map { it.first }
+    }
 
     private fun catOf(f: File) = typeOf(Files.byName(f.name), f.name).first
 
@@ -1147,7 +1655,7 @@ class MainActivity : AppCompatActivity() {
         }
         val meta = "${Files.fmtSize(f.length())} • ${Files.relTime(f.lastModified())}"
         r.tappable("${f.name}, ${readableType(label)}, $meta. Ketuk untuk membuka") { Files.open(this, uri, mime) }
-        r.add(typeBadge(label, fg, bg), w = dp(44), h = dp(44))
+        r.add(typeBadge(label, fg, bg), w = dp(40), h = dp(40))
         val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
         col.add(tv(f.name, 15f, C.TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
         col.add(tv(meta, 13f, C.MUTED), top = 2)
@@ -1178,21 +1686,26 @@ class MainActivity : AppCompatActivity() {
 
     /** Daftar hasil olahan + chip kategori (dipakai tab Dokumen). */
     private fun fillOutputs(box: LinearLayout) {
+        val keepX = (box.getChildAt(0) as? android.widget.HorizontalScrollView)?.scrollX ?: 0
         box.removeAllViews()
         val all = outFiles()
         val cats = listOf("Semua" to "", "PDF" to "PDF", "Word" to "DOCX", "Excel" to "XLSX", "Gambar" to "IMG")
         val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         cats.forEach { (name, code) ->
             val n = if (code.isEmpty()) all.size else all.count { catOf(it) == code }
-            chips.add(filterChip("$name ($n)", docsCat == name) { docsCat = name; fillOutputs(box) }, w = WRAP, side = 0)
+            chips.add(filterChip("$name ($n)", docsCat == name) {
+                if (docsCat != name) { docsCat = name; pageKey[1] = keyFor(1); box.swapContent { fillOutputs(box) } }
+            }, w = WRAP, side = 0)
                 .also { (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8) }
         }
-        box.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+        val chipScroll = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }
+        box.add(chipScroll)
+        if (keepX > 0) chipScroll.beforeDraw { chipScroll.scrollTo(keepX, 0) }
         val code = cats.firstOrNull { it.first == docsCat }?.second.orEmpty()
         val list = all.filter { code.isEmpty() || catOf(it) == code }
             .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
         if (list.isEmpty()) box.add(emptyState(R.drawable.ic_box, "Belum ada hasil", "Hasil scan, konversi, dan dokumen yang Anda simpan akan muncul di sini."), top = 12)
-        else box.add(listCard(list.take(80).map { f -> outRow(f) { fillOutputs(box) } }), top = 12)
+        else box.add(listCard(list.take(80).map { f -> outRow(f) { box.swapContent { fillOutputs(box) } } }), top = 12)
     }
 
     private fun showOutputs(@Suppress("UNUSED_PARAMETER") list: List<File>) { docsMode = 2; select(1) }
@@ -1201,9 +1714,9 @@ class MainActivity : AppCompatActivity() {
     private fun buildMe(p: LinearLayout) {
         // Kepala
         val head = hbox()
-        head.add(iconBadge(R.drawable.ic_logo, C.PRIMARY, C.PRIMARY_C, 16, 30).apply {
-            (getChildAt(0) as ImageView).clearColorFilter()
-        }, w = dp(56), h = dp(56))
+        // sama dengan ikon aplikasi: ubin biru Depup + logo putih
+        head.add(ImageView(this).apply { setImageResource(R.drawable.ic_logo_tile); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO },
+            w = dp(56), h = dp(56))
         val hc = vbox()
         hc.add(headingTv("Depup Office", 20f))
         hc.add(iconPill(R.drawable.ic_verified, "100% offline · berkas tidak diunggah", C.SUCCESS, C.SUCCESS_C), top = 4, w = WRAP)
@@ -1249,13 +1762,34 @@ class MainActivity : AppCompatActivity() {
         val tc = card(16, 16, shadow = false)
         tc.add(tv("Tema", 15f, C.TEXT, true))
         tc.add(tv("Mode gelap lebih nyaman di malam hari dan menghemat baterai.", 13f, C.MUTED), top = 2)
-        tc.add(segmented(listOf("Ikuti HP", "Terang", "Gelap"), Theme.mode(this)) { m ->
+        // halaman dibangun ulang setelah ibu jari tiba → kontrol baru muncul tepat di posisi akhir (tanpa ibu jari ganda)
+        tc.add(segmented(listOf("Ikuti HP", "Terang", "Gelap"), Theme.mode(this), waitThumb = true) { m ->
             Theme.setMode(this, m)
             val wasDark = C.dark
             DepupApp.applyNightMode(m)
             if (Theme.isDark(this) == wasDark) render() else recreate()
         }, top = 12)
         tc.add(View(this).apply { setBackgroundColor(C.LINE) }, top = 14, h = 1)
+        tc.add(switchRow(R.drawable.ic_spark, "Efek kaca (blur)",
+            "Bilah & navigasi buram transparan. Matikan bila layar terasa berat atau berkedip.", Glass.BLUR) { on ->
+            Glass.setEnabled(this, on)
+            content.postDelayed({ if (!isFinishing) recreate() }, 240L)   // sakelar selesai bergeser dulu
+        }.apply { setPadding(0, dp(10), 0, 0) })
+        if (LiquidGlass.supported) {
+            // Android 13+: lensa kaca waktu-nyata (shader) di atas blur
+            tc.add(switchRow(R.drawable.ic_spark, "Kaca cair (lensa & kilau)",
+                "Tepi kaca membiaskan isi di belakangnya, kilau mengikuti kemiringan HP, menyala saat disentuh. " +
+                    "Butuh efek kaca menyala.", LiquidGlass.ON) { on ->
+                LiquidGlass.setEnabled(this, on)
+                content.postDelayed({ if (!isFinishing) recreate() }, 240L)
+            }.apply { setPadding(0, dp(10), 0, 0) })
+        }
+        // transparansi & blur kaca yang bisa diatur bebas (hanya bermakna saat efek kaca menyala; tanpa blur kaca pekat)
+        if (Glass.adjustable) {
+            tc.add(View(this).apply { setBackgroundColor(C.LINE) }, top = 4, h = 1)
+            tc.add(glassLookBlock(), top = 14)
+        }
+        tc.add(View(this).apply { setBackgroundColor(C.LINE) }, top = 4, h = 1)
         tc.add(createRow(R.drawable.ic_zoom_in, C.PRIMARY, C.PRIMARY_C, "Ukuran huruf & tampilan",
             "Aplikasi mengikuti ukuran huruf di pengaturan HP") {
             try { startActivity(Intent(android.provider.Settings.ACTION_DISPLAY_SETTINGS)) } catch (_: Exception) { toast("Pengaturan tidak tersedia") }
@@ -1377,21 +1911,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Sampul halaman pertama PDF untuk dialog alat. Dirender di thread latar: dialog langsung tampil tanpa menunggu
+     * berkas dibuka & dirender (dulu menahan layar, terasa saat berkas besar / dari penyimpanan awan).
+     */
+    private fun pdfCover(uri: Uri): ImageView {
+        val iv = ImageView(this).apply {
+            adjustViewBounds = true
+            background = paperThumbBg(8)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val app = applicationContext
+        Perf.io.execute {
+            val bmp = Pdf.thumbnail(app, uri, 0, 360)
+            iv.post {
+                if (isFinishing || isDestroyed) return@post
+                if (bmp != null) iv.setImageBitmap(bmp) else iv.visibility = View.GONE
+            }
+        }
+        return iv
+    }
+
     private fun splitFlow(uri: Uri) {
         val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { fail(t); return }
         val name = Files.nameOf(this, uri)
-        val thumb = Pdf.thumbnail(this, uri, 0, 360)
 
         val box = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        if (thumb != null) {
-            val iv = ImageView(this).apply {
-                setImageBitmap(thumb)
-                adjustViewBounds = true
-                background = paperThumbBg(8)
-            }
-            topRow.add(iv, w = dp(80), h = dp(100))
-        }
+        topRow.add(pdfCover(uri), w = dp(80), h = dp(100))
         val infoCol = vbox()
         infoCol.add(tv(name, 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
         infoCol.add(tv("Total Halaman: $pages hal", 13f, C.ACCENT, true), top = 4)
@@ -1421,18 +1968,10 @@ class MainActivity : AppCompatActivity() {
     private fun compressFlow(uri: Uri) {
         val name = Files.nameOf(this, uri)
         val before = try { contentResolver.openFileDescriptor(uri, "r")!!.use { it.statSize } } catch (_: Exception) { 0L }
-        val thumb = Pdf.thumbnail(this, uri, 0, 360)
 
         val box = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        if (thumb != null) {
-            val iv = ImageView(this).apply {
-                setImageBitmap(thumb)
-                adjustViewBounds = true
-                background = paperThumbBg(8)
-            }
-            topRow.add(iv, w = dp(80), h = dp(100))
-        }
+        topRow.add(pdfCover(uri), w = dp(80), h = dp(100))
         val infoCol = vbox()
         infoCol.add(tv(name, 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
         if (before > 0) infoCol.add(tv("Ukuran Saat Ini: ${Files.fmtSize(before)}", 13f, C.ACCENT, true), top = 4)
@@ -1520,18 +2059,10 @@ class MainActivity : AppCompatActivity() {
     private fun pdfToJpgFlow(uri: Uri) {
         val name = Files.nameOf(this, uri)
         val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { 1 }
-        val thumb = Pdf.thumbnail(this, uri, 0, 360)
 
         val box = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        if (thumb != null) {
-            val iv = ImageView(this).apply {
-                setImageBitmap(thumb)
-                adjustViewBounds = true
-                background = paperThumbBg(8)
-            }
-            topRow.add(iv, w = dp(80), h = dp(100))
-        }
+        topRow.add(pdfCover(uri), w = dp(80), h = dp(100))
         val infoCol = vbox()
         infoCol.add(tv(name, 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
         infoCol.add(tv("Total: $pages Halaman Siap Ekstrak", 13f, C.ACCENT, true), top = 4)
@@ -2014,14 +2545,11 @@ class MainActivity : AppCompatActivity() {
             quick.add(filterChip(q, false) { text.setText(q); text.setSelection(q.length) }, w = WRAP, side = 3)
         }
         box.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 8)
+        // kontrol segmen menyimpan pilihannya sendiri: dibangun sekali, ibu jari meluncur utuh sampai tujuan
         val styleHolder = vbox(); val colorHolder = vbox(); val opHolder = vbox()
-        fun refresh() {
-            styleHolder.removeAllViews(); colorHolder.removeAllViews(); opHolder.removeAllViews()
-            styleHolder.add(segmented(listOf("Satu besar", "Berulang"), style) { style = it; refresh() })
-            colorHolder.add(segmented(listOf("Merah", "Abu-abu", "Biru"), colorIdx) { colorIdx = it; refresh() })
-            opHolder.add(segmented(listOf("Tipis", "Sedang", "Tebal"), opacity) { opacity = it; refresh() })
-        }
-        refresh()
+        styleHolder.add(segmented(listOf("Satu besar", "Berulang"), style) { style = it })
+        colorHolder.add(segmented(listOf("Merah", "Abu-abu", "Biru"), colorIdx) { colorIdx = it })
+        opHolder.add(segmented(listOf("Tipis", "Sedang", "Tebal"), opacity) { opacity = it })
         box.add(tv("Gaya", 13f, C.MUTED), top = 14); box.add(styleHolder, top = 6)
         box.add(tv("Warna", 13f, C.MUTED), top = 12); box.add(colorHolder, top = 6)
         box.add(tv("Ketebalan", 13f, C.MUTED), top = 12); box.add(opHolder, top = 6)

@@ -16,7 +16,13 @@ import androidx.core.view.WindowInsetsCompat
 class DepupApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Berkas setelan yang dibaca saat aplikasi mulai: getSharedPreferences langsung memulai pemuatannya di thread
+        // latar, jadi ketiganya dibaca dari disk BERSAMAAN — pembacaan pertama di bawah tidak lagi menunggu satu per satu.
+        for (n in PREFS_AT_START) getSharedPreferences(n, MODE_PRIVATE)
         Perf.init(this)
+        Fonts.warm(this)
+        Glass.init(this)
+        LiquidGlass.init(this)
         applyNightMode(Theme.mode(this))
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             // Hitung token warna (terang/gelap) SEBELUM layar membangun tampilannya.
@@ -38,8 +44,24 @@ class DepupApp : Application() {
             }
             override fun onActivityCreated(a: Activity, b: Bundle?) {}
             override fun onActivityStarted(a: Activity) { C.dark = Theme.isDark(a) }
-            override fun onActivityResumed(a: Activity) {}
-            override fun onActivityPaused(a: Activity) {}
+            override fun onActivityResumed(a: Activity) {
+                GlassGuard.start(a)
+                GlassLight.start(a)   // arah kilau kaca mengikuti kemiringan HP selama layar di depan
+                if (Glass.autoDisabled) {
+                    Glass.autoDisabled = false
+                    a.window?.decorView?.postDelayed({
+                        if (!a.isFinishing && !a.isDestroyed)
+                            a.toast("Efek kaca dimatikan otomatis karena layar sempat gagal tampil. Bisa dinyalakan lagi di Saya → Tampilan.")
+                    }, 900L)
+                } else if (LiquidGlass.autoDisabled) {
+                    LiquidGlass.autoDisabled = false
+                    a.window?.decorView?.postDelayed({
+                        if (!a.isFinishing && !a.isDestroyed)
+                            a.toast("Kaca cair dimatikan otomatis karena layar sempat gagal tampil; blur biasa tetap menyala. Bisa dinyalakan lagi di Saya → Tampilan.")
+                    }, 900L)
+                }
+            }
+            override fun onActivityPaused(a: Activity) { GlassGuard.stop(a); GlassLight.stop(a) }
             override fun onActivityStopped(a: Activity) {}
             override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
             override fun onActivityDestroyed(a: Activity) {}
@@ -58,6 +80,8 @@ class DepupApp : Application() {
     }
 
     companion object {
+        private val PREFS_AT_START = arrayOf("ui", "glass", "depup")
+
         /** Terapkan pilihan tema (ikuti sistem / terang / gelap) ke dialog & sumber daya sistem. */
         fun applyNightMode(mode: Int) {
             AppCompatDelegate.setDefaultNightMode(when (mode) {

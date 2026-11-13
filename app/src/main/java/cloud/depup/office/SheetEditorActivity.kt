@@ -8,6 +8,7 @@ import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
@@ -19,6 +20,7 @@ class SheetCell(var valStr: String = "", var isBold: Boolean = false, var bgColo
 class SheetEditorActivity : AppCompatActivity() {
 
     companion object {
+        private val NUMERIC = Regex("^[+\\-0-9.,]+$")
         const val EXTRA_URI = "uri"
         const val EXTRA_TEMPLATE = "template"
         const val TEMPLATE_INVOICE = "invoice"
@@ -30,6 +32,11 @@ class SheetEditorActivity : AppCompatActivity() {
     private lateinit var formulaEt: EditText
     private lateinit var activeCellPill: android.widget.TextView
     private lateinit var gridBox: LinearLayout
+    private lateinit var topBarV: View
+    private lateinit var formulaBarV: View
+    private lateinit var gridToolbarV: View
+    /** Keyboard sedang tampil (diperkirakan dari tinggi area tampak jendela). */
+    private var imeShown = false
 
     private var numCols = 4
     private val colNames = listOf("A", "B", "C", "D", "E", "F", "G", "H")
@@ -45,7 +52,12 @@ class SheetEditorActivity : AppCompatActivity() {
     private var currentAutoSum = true
 
     private var sourceName: String? = null
-    private val visitingCells = HashSet<String>()
+    private val visitingCells = HashSet<Int>()
+    /** Cache nilai sel selama satu penyegaran grid — hanya di thread UI, dikosongkan setiap penyegaran. */
+    private val memo = HashMap<Int, Double>()
+    private val memoNull = HashSet<Int>()
+    private var memoOn = false
+    private var cycleHits = 0
     private val numberFormat = NumberFormat.getNumberInstance(Locale("id", "ID")).apply {
         maximumFractionDigits = 2
         minimumFractionDigits = 0
@@ -59,18 +71,46 @@ class SheetEditorActivity : AppCompatActivity() {
         currentSeparator = SheetSettings.csvSeparator(this)
         currentAutoSum = SheetSettings.autoSum(this)
 
-        val initialTitle = loadInitialMatrix()
+        val rawUri = intent.getStringExtra(EXTRA_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (rawUri == null) { buildUi(loadInitialMatrix()); return }
+        // Berkas diurai di LATAR: workbook besar dulu diurai di thread utama → layar membeku (bahkan "aplikasi tidak
+        // merespons") sebelum editor tampil.
+        val loading = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setBackgroundColor(C.SURFACE2) }
+        loading.add(android.widget.ProgressBar(this), w = dp(40), h = dp(40))
+        loading.add(tv("Membuka spreadsheet…", 13f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 10)
+        setContentView(loading)
+        Thread(null, {
+            val name = try { Files.nameOf(this, rawUri) } catch (_: Throwable) { "Spreadsheet" }
+            val sheet = try {
+                val low = name.lowercase()
+                if (low.endsWith(".csv") || low.endsWith(".txt")) OfficeReader.readCsv(this, rawUri) else OfficeReader.readXlsx(this, rawUri, 220)
+            } catch (_: Throwable) { null }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                sourceName = Files.baseName(name)
+                val title = if (sheet != null && sheet.rows.isNotEmpty()) {
+                    fillMatrix(sheet.rows, sheet.boldRows)
+                    sheet.name.ifBlank { sourceName ?: "Spreadsheet" }
+                } else {
+                    toast("Isi spreadsheet tidak terbaca. Mulai dari tabel kosong.")
+                    loadTemplateMatrix()
+                }
+                buildUi(title)
+            }
+        }, "sheet-open", 4L * 1024 * 1024).start()
+    }
 
+    private fun buildUi(initialTitle: String) {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(C.SURFACE2)
         }
 
-        root.add(topBar(initialTitle))
-        root.add(formulaBar())
-        root.add(gridToolbar())
+        root.add(topBar(initialTitle).also { topBarV = it })
+        root.add(formulaBar().also { formulaBarV = it })
+        root.add(gridToolbar().also { gridToolbarV = it })
 
-        val gridScroll = ScrollView(this).apply {
+        val gridScroll = GlassScrollView(this).apply {
             isFillViewport = true
             overScrollMode = View.OVER_SCROLL_NEVER
         }
@@ -81,38 +121,52 @@ class SheetEditorActivity : AppCompatActivity() {
         gridScroll.addView(pad)
 
         root.add(gridScroll, w = MATCH, h = 0, weight = 1f)
-        setContentView(root)
+        setContentView(Glass.scaffold(root))
 
         syncFormulaBar()
         renderGrid()
+        applyDensity()
+        window.decorView.viewTreeObserver.addOnGlobalLayoutListener(imeWatch)
+    }
+
+    private val imeWatch = android.view.ViewTreeObserver.OnGlobalLayoutListener {
+        val r = android.graphics.Rect()
+        window.decorView.getWindowVisibleDisplayFrame(r)
+        val h = window.decorView.rootView.height
+        val shown = h > 0 && h - r.bottom > h * 0.15f
+        if (shown != imeShown) { imeShown = shown; applyDensity() }
+    }
+
+    /**
+     * HP dimiringkan: tiga bilah (judul, rumus, alat) dulu ±165 dp — dengan keyboard terbuka, tabel nyaris tak terlihat.
+     * Lanskap kini lebih rapat, dan baris alat disembunyikan selama keyboard tampil.
+     */
+    private fun applyDensity() {
+        if (!::topBarV.isInitialized) return
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        topBarV.setPadding(dp(12), if (land) dp(3) else dp(6), dp(12), if (land) dp(3) else dp(6))
+        formulaBarV.setPadding(dp(12), if (land) dp(2) else dp(6), dp(12), if (land) dp(3) else dp(6))
+        formulaEt.minHeight = if (land) dp(40) else dp(48)
+        gridToolbarV.setPadding(dp(12), if (land) dp(3) else dp(6), dp(12), if (land) dp(3) else dp(6))
+        gridToolbarV.visibility = if (land && imeShown) View.GONE else View.VISIBLE
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyDensity()
+    }
+
+    override fun onDestroy() {
+        if (::topBarV.isInitialized) try { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(imeWatch) } catch (_: Exception) {}
+        super.onDestroy()
     }
 
     // ================= MUAT DATA =================
 
-    private fun loadInitialMatrix(): String {
-        val uriStr = intent.getStringExtra(EXTRA_URI)
-        val template = intent.getStringExtra(EXTRA_TEMPLATE)
+    private fun loadInitialMatrix(): String = loadTemplateMatrix()
 
-        if (uriStr != null) {
-            val rawUri = runCatching { Uri.parse(uriStr) }.getOrNull()
-            if (rawUri != null) {
-                // Dibaca langsung (streaming) dari sumbernya — tanpa menyalin seluruh berkas ke cache di main thread.
-                val uri = rawUri
-                sourceName = Files.baseName(Files.nameOf(this, uri))
-                val name = Files.nameOf(this, uri).lowercase()
-                val sheet = try {
-                    if (name.endsWith(".csv") || name.endsWith(".txt")) OfficeReader.readCsv(this, uri)
-                    else OfficeReader.readXlsx(this, uri)
-                } catch (_: Exception) {
-                    null
-                }
-                if (sheet != null && sheet.rows.isNotEmpty()) {
-                    fillMatrix(sheet.rows, sheet.boldRows)
-                    return sheet.name.ifBlank { sourceName ?: "Spreadsheet" }
-                }
-                toast("Isi spreadsheet tidak terbaca. Mulai dari tabel kosong.")
-            }
-        }
+    private fun loadTemplateMatrix(): String {
+        val template = intent.getStringExtra(EXTRA_TEMPLATE)
 
         when (template) {
             TEMPLATE_INVOICE -> {
@@ -202,60 +256,47 @@ class SheetEditorActivity : AppCompatActivity() {
 
     // ================= UI =================
 
+    /** Bilah atas bergaya kaca yang sama dengan editor Word & pembaca (tombol bulat, kapsul ikon, aksi kapsul tinta). */
     private fun topBar(initialTitle: String): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(C.SURFACE)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(dp(12), dp(6), dp(12), dp(6))
         }
 
-        bar.add(icon(R.drawable.ic_back, C.TEXT, 24).asButton("Kembali").apply {
-            setOnClickListener { finish() }
-        }, w = dp(48), h = dp(48))
+        bar.add(navCircle(R.drawable.ic_back, "Kembali") { finish() }, w = dp(40), h = dp(40))
 
         sheetTitleEt = field("Nama Spreadsheet Excel", multi = false).apply {
             setText(initialTitle)
-            textSize = 15f
+            textSize = 16f
             typeface = Fonts.head(this@SheetEditorActivity)
             setTextColor(C.TEXT)
             background = null
-            setPadding(dp(8), dp(4), dp(8), dp(4))
+            minHeight = dp(40)
+            setPadding(dp(10), dp(4), dp(8), dp(4))
         }
-        bar.add(sheetTitleEt, w = 0, weight = 1f)
+        bar.add(sheetTitleEt, w = 0, weight = 1f, side = 4)
 
-        val tmplBtn = iconPill(R.drawable.ic_sheet, "Templat", C.TEAL, C.TEAL_BG, 11f).apply {
-            setOnClickListener { showTemplatePicker() }
-        }
-        bar.add(tmplBtn, w = WRAP, side = 4)
-
-        bar.add(icon(R.drawable.ic_tune, C.TEAL, 22).asButton("Pengaturan spreadsheet").apply {
-            setOnClickListener { showExcelSettingsSheet() }
-        }, w = dp(48), h = dp(48))
-
-        bar.add(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
-            setOnClickListener { v ->
-                val pm = android.widget.PopupMenu(this@SheetEditorActivity, v)
-                pm.menu.add(0, 1, 0, "🔊 Bacakan Isi Tabel (Voice Reader)")
-                pm.menu.add(0, 2, 1, "🖨️ Cetak Spreadsheet")
-                pm.setOnMenuItemClickListener { m ->
-                    val title = sheetTitleEt.text.toString().ifBlank { "Spreadsheet Excel" }
-                    when (m.itemId) {
-                        1 -> VoiceReaderManager.showVoiceReaderDialog(this@SheetEditorActivity, title, getReadableGridText())
-                        2 -> PrintHelper.printSpreadsheet(this@SheetEditorActivity, title, getGridData())
-                    }
-                    true
+        val caps = navCapsule()
+        caps.add(capsuleBtn(R.drawable.ic_sheet, "Templat") { showTemplatePicker() }, w = dp(40), h = dp(40))
+        caps.add(capsuleBtn(R.drawable.ic_tune, "Pengaturan spreadsheet") { showExcelSettingsSheet() }, w = dp(40), h = dp(40))
+        caps.add(capsuleBtn(R.drawable.ic_more, "Opsi lain") { v ->
+            val pm = android.widget.PopupMenu(this@SheetEditorActivity, v)
+            pm.menu.add(0, 1, 0, "🔊 Bacakan Isi Tabel (Voice Reader)")
+            pm.menu.add(0, 2, 1, "🖨️ Cetak Spreadsheet")
+            pm.setOnMenuItemClickListener { m ->
+                val title = sheetTitleEt.text.toString().ifBlank { "Spreadsheet Excel" }
+                when (m.itemId) {
+                    1 -> VoiceReaderManager.showVoiceReaderDialog(this@SheetEditorActivity, title, getReadableGridText())
+                    2 -> PrintHelper.printSpreadsheet(this@SheetEditorActivity, title, getGridData())
                 }
-                pm.show()
+                true
             }
+            pm.show()
         }, w = dp(40), h = dp(40))
-
-        val saveBtn = tv("Ekspor", 13f, C.ON_PRIMARY, true).apply {
-            background = shape(C.TEAL, 8)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            setOnClickListener { saveSpreadsheet() }
-        }
-        bar.add(saveBtn, w = WRAP, side = 4)
+        bar.addView(caps, LinearLayout.LayoutParams(WRAP, dp(42)))
+        bar.addView(navPrimary("Ekspor") { saveSpreadsheet() }, LinearLayout.LayoutParams(WRAP, dp(42)).apply { marginStart = dp(8) })
 
         return bar
     }
@@ -288,7 +329,7 @@ class SheetEditorActivity : AppCompatActivity() {
                     if (r in m.indices && c in 0 until numCols) {
                         ensureCell(r, c)
                         m[r][c].valStr = s?.toString().orEmpty()
-                        renderGrid()
+                        refreshCells()
                     }
                 }
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -312,9 +353,12 @@ class SheetEditorActivity : AppCompatActivity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
 
         fun toolBtn(label: String, onClick: () -> Unit) {
-            val tvBtn = tv(label, 11f, C.TEXT, true).apply {
-                background = raised(C.SURFACE, 10, 2f)
-                setPadding(dp(10), dp(6), dp(10), dp(6))
+            // kapsul putih bergaris tipis, senada dengan pita editor Word (dulu kotak berbayangan kecil)
+            val tvBtn = tv(label, 13f, C.TEXT, true).apply {
+                gravity = Gravity.CENTER
+                background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
+                minHeight = dp(36)
+                setPadding(dp(14), dp(6), dp(14), dp(6))
                 isClickable = true
                 setOnClickListener { onClick() }
             }
@@ -367,7 +411,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].valStr = formula
                 syncFormulaBar()
-                renderGrid()
+                refreshCells()
             } else toast("Tambahkan baris angka terlebih dahulu")
         }
 
@@ -375,7 +419,7 @@ class SheetEditorActivity : AppCompatActivity() {
             if (activeRow in matrix.indices) {
                 ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].isBold = !matrix[activeRow][activeCol].isBold
-                renderGrid()
+                refreshCells()
             }
         }
 
@@ -383,7 +427,7 @@ class SheetEditorActivity : AppCompatActivity() {
             if (activeRow in matrix.indices) {
                 ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].bgColor = C.BLUE_BG
-                renderGrid()
+                refreshCells()
             }
         }
 
@@ -391,7 +435,7 @@ class SheetEditorActivity : AppCompatActivity() {
             if (activeRow in matrix.indices) {
                 ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].bgColor = 0
-                renderGrid()
+                refreshCells()
             }
         }
 
@@ -416,15 +460,28 @@ class SheetEditorActivity : AppCompatActivity() {
 
     // ================= RUMUS =================
 
-    /** Nilai numerik mentah sebuah sel (rumus dievaluasi rekursif, aman dari siklus). */
+    /**
+     * Nilai numerik mentah sebuah sel (rumus dievaluasi rekursif, aman dari siklus). Selama satu penyegaran grid
+     * ([evaluating]) hasilnya disimpan: rumus yang dirujuk berkali-kali (rentang SUM, total berjalan) dihitung sekali,
+     * bukan berulang kali secara berantai.
+     */
     private fun cellNumber(r: Int, c: Int): Double? {
         val raw = matrix.getOrNull(r)?.getOrNull(c)?.valStr?.trim().orEmpty()
         if (raw.isEmpty()) return null
-        if (!raw.startsWith("=")) return parseNumber(raw)
+        val key = r * 64 + c   // kolom < 64 (maks. 8 kolom berisi)
+        if (memoOn) {
+            memo[key]?.let { return it }
+            if (key in memoNull) return null
+        }
+        if (!raw.startsWith("=")) {
+            val v = parseNumber(raw)
+            if (memoOn) { if (v == null) memoNull.add(key) else memo[key] = v }
+            return v
+        }
 
-        val key = "$r:$c"
-        if (!visitingCells.add(key)) return 0.0
-        return try {
+        if (!visitingCells.add(key)) { cycleHits++; return 0.0 }
+        val hitsBefore = cycleHits
+        val result = try {
             val value = FormulaParser(raw.substring(1), r, c).parse()
             if (value.isNaN() || value.isInfinite()) null else value
         } catch (_: Exception) {
@@ -432,6 +489,9 @@ class SheetEditorActivity : AppCompatActivity() {
         } finally {
             visitingCells.remove(key)
         }
+        // nilai yang tersentuh rujukan melingkar tidak disimpan (dihitung ulang seperti sebelumnya)
+        if (memoOn && cycleHits == hitsBefore) { if (result == null) memoNull.add(key) else memo[key] = result }
+        return result
     }
 
     private fun parseNumber(raw: String): Double? {
@@ -443,7 +503,7 @@ class SheetEditorActivity : AppCompatActivity() {
             .replace(" ", "")
         if (s.isEmpty()) return null
         if (s.none { it.isDigit() }) return null
-        if (!s.matches(Regex("^[+\\-0-9.,]+$"))) return null
+        if (!s.matches(NUMERIC)) return null
         // Nomor HP / kode berawalan nol bukan angka agar nol tidak hilang dan tidak ikut di-SUM.
         if (s.length > 1 && s.startsWith("0") && !s.startsWith("0.") && !s.startsWith("0,")) return null
         val hasDot = s.contains('.')
@@ -668,6 +728,18 @@ class SheetEditorActivity : AppCompatActivity() {
     }
 
     // ================= TAMPILAN GRID =================
+    // Grid dibangun SEKALI per perubahan struktur (baris/kolom/templat). Mengetik, memilih sel, menebalkan, mewarnai,
+    // atau mengganti setelan hanya memperbarui sel yang berubah. Dulu SETIAP ketukan huruf membangun ulang seluruh grid
+    // (hingga 1.600 sel) dan menghitung ulang semua rumus tanpa cache — mengetik terasa berat di tabel besar.
+
+    private var cellViews: Array<Array<TextView?>> = emptyArray()
+    private var builtCols = -1
+
+    /** Jalankan [block] dengan cache nilai sel aktif (thread UI). */
+    private inline fun <T> evaluating(block: () -> T): T {
+        memo.clear(); memoNull.clear(); memoOn = true
+        try { return block() } finally { memoOn = false; memo.clear(); memoNull.clear() }
+    }
 
     private fun renderGrid() {
         gridBox.removeAllViews()
@@ -687,44 +759,81 @@ class SheetEditorActivity : AppCompatActivity() {
         }
         cardGrid.add(colHead)
 
-        matrix.forEachIndexed { rIdx, row ->
-            val rowView = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(4), dp(6), dp(4), dp(6))
-            }
-            rowView.add(tv("${rIdx + 1}", 11f, C.MUTED, true).apply { gravity = Gravity.CENTER }, w = dp(28))
-
-            for (cIdx in 0 until numCols) {
-                val cell = row.getOrElse(cIdx) { SheetCell("") }
-                val isActive = rIdx == activeRow && cIdx == activeCol
-                val evaluated = displayValue(rIdx, cIdx)
-
-                val cellTv = tv(evaluated.ifBlank { "-" }, 12f, if (isActive) C.TEAL else C.TEXT, cell.isBold || isActive).apply {
-                    gravity = Gravity.CENTER
-                    // shape() sengaja tidak menggambar stroke, jadi gridline & cincin sel aktif digambar manual:
-                    // tanpa ini tombol gridline tidak berefek dan sel aktif hanya dibedakan lewat isian pucat.
-                    background = shape(if (isActive) C.TEAL_SOFT else if (cell.bgColor == 0) C.SURFACE else cell.bgColor, 6).apply {
-                        if (isActive) setStroke(dp(2), C.TEAL)
-                        else if (currentGridlines) setStroke(dp(1), C.LINE)
-                    }
+        val views = Array(matrix.size) { arrayOfNulls<TextView>(numCols) }
+        evaluating {
+            for (rIdx in matrix.indices) {
+                val rowView = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(4), dp(6), dp(4), dp(6))
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                    isClickable = true
-                    setOnClickListener {
-                        activeRow = rIdx
-                        activeCol = cIdx
-                        syncFormulaBar()
-                        renderGrid()
-                    }
                 }
-                rowView.add(cellTv, w = 0, weight = 1f, side = 2)
-            }
-            cardGrid.add(rowView, top = 2)
-        }
+                rowView.add(tv("${rIdx + 1}", 11f, C.MUTED, true).apply { gravity = Gravity.CENTER }, w = dp(28))
 
+                for (cIdx in 0 until numCols) {
+                    val cellTv = tv("", 12f, C.TEXT).apply {
+                        gravity = Gravity.CENTER
+                        setPadding(dp(4), dp(6), dp(4), dp(6))
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        isClickable = true
+                        setOnClickListener { selectCell(rIdx, cIdx) }
+                    }
+                    styleCell(cellTv, rIdx, cIdx)
+                    views[rIdx][cIdx] = cellTv
+                    rowView.add(cellTv, w = 0, weight = 1f, side = 2)
+                }
+                cardGrid.add(rowView, top = 2)
+            }
+        }
+        cellViews = views
+        builtCols = numCols
         gridBox.add(cardGrid)
+    }
+
+    /** Perbarui isi & gaya semua sel di tempatnya (tanpa membangun ulang tampilan). */
+    private fun refreshCells() {
+        if (cellViews.size != matrix.size || builtCols != numCols) { renderGrid(); return }
+        evaluating {
+            for (r in cellViews.indices) {
+                val row = cellViews[r]
+                for (c in 0 until numCols) row[c]?.let { styleCell(it, r, c) }
+            }
+        }
+    }
+
+    /** Pindah sel aktif: hanya sel lama & sel baru yang digambar ulang. */
+    private fun selectCell(r: Int, c: Int) {
+        val pr = activeRow; val pc = activeCol
+        activeRow = r; activeCol = c
+        syncFormulaBar()
+        if (cellViews.size != matrix.size || builtCols != numCols) { renderGrid(); return }
+        evaluating {
+            cellViews.getOrNull(pr)?.getOrNull(pc)?.let { styleCell(it, pr, pc) }
+            cellViews.getOrNull(r)?.getOrNull(c)?.let { styleCell(it, r, c) }
+        }
+    }
+
+    /**
+     * Isi & gaya satu sel. Teks, huruf, dan latar hanya diganti bila memang berubah — tidak memicu tata letak ulang.
+     * shape() sengaja tidak menggambar stroke, jadi gridline & cincin sel aktif digambar manual.
+     */
+    private fun styleCell(v: TextView, r: Int, c: Int) {
+        val cell = matrix.getOrNull(r)?.getOrNull(c)
+        val isActive = r == activeRow && c == activeCol
+        val text = displayValue(r, c).ifBlank { "-" }
+        if (!android.text.TextUtils.equals(v.text, text)) v.text = text
+        v.setTextColor(if (isActive) C.TEAL else C.TEXT)
+        val tf = if (cell?.isBold == true || isActive) Fonts.head(this) else Fonts.body(this)
+        if (v.typeface !== tf) v.typeface = tf
+        val fill = if (isActive) C.TEAL_SOFT else if (cell == null || cell.bgColor == 0) C.SURFACE else cell.bgColor
+        val ring = if (isActive) 2 else if (currentGridlines) 1 else 0
+        val key = (fill.toLong() shl 4) or ring.toLong()
+        if (v.tag != key) {
+            v.tag = key
+            v.background = shape(fill, 6).apply {
+                if (ring == 2) setStroke(dp(2), C.TEAL) else if (ring == 1) setStroke(dp(1), C.LINE)
+            }
+        }
     }
 
     private fun showTemplatePicker() {
@@ -778,7 +887,7 @@ class SheetEditorActivity : AppCompatActivity() {
                     currentCurrency = currVal[idx]
                     SheetSettings.setCurrencySymbol(this@SheetEditorActivity, currVal[idx])
                     dismiss()
-                    renderGrid()
+                    refreshCells()
                 }
             }
             currRow.add(btn, w = 0, weight = 1f, side = 4)
@@ -797,7 +906,7 @@ class SheetEditorActivity : AppCompatActivity() {
                     currentGridlines = idx == 0
                     SheetSettings.setShowGridlines(this@SheetEditorActivity, currentGridlines)
                     dismiss()
-                    renderGrid()
+                    refreshCells()
                 }
             }
             gridRow.add(btn, w = 0, weight = 1f, side = 4)
@@ -820,14 +929,17 @@ class SheetEditorActivity : AppCompatActivity() {
             val xlsxFile = Files.namedOut(this, cleanName, "xlsx")
             val pdfFile = Files.namedOut(this, cleanName, "pdf")
 
+            // nilai sel dihitung di thread UI (cepat, dengan cache) — evaluasi rumus tidak boleh berjalan bersamaan
+            // dengan penyuntingan di thread lain
+            val exportRows = evaluating {
+                matrix.indices.map { r -> (0 until numCols).map { c -> displayValue(r, c) } }
+            }
+            val boldRows = matrix.indices
+                .filter { r -> matrix[r].any { it.isBold } }
+                .toSet()
+            val cols = numCols
             work("Mengekspor Spreadsheet Excel…", {
-                val exportRows = matrix.mapIndexed { r, _ ->
-                    (0 until numCols).map { c -> displayValue(r, c) }
-                }
-                val boldRows = matrix.indices
-                    .filter { r -> matrix[r].any { it.isBold } }
-                    .toSet()
-                XlsxWriter.write(xlsxFile, title, exportRows, boldRows, numCols)
+                XlsxWriter.write(xlsxFile, title, exportRows, boldRows, cols)
 
                 val pdfText = "LAPORAN SPREADSHEET EXCEL\nJudul: $title\n\n" +
                     exportRows.joinToString("\n") { row -> row.joinToString(" | ") }

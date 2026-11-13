@@ -12,6 +12,13 @@ import kotlin.math.roundToInt
  * Murni Kotlin — diuji di JVM.
  */
 object DocxHtml {
+    // pola gaya bentuk/VML dikompilasi sekali
+    private val CSS_BG = Regex("background:([^;]+);")
+    private val CSS_BORDER = Regex("border:([0-9.]+)pt solid ([^;]+);")
+    private val CSS_BG_ANY = Regex("background:[^;]+;")
+    private val CSS_BORDER_ANY = Regex("border:[^;]+;")
+    private val VML_HREL = Regex("mso-position-horizontal-relative:([a-z-]+)")
+    private val VML_VREL = Regex("mso-position-vertical-relative:([a-z-]+)")
 
     // ------------------------------------------------------------------ model properti
     class RP {
@@ -72,14 +79,16 @@ object DocxHtml {
 
     class Sect(
         val w: Int, val h: Int, val top: Int, val right: Int, val bottom: Int, val left: Int, val header: Int, val footer: Int,
-        val titlePg: Boolean, val hdr: Map<String, String>, val ftr: Map<String, String>, val type: String, val cols: Int
+        val titlePg: Boolean, val hdr: Map<String, String>, val ftr: Map<String, String>, val type: String, val cols: Int,
+        /** Margin atas/bawah bertanda negatif di Word = "tepat": header/footer yang tinggi TIDAK mendorong isi halaman. */
+        val topExact: Boolean = false, val bottomExact: Boolean = false
     )
 
     private class Lvl(val start: Int, val fmt: String, val text: String, val jc: String, val pp: PP?, val rp: RP?, val suff: String, val restart: Int, val isLgl: Boolean)
 
     // ------------------------------------------------------------------ konteks
     private class Ctx(val pkg: OPackage, val main: String) {
-        val res = HashMap<String, ByteArray>()
+        val res = DocRes(pkg)
         val theme = HashMap<String, Int>()
         var majorFont = "Calibri Light"; var minorFont = "Calibri"
         val styles = HashMap<String, Style>()
@@ -91,7 +100,15 @@ object DocxHtml {
         val counters = HashMap<String, IntArray>()
         val usedNum = HashSet<Int>()
         var defaultTab = 720
+        /** Kedalaman tabel bersarang yang sedang dirender (lihat [MAX_TBL_NEST]). */
+        var tblDepth = 0
+        /** Gaya yang berulang → kelas CSS bersama (lihat [cls]). */
+        val clsMap = HashMap<String, String>()
+        val clsCss = StringBuilder()
+        /** settings.xml w:evenAndOddHeaders — tanpa ini Word memakai header "default" juga di halaman genap. */
+        var evenOdd = false
         val footnotes = HashMap<String, XNode>(); val endnotes = HashMap<String, XNode>()
+        var footPart: String? = null; var endPart: String? = null
         val noteOrder = ArrayList<Pair<String, Int>>()   // (kind:id, nomor)
         var noteNo = 0; var endNo = 0
         var rels: Map<String, OPackage.Rel> = emptyMap()
@@ -102,6 +119,7 @@ object DocxHtml {
         /** Warna latar saat ini (arsiran sel/paragraf) — warna teks "auto" jadi putih di latar gelap. */
         var bg: Int? = null
         val pRPCache = HashMap<String, RP>(); val pPPCache = HashMap<String, PP>(); val cRPCache = HashMap<String, RP>()
+        var shapeNo = 0
     }
 
     // ------------------------------------------------------------------ API
@@ -138,13 +156,18 @@ object DocxHtml {
         // catatan kaki & akhir
         if (c.noteOrder.isNotEmpty()) {
             sb.append("<div class=\"b notes\" data-s=\"$lastSect\"><hr>")
+            val saveRels = c.rels; val savePart = c.part
             for ((key, no) in c.noteOrder) {
-                val node = if (key.startsWith("f:")) c.footnotes[key.substring(2)] else c.endnotes[key.substring(2)]
+                val foot = key.startsWith("f:")
+                val node = if (foot) c.footnotes[key.substring(2)] else c.endnotes[key.substring(2)]
                 if (node == null) continue
+                // gambar/tautan di catatan memakai hubungan (rels) bagian catatan, bukan dokumen utama
+                (if (foot) c.footPart else c.endPart)?.let { c.rels = pkg.rels(it); c.part = it }
                 sb.append("<div class=\"note\"><sup>$no</sup> ")
                 for (p in flatten(node.kids)) if (p.name == "p") paragraph(c, p, sb, lastSect, null, inNote = true)
                 sb.append("</div>")
             }
+            c.rels = saveRels; c.part = savePart
             sb.append("</div>")
         }
 
@@ -166,7 +189,7 @@ object DocxHtml {
         val sectJson = sects.joinToString(",", "[", "]") { s ->
             fun m(x: Map<String, String>) = x.entries.joinToString(",", "{", "}") { "\"${it.key}\":\"${it.value}\"" }
             "{\"w\":${s.w / 20.0},\"h\":${s.h / 20.0},\"t\":${s.top / 20.0},\"r\":${s.right / 20.0},\"b\":${s.bottom / 20.0},\"l\":${s.left / 20.0}," +
-                "\"hd\":${s.header / 20.0},\"ft\":${s.footer / 20.0},\"tp\":${s.titlePg},\"type\":\"${s.type}\",\"hdr\":${m(s.hdr)},\"ftr\":${m(s.ftr)}}"
+                "\"hd\":${s.header / 20.0},\"ft\":${s.footer / 20.0},\"tp\":${s.titlePg},\"tx\":${s.topExact},\"bx\":${s.bottomExact},\"type\":\"${s.type}\",\"hdr\":${m(s.hdr)},\"ftr\":${m(s.ftr)}}"
         }
         val baseFont = fontOf(c, c.defRP)
         val baseSize = (c.defRP.size ?: 20) / 2.0
@@ -174,12 +197,14 @@ object DocxHtml {
         html.append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=")
             .append(((sects.maxOf { it.w } / 20.0) * 4 / 3 + 24).roundToInt()).append("\"><title>").append(OxUtil.esc(title)).append("</title><style>")
             .append(OxUtil.fontFaces("https://doc.local/_fonts/"))
-            .append(CSS)
+            .append(CSS).append(OxUtil.viewerCss("docx"))
             .append("@page{size:${sects[0].w / 20.0}pt ${sects[0].h / 20.0}pt;margin:0}")
-            .append("#flow,.content{font-family:").append(OxUtil.fontStack(baseFont)).append(";font-size:${baseSize}pt}")
+            .append("#flow,.content,.hdr,.ftr{font-family:").append(OxUtil.fontStack(baseFont)).append(";font-size:${baseSize}pt}")
+            .append(c.clsCss)
             .append("</style></head><body><div id=\"pages\"></div><div id=\"flow\">")
             .append(sb).append("</div>").append(hf)
-            .append("<script>var SECTS=").append(sectJson).append(";var DEFTAB=").append(c.defaultTab / 20.0).append(";").append(JS).append("</script></body></html>")
+            .append("<script>var SECTS=").append(sectJson).append(";var DEFTAB=").append(c.defaultTab / 20.0).append(";var EVEN=").append(c.evenOdd).append(";").append(JS).append("</script></body></html>")
+        c.res.finish()
         return RenderedDoc(html.toString(), c.res, title, "docx")
     }
 
@@ -192,13 +217,14 @@ object DocxHtml {
         val sb = StringBuilder("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
         sb.append("<style>body{margin:0;background:#e9eaee;font:11pt/1.35 Calibri,Arial,sans-serif;color:#000}")
         sb.append(".pg{background:#fff;max-width:794px;margin:12px auto;padding:48px 56px;box-sizing:border-box;box-shadow:0 1px 4px rgba(0,0,0,.2)}")
-        sb.append(".p{margin:0 0 6pt;white-space:pre-wrap;word-wrap:break-word}table{border-collapse:collapse;margin:0 0 8pt}td .p{margin:0}</style></head><body data-ready=\"1\"><div class=\"pg\">")
+        sb.append(".p{margin:0 0 6pt;white-space:pre-wrap;word-wrap:break-word}table{border-collapse:collapse;margin:0 0 8pt}td .p{margin:0}")
+        sb.append(OxUtil.viewerCss("docx")).append("</style></head><body data-ready=\"1\"><div class=\"pg\">")
         for (b in flatten(body.kids)) {
             if (b.name == "tbl") simpleTable(b, sb, -1)
             else sb.append("<div class=\"p\">").append(OxUtil.esc(paraText(b)).ifEmpty { "&#8203;" }).append("</div>")
         }
         sb.append("</div></body></html>")
-        return RenderedDoc(sb.toString(), emptyMap(), title, "docx")
+        return RenderedDoc(sb.toString(), DocRes(pkg).also { it.finish() }, title, "docx")
     }
 
     /** Render satu blok p/tbl; kalau gagal, tampilkan versi sederhana (tabel tetap tampil sebagai tabel). */
@@ -347,12 +373,13 @@ object DocxHtml {
         val rel = c.pkg.rels(c.main).values.firstOrNull { it.type.endsWith("/settings") } ?: return
         val x = c.pkg.xml(rel.target) ?: return
         x.first("defaultTabStop")?.v?.toIntOrNull()?.let { if (it > 0) c.defaultTab = it }
+        x.first("evenAndOddHeaders")?.let { c.evenOdd = it.v != "0" && it.v != "false" }
     }
 
     private fun loadNotes(c: Ctx) {
         for (r in c.pkg.rels(c.main).values) {
-            if (r.type.endsWith("/footnotes")) c.pkg.xml(r.target)?.all("footnote")?.forEach { n -> n.attr("id")?.let { c.footnotes[it] = n } }
-            if (r.type.endsWith("/endnotes")) c.pkg.xml(r.target)?.all("endnote")?.forEach { n -> n.attr("id")?.let { c.endnotes[it] = n } }
+            if (r.type.endsWith("/footnotes")) { c.footPart = r.target; c.pkg.xml(r.target)?.all("footnote")?.forEach { n -> n.attr("id")?.let { c.footnotes[it] = n } } }
+            if (r.type.endsWith("/endnotes")) { c.endPart = r.target; c.pkg.xml(r.target)?.all("endnote")?.forEach { n -> n.attr("id")?.let { c.endnotes[it] = n } } }
         }
     }
 
@@ -651,15 +678,20 @@ object DocxHtml {
             if (pp.hanging != null && pp.hanging!! > 0) stops.add("${left / 20.0}:left:none")
             append(stops.joinToString(";"))
         }
+        val baseCss = StringBuilder(); runCss(c, baseRP, baseCss, fcache)
+        css.append(baseCss)
+        val pcls = cls(c, css)
         val openTag = StringBuilder()
-        openTag.append("<div class=\"p").append(if (sect >= 0 && !inNote) " b" else "").append("\"")
+        openTag.append("<div class=\"p").append(if (sect >= 0 && !inNote) " b" else "")
+        if (pcls != null) openTag.append(' ').append(pcls)
+        openTag.append("\"")
         if (sect >= 0) openTag.append(" data-s=\"").append(sect).append('"')
         openTag.append(" data-il=\"").append(left / 20.0).append('"')
         if (tabsAttr.isNotEmpty()) openTag.append(" data-tabs=\"").append(tabsAttr).append('"')
         if (pp.contextual == true) openTag.append(" data-cs=\"").append(OxUtil.esc(styleId ?: "_")).append('"')
         if (pp.keepNext == true) openTag.append(" data-kn=\"1\"")
-        val baseCss = StringBuilder(); runCss(c, baseRP, baseCss, fcache)
-        openTag.append(" style=\"").append(css).append(baseCss).append("\">")
+        if (pcls == null) openTag.append(" style=\"").append(css).append('"')
+        openTag.append('>')
 
         if (pp.pageBreakBefore == true && sect >= 0) out.append("<div class=\"pb\" data-s=\"$sect\"></div>")
         out.append(openTag)
@@ -673,14 +705,14 @@ object DocxHtml {
             if (txt.isNotEmpty() && (lrp.font?.lowercase()?.contains("symbol") == true || lrp.font?.lowercase()?.contains("wingding") == true)) ls.append("font-family:sans-serif;")
             when (lvl.suff) {
                 "tab" -> out.append("<span class=\"lbl\" style=\"").append(ls).append("min-width:").append(max(hang, 0) / 20.0).append("pt\">").append(OxUtil.esc(txt)).append("</span>")
-                "space" -> out.append("<span style=\"").append(ls).append("\">").append(OxUtil.esc(txt)).append(" </span>")
-                else -> out.append("<span style=\"").append(ls).append("\">").append(OxUtil.esc(txt)).append("</span>")
+                "space" -> out.append(spanOpen(c, ls)).append(OxUtil.esc(txt)).append(" </span>")
+                else -> out.append(spanOpen(c, ls)).append(OxUtil.esc(txt)).append("</span>")
             }
         }
         val state = ParaState(out, true)
         inline(c, p.kids, state, baseRP, fcache, sect, openTag.toString(), hyper = null)
         // selalu ada "tanda paragraf" setinggi baris: paragraf yang hanya berisi objek mengambang tetap punya tinggi
-        out.append("<span style=\"").append(markCss).append("\">&#8203;</span>")
+        out.append(spanOpen(c, markCss)).append("&#8203;</span>")
         out.append("</div>")
         c.bg = savedBg
     }
@@ -756,7 +788,8 @@ object DocxHtml {
         val hidden = rp.vanish == true
         val css = StringBuilder(); runCss(c, rp, css, fc)
         var open = false
-        fun openSpan() { if (!open) { out.append("<span style=\"").append(css).append("\">"); open = true } }
+        val spanTag = spanOpen(c, css)
+        fun openSpan() { if (!open) { out.append(spanTag); open = true } }
         fun closeSpan() { if (open) { out.append("</span>"); open = false } }
         for (k in r.kids) {
             // field kompleks
@@ -829,12 +862,11 @@ object DocxHtml {
     }
 
     // ------------------------------------------------------------------ gambar & bentuk
-    private fun imgSrc(c: Ctx, rid: String?): String? {
+    /** URL gambar hubungan [rid] yang tampil [w]×[h] pt; null = tidak ada / tak terbaca (tampilkan kotak pengganti). */
+    private fun imgSrc(c: Ctx, rid: String?, w: Double, h: Double): String? {
         val rel = rid?.let { c.rels[it] } ?: return null
         if (rel.external) return null
-        val bytes = c.pkg.files[rel.target] ?: return null
-        c.res[rel.target] = bytes
-        return "https://doc.local/" + rel.target
+        return c.res.url(rel.target, w * 4 / 3, h * 4 / 3)
     }
 
     private fun emu(v: String?): Double = (v?.toLongOrNull() ?: 0L) / 12700.0
@@ -883,26 +915,36 @@ object DocxHtml {
         gd.child("pic")?.let { pic -> picture(c, pic, w, h, out); return }
         gd.child("wsp")?.let { sp -> shapeBox(c, sp, w, h, out); return }
         gd.child("wgp")?.let { g -> group(c, g, w, h, out); return }
+        gd.child("wpc")?.let { g -> group(c, g, w, h, out); return }          // kanvas gambar Word: isinya seperti grup
         if (gd.child("chart") != null || gd.first("chart") != null) {
             out.append("<span class=\"ph\" style=\"width:${w}pt;height:${h}pt\">Grafik</span>"); return
         }
-        gd.first("blip")?.let { b -> imgSrc(c, b.attr("embed"))?.let { out.append("<img src=\"$it\" style=\"width:${w}pt;height:${h}pt\">") } }
+        gd.first("blip")?.let { b -> imgSrc(c, b.attr("embed") ?: b.attr("link"), w, h)?.let { out.append("<img src=\"$it\" style=\"width:${w}pt;height:${h}pt\">") } }
     }
 
     private fun picture(c: Ctx, pic: XNode, w: Double, h: Double, out: StringBuilder) {
         val blip = pic.first("blip")
-        val src = imgSrc(c, blip?.attr("embed"))
-        val target = blip?.attr("embed")?.let { c.rels[it]?.target } ?: ""
-        if (src == null || !OxUtil.isImage(target)) {
-            out.append("<span class=\"ph\" style=\"width:${w}pt;height:${h}pt\"></span>"); return
-        }
         val crop = pic.first("srcRect")
-        val rot = pic.first("xfrm")?.attr("rot")?.toLongOrNull()?.let { it / 60000.0 } ?: 0.0
-        val tr = if (rot != 0.0) "transform:rotate(${rot}deg);" else ""
+        var l = 0.0; var t = 0.0; var r = 0.0; var b = 0.0
         if (crop != null && crop.attrs.isNotEmpty()) {
-            val l = (crop.attr("l")?.toDoubleOrNull() ?: 0.0) / 100000; val t = (crop.attr("t")?.toDoubleOrNull() ?: 0.0) / 100000
-            val r = (crop.attr("r")?.toDoubleOrNull() ?: 0.0) / 100000; val b = (crop.attr("b")?.toDoubleOrNull() ?: 0.0) / 100000
-            val fw = w / max(0.01, 1 - l - r); val fh = h / max(0.01, 1 - t - b)
+            l = (crop.attr("l")?.toDoubleOrNull() ?: 0.0) / 100000; t = (crop.attr("t")?.toDoubleOrNull() ?: 0.0) / 100000
+            r = (crop.attr("r")?.toDoubleOrNull() ?: 0.0) / 100000; b = (crop.attr("b")?.toDoubleOrNull() ?: 0.0) / 100000
+        }
+        val fw = w / max(0.01, 1 - l - r); val fh = h / max(0.01, 1 - t - b)
+        val src = imgSrc(c, blip?.attr("embed") ?: blip?.attr("link"), fw, fh)
+        if (src == null) { out.append("<span class=\"ph\" style=\"width:${w}pt;height:${h}pt\"></span>"); return }
+        val xf = pic.first("xfrm")
+        val rot = xf?.attr("rot")?.toLongOrNull()?.let { it / 60000.0 } ?: 0.0
+        val tr = StringBuilder()
+        if (rot != 0.0 || xf?.attr("flipH") == "1" || xf?.attr("flipV") == "1") {
+            tr.append("transform:"); if (rot != 0.0) tr.append("rotate(${rot}deg) ")
+            if (xf?.attr("flipH") == "1") tr.append("scaleX(-1) "); if (xf?.attr("flipV") == "1") tr.append("scaleY(-1)")
+            tr.append(';')
+        }
+        // bingkai bentuk (foto profil bulat di CV, sudut membulat)
+        when (pic.first("prstGeom")?.attr("prst")) { "ellipse" -> tr.append("border-radius:50%;"); "roundRect" -> tr.append("border-radius:12%;") }
+        val clip = tr.contains("border-radius")
+        if (l != 0.0 || t != 0.0 || r != 0.0 || b != 0.0 || clip) {
             out.append("<span style=\"display:block;overflow:hidden;width:${w}pt;height:${h}pt;$tr\"><img src=\"$src\" style=\"width:${fw}pt;height:${fh}pt;margin-left:${-fw * l}pt;margin-top:${-fh * t}pt;max-width:none\"></span>")
         } else out.append("<img src=\"$src\" style=\"width:${w}pt;height:${h}pt;$tr\">")
     }
@@ -928,6 +970,15 @@ object DocxHtml {
         return rgb
     }
 
+    /** Gradien DrawingML → (warna pertama, CSS linear-gradient). */
+    private fun gradStops(c: Ctx, g: XNode): Pair<String, String>? {
+        val stops = g.first("gsLst")?.children("gs")?.mapNotNull { s -> dmlColor(c, s)?.let { col -> ((s.attr("pos")?.toDoubleOrNull() ?: 0.0) / 1000) to OxUtil.hex(col) } } ?: return null
+        if (stops.isEmpty()) return null
+        val ang = (g.child("lin")?.attr("ang")?.toLongOrNull() ?: 0L) / 60000.0 + 90
+        return stops.first().second to ("linear-gradient(${ang}deg," + stops.sortedBy { it.first }.joinToString(",") { "${it.second} ${it.first}%" } + ")")
+    }
+    private fun gradCss(c: Ctx, g: XNode): String? = gradStops(c, g)?.second
+
     private fun shapeBox(c: Ctx, sp: XNode, w: Double, h: Double, out: StringBuilder) {
         val spPr = sp.child("spPr")
         val css = StringBuilder("display:block;position:relative;width:${w}pt;height:${h}pt;box-sizing:border-box;overflow:hidden;")
@@ -936,8 +987,14 @@ object DocxHtml {
             val fh = x.attr("flipH") == "1"; val fv = x.attr("flipV") == "1"
             if (rot != 0.0 || fh || fv) css.append("transform:").append(if (rot != 0.0) "rotate(${rot}deg) " else "").append(if (fh) "scaleX(-1) " else "").append(if (fv) "scaleY(-1)" else "").append(';')
         }
-        if (spPr?.child("noFill") == null) dmlColor(c, spPr?.child("solidFill"))?.let { css.append("background:").append(OxUtil.hex(it)).append(';') }
-            ?: run { if (spPr?.child("solidFill") == null) sp.path("style", "fillRef")?.let { fr -> if (fr.attr("idx") != "0") dmlColor(c, fr)?.let { css.append("background:").append(OxUtil.hex(it)).append(';') } } }
+        var picFill: String? = null
+        val blipFill = spPr?.child("blipFill")
+        val gradFill = spPr?.child("gradFill")
+        if (blipFill != null) picFill = imgSrc(c, blipFill.first("blip")?.attr("embed"), w, h)
+        if (picFill != null) css.append("background:url('$picFill') center/100% 100% no-repeat;")
+        else if (gradFill != null) gradCss(c, gradFill)?.let { css.append("background:").append(it).append(';') }
+        else if (spPr?.child("noFill") == null) dmlColor(c, spPr?.child("solidFill"))?.let { css.append("background:").append(OxUtil.hex(it)).append(';') }
+            ?: run { if (spPr?.child("solidFill") == null && blipFill == null) sp.path("style", "fillRef")?.let { fr -> if (fr.attr("idx") != "0") dmlColor(c, fr)?.let { css.append("background:").append(OxUtil.hex(it)).append(';') } } }
         val ln = spPr?.child("ln")
         if (ln != null && ln.child("noFill") == null) {
             val lw = max(0.5, emu(ln.attr("w")).takeIf { it > 0 } ?: 0.75)
@@ -948,15 +1005,18 @@ object DocxHtml {
         if (prst != "rect" && prst != "roundRect" && prst != "ellipse") {
             // bentuk lain (segitiga, bintang, panah, garis …): gambar SVG; latar/garis dipindah ke path
             val cssS = css.toString()
-            val bgM = Regex("background:([^;]+);").find(cssS)?.groupValues?.get(1)
-            val bdM = Regex("border:([0-9.]+)pt solid ([^;]+);").find(cssS)
-            val cleaned = css.toString().replace(Regex("background:[^;]+;"), "").replace(Regex("border:[^;]+;"), "")
+            val bgM = CSS_BG.find(cssS)?.groupValues?.get(1)?.takeIf { picFill == null }
+            val bdM = CSS_BORDER.find(cssS)
+            val cleaned = css.toString().replace(CSS_BG_ANY, "").replace(CSS_BORDER_ANY, "")
             css.setLength(0); css.append(cleaned)
             val adj = spPr?.first("avLst")?.children("gd")?.associate { (it.attr("name") ?: "") to (it.attr("fmla")?.substringAfter("val ")?.trim()?.toDoubleOrNull() ?: 0.0) } ?: emptyMap()
             val isLine = prst == "line" || prst.contains("Connector")
             val d = PptxHtml.prstPath(prst, w, h, adj)
             val sw = bdM?.groupValues?.get(1) ?: "0.75"
-            val svg = "<svg style=\"position:absolute;left:0;top:0;overflow:visible\" width=\"${w}pt\" height=\"${h}pt\" viewBox=\"0 0 $w $h\" preserveAspectRatio=\"none\"><path d=\"$d\" fill=\"${if (isLine) "none" else bgM ?: "none"}\" stroke=\"${bdM?.groupValues?.get(2) ?: if (isLine) "#000" else "none"}\" stroke-width=\"$sw\" vector-effect=\"non-scaling-stroke\"/></svg>"
+            val fillSvg = if (isLine) "none" else if (picFill != null) "url(#pf${c.shapeNo})" else bgM?.takeIf { !it.startsWith("url(") && !it.contains("gradient") } ?: (if (gradFill != null) gradStops(c, gradFill)?.first ?: "none" else "none")
+            val defs = if (picFill != null && !isLine) "<defs><pattern id=\"pf${c.shapeNo}\" patternUnits=\"userSpaceOnUse\" width=\"$w\" height=\"$h\"><image href=\"$picFill\" width=\"$w\" height=\"$h\" preserveAspectRatio=\"none\"/></pattern></defs>" else ""
+            c.shapeNo++
+            val svg = "<svg style=\"position:absolute;left:0;top:0;overflow:visible\" width=\"${w}pt\" height=\"${h}pt\" viewBox=\"0 0 $w $h\" preserveAspectRatio=\"none\">$defs<path d=\"$d\" fill=\"$fillSvg\" stroke=\"${bdM?.groupValues?.get(2) ?: if (isLine) "#000" else "none"}\" stroke-width=\"$sw\" vector-effect=\"non-scaling-stroke\"/></svg>"
             css.append("overflow:visible;")
             out.append("<span class=\"shp\" style=\"").append(css).append("\">").append(svg)
             sp.path("txbx", "txbxContent")?.let { tc ->
@@ -989,11 +1049,14 @@ object DocxHtml {
         val sx = w / chW; val sy = h / chH
         out.append("<span style=\"display:block;position:relative;width:${w}pt;height:${h}pt\">")
         for (k in g.kids) {
-            val kx = (k.child("spPr") ?: k.child("grpSpPr"))?.child("xfrm") ?: continue
+            val kx = (k.child("spPr") ?: k.child("grpSpPr"))?.child("xfrm") ?: k.child("xfrm") ?: continue
             val x = (emu(kx.child("off")?.attr("x")) - chOffX) * sx; val y = (emu(kx.child("off")?.attr("y")) - chOffY) * sy
             val kw = emu(kx.child("ext")?.attr("cx")) * sx; val kh = emu(kx.child("ext")?.attr("cy")) * sy
             out.append("<span style=\"position:absolute;left:${x}pt;top:${y}pt;width:${kw}pt;height:${kh}pt\">")
-            when (k.name) { "pic" -> picture(c, k, kw, kh, out); "wsp" -> shapeBox(c, k, kw, kh, out); "grpSp" -> group(c, k, kw, kh, out) }
+            when (k.name) {
+                "pic" -> picture(c, k, kw, kh, out); "wsp" -> shapeBox(c, k, kw, kh, out); "grpSp", "wgp" -> group(c, k, kw, kh, out)
+                "graphicFrame" -> graphicContent(c, k.path("graphic", "graphicData"), kw, kh, out)
+            }
             out.append("</span>")
         }
         out.append("</span>")
@@ -1010,11 +1073,13 @@ object DocxHtml {
         }
         val w = dim("width") ?: 100.0; val h = dim("height") ?: 50.0
         val img = shape.first("imagedata")
+        // gambar VML: r:id (Word) atau o:relid (berkas lama/hasil konversi); bentuk berisi gambar lewat v:fill
+        val imgRid = img?.let { it.attr("r:id") ?: it.attr("id") ?: it.attr("relid") }
+            ?: shape.child("fill")?.takeIf { f -> f.attr("type").let { it == "frame" || it == "tile" } }?.let { it.attr("r:id") ?: it.attr("id") ?: it.attr("relid") }
         val inner = StringBuilder()
-        if (img != null) {
-            val src = imgSrc(c, img.attr("id"))
-            val target = img.attr("id")?.let { c.rels[it]?.target } ?: ""
-            if (src != null && OxUtil.isImage(target)) inner.append("<img src=\"$src\" style=\"width:${w}pt;height:${h}pt\">")
+        if (imgRid != null) {
+            val src = imgSrc(c, imgRid, w, h)
+            if (src != null) inner.append("<img src=\"$src\" style=\"width:${w}pt;height:${h}pt\">")
             else inner.append("<span class=\"ph\" style=\"width:${w}pt;height:${h}pt\"></span>")
         } else shape.first("txbxContent")?.let { tc ->
             val fill = OxUtil.parseHex(shape.attr("fillcolor")?.substringBefore(' '))
@@ -1028,8 +1093,8 @@ object DocxHtml {
         if (inner.isEmpty()) return
         if (style.contains("position:absolute")) {
             val ml = dim("margin-left") ?: dim("left") ?: 0.0; val mt = dim("margin-top") ?: dim("top") ?: 0.0
-            val hr = Regex("mso-position-horizontal-relative:([a-z-]+)").find(style)?.groupValues?.get(1) ?: "column"
-            val vr = Regex("mso-position-vertical-relative:([a-z-]+)").find(style)?.groupValues?.get(1) ?: "paragraph"
+            val hr = VML_HREL.find(style)?.groupValues?.get(1) ?: "column"
+            val vr = VML_VREL.find(style)?.groupValues?.get(1) ?: "paragraph"
             out.append("<span class=\"anc abs\" data-hr=\"${if (hr == "page") "page" else if (hr == "margin") "margin" else "column"}\" data-vr=\"${if (vr == "page") "page" else if (vr == "margin") "margin" else "paragraph"}\" data-hx=\"$ml\" data-vy=\"$mt\" data-w=\"$w\" data-h=\"$h\" style=\"position:absolute;width:${w}pt;height:${h}pt;z-index:${if (style.contains("z-index:-")) 0 else 3}\">").append(inner).append("</span>")
         } else out.append("<span style=\"display:inline-block;vertical-align:bottom\">").append(inner).append("</span>")
     }
@@ -1037,7 +1102,43 @@ object DocxHtml {
     // ------------------------------------------------------------------ tabel
     private class Cond(val pp: PP?, val rp: RP?, val shd: Int?, val bdr: Map<String, Bdr>?, val tcPr: XNode?)
 
+    /**
+     * Gaya → kelas CSS bersama. Dokumen besar dulu membawa gaya inline di SETIAP paragraf, run & sel (mis. HTML 8 MB
+     * dengan hanya ±120 gaya berbeda): WebView mengurai & menghitung gaya tiap elemen satu per satu dan tidak bisa
+     * berbagi. Pemilih ber-ID (#pages/#flow) membuat prioritasnya tetap di atas aturan CSS bawaan, seperti gaya inline.
+     */
+    private fun cls(c: Ctx, css: CharSequence): String? {
+        if (css.isEmpty()) return null
+        val key = css.toString()
+        c.clsMap[key]?.let { return it }
+        if (c.clsMap.size >= 8000) return null
+        val n = "z" + c.clsMap.size.toString(36)
+        c.clsMap[key] = n
+        c.clsCss.append("#pages .").append(n).append(",#flow .").append(n).append('{').append(key).append('}')
+        return n
+    }
+
+    /** `<span …>` pembuka bergaya: kelas bersama bila bisa, inline bila tidak. */
+    private fun spanOpen(c: Ctx, css: CharSequence): String = cls(c, css)?.let { "<span class=\"$it\">" } ?: "<span style=\"$css\">"
+
+    /**
+     * Tabel bersarang terlalu dalam (berkas rusak/buatan: ribuan tingkat) membuat mesin WebView berhenti mendadak.
+     * Lewat [MAX_TBL_NEST] tingkat, isi tabel dalam ditampilkan sebagai paragraf biasa — teksnya tetap ada.
+     */
+    private const val MAX_TBL_NEST = 16
+
     private fun table(c: Ctx, t: XNode, out: StringBuilder, sect: Int) {
+        if (c.tblDepth >= MAX_TBL_NEST) { flatTable(c, t, out, sect); return }
+        c.tblDepth++
+        try { tableImpl(c, t, out, sect) } finally { c.tblDepth-- }
+    }
+
+    private fun flatTable(c: Ctx, t: XNode, out: StringBuilder, sect: Int) {
+        for (tr in through(t, "tr")) for (tc in through(tr, "tc")) for (b in flatten(tc.kids))
+            if (b.name == "tbl") flatTable(c, b, out, sect) else paragraph(c, b, out, sect, null)
+    }
+
+    private fun tableImpl(c: Ctx, t: XNode, out: StringBuilder, sect: Int) {
         val tblPr = t.child("tblPr")
         val styleId = tblPr?.child("tblStyle")?.v ?: c.defTableStyle
         val chain = styleChain(c, styleId)
@@ -1171,12 +1272,14 @@ object DocxHtml {
                 out.append("<td")
                 if (cell.span > 1) out.append(" colspan=\"${cell.span}\"")
                 if (cell.rowspan > 1) out.append(" rowspan=\"${cell.rowspan}\"")
-                out.append(" style=\"padding:${mt / 20.0}pt ${mr / 20.0}pt ${mb / 20.0}pt ${ml / 20.0}pt;")
-                for (side in listOf("top", "bottom", "left", "right")) { val b = bd[side]; if (b != null) out.append("border-$side:").append(bdrCss(b)).append(';') }
-                shd?.let { out.append("background:${OxUtil.hex(it)};") }
-                when (tcPr?.child("vAlign")?.v) { "center" -> out.append("vertical-align:middle;"); "bottom" -> out.append("vertical-align:bottom;") }
-                if (tcPr?.child("noWrap") != null) out.append("white-space:nowrap;")
-                out.append("\">")
+                val tcss = StringBuilder()
+                tcss.append("padding:${mt / 20.0}pt ${mr / 20.0}pt ${mb / 20.0}pt ${ml / 20.0}pt;")
+                for (side in listOf("top", "bottom", "left", "right")) { val b = bd[side]; if (b != null) tcss.append("border-$side:").append(bdrCss(b)).append(';') }
+                shd?.let { tcss.append("background:${OxUtil.hex(it)};") }
+                when (tcPr?.child("vAlign")?.v) { "center" -> tcss.append("vertical-align:middle;"); "bottom" -> tcss.append("vertical-align:bottom;") }
+                if (tcPr?.child("noWrap") != null) tcss.append("white-space:nowrap;")
+                val tcls = cls(c, tcss)
+                if (tcls != null) out.append(" class=\"").append(tcls).append("\">") else out.append(" style=\"").append(tcss).append("\">")
                 val kids = flatten(cell.node.kids)
                 if (kids.isEmpty()) out.append("<div class=\"p\">&#8203;</div>")
                 val savedBg = c.bg
@@ -1210,9 +1313,11 @@ object DocxHtml {
         val hdr = HashMap(prev?.hdr ?: emptyMap()); val ftr = HashMap(prev?.ftr ?: emptyMap())
         sp?.children("headerReference")?.forEach { r -> val t = r.attr("type") ?: "default"; r.attr("id")?.let { hdr[t] = it } }
         sp?.children("footerReference")?.forEach { r -> val t = r.attr("type") ?: "default"; r.attr("id")?.let { ftr[t] = it } }
-        return Sect(w, h, kotlin.math.abs(mv("top", prev?.top ?: 1440)), mv("right", prev?.right ?: 1440), kotlin.math.abs(mv("bottom", prev?.bottom ?: 1440)), mv("left", prev?.left ?: 1440),
+        val top = m?.attr("top")?.toIntOrNull(); val bottom = m?.attr("bottom")?.toIntOrNull()
+        return Sect(w, h, kotlin.math.abs(top ?: prev?.top ?: 1440), mv("right", prev?.right ?: 1440), kotlin.math.abs(bottom ?: prev?.bottom ?: 1440), mv("left", prev?.left ?: 1440),
             mv("header", prev?.header ?: 720), mv("footer", prev?.footer ?: 720), sp?.child("titlePg")?.let { it.v != "0" && it.v != "false" } ?: false,
-            hdr, ftr, sp?.child("type")?.v ?: "nextPage", sp?.child("cols")?.attr("num")?.toIntOrNull() ?: 1)
+            hdr, ftr, sp?.child("type")?.v ?: "nextPage", sp?.child("cols")?.attr("num")?.toIntOrNull() ?: 1,
+            if (top != null) top < 0 else prev?.topExact ?: false, if (bottom != null) bottom < 0 else prev?.bottomExact ?: false)
     }
 
     // ------------------------------------------------------------------ CSS & JS halaman
@@ -1280,19 +1385,32 @@ function solveTabs(root){
 }
 var pages=[];
 function hf(page,s,kind,idx,first){
- var map=kind=='hdr'?s.hdr:s.ftr;var id=(first&&s.tp&&map.first)?map.first:(idx%2==0&&map.even?map.even:map['default']);
- if(first&&s.tp&&!map.first)return;
- if(!id)return;var tpl=document.getElementById('hf-'+id);if(!tpl)return;
+ var map=kind=='hdr'?s.hdr:s.ftr;var id=(first&&s.tp&&map.first)?map.first:(idx%2==0&&EVEN&&map.even?map.even:map['default']);
+ if(first&&s.tp&&!map.first)return null;
+ if(!id)return null;var tpl=document.getElementById('hf-'+id);if(!tpl)return null;
  var d=document.createElement('div');d.className=kind;d.style.left=px(s.l)+'px';d.style.width=px(s.w-s.l-s.r)+'px';
  if(kind=='hdr')d.style.top=px(s.hd)+'px';else d.style.bottom=px(s.ft)+'px';
- d.innerHTML=tpl.innerHTML;page.appendChild(d);solveTabs(d);
+ d.innerHTML=tpl.innerHTML;page.appendChild(d);solveTabs(d);return d;
 }
+// tinggi isi header yang MENGALIR (pt): objek mengambang tidak dihitung, sama seperti Word
+function flowH(d){var top=d.getBoundingClientRect().top,m=0;
+ for(var i=0;i<d.children.length;i++){var k=d.children[i];if(k.classList.contains('anc'))continue;
+  var b=k.getBoundingClientRect().bottom+(parseFloat(getComputedStyle(k).marginBottom)||0)-top;if(b>m)m=b;}
+ return m/PT;}
 function newPage(si,firstOfSect){
  var s=SECTS[si];var pg=document.createElement('div');pg.className='page';
  pg.style.width=px(s.w)+'px';pg.style.height=px(s.h)+'px';
  var c=document.createElement('div');c.className='content';
- c.style.left=px(s.l)+'px';c.style.top=px(s.t)+'px';c.style.width=px(s.w-s.l-s.r)+'px';c.style.height=px(s.h-s.t-s.b)+'px';
  pg.appendChild(c);pagesEl.appendChild(pg);
+ // Header/footer lebih tinggi dari margin (kop surat besar, margin atas kecil — sering di dokumen lanskap):
+ // Word MENDORONG isi halaman ke bawah. Dulu header di sini menimpa paragraf & tabel pertama.
+ var n=pages.length+1,t=s.t,b=s.b;
+ try{var hd=hf(pg,s,'hdr',n,firstOfSect);if(hd&&!s.tx)t=Math.max(t,s.hd+flowH(hd));
+  var fd=hf(pg,s,'ftr',n,firstOfSect);if(fd&&!s.bx)b=Math.max(b,s.ft+fd.getBoundingClientRect().height/PT);}catch(e){}
+ // jaga isi tetap punya ruang (header tak wajar sebesar halaman)
+ var body=s.h-s.t-s.b,min=body*0.5,extra=(t-s.t)+(b-s.b);
+ if(extra>0&&s.h-t-b<min){var k=Math.max(0,(body-min)/extra);t=s.t+(t-s.t)*k;b=s.b+(b-s.b)*k;}
+ c.style.left=px(s.l)+'px';c.style.top=px(t)+'px';c.style.width=px(s.w-s.l-s.r)+'px';c.style.height=px(s.h-t-b)+'px';
  var rec={el:pg,c:c,s:si,first:firstOfSect,idx:pages.length};pages.push(rec);return rec;
 }
 function overflow(rec){var c=rec.c;var last=c.lastElementChild;if(!last)return false;
@@ -1300,16 +1418,35 @@ function overflow(rec){var c=rec.c;var last=c.lastElementChild;if(!last)return f
 var blocks=[];for(var i=0;i<flow.children.length;i++)blocks.push(flow.children[i]);
 // lebar sementara supaya tab dihitung pada lebar kolom yang benar
 var cur=null,curS=-1;
+// Tabel panjang dipasang BERTAHAP: baris yang belum dipasang disimpan di t.__more dan ditambahkan per CH baris selama
+// halaman masih muat — tiap tata letak ulang hanya menyentuh puluhan baris, bukan ratusan/ribuan.
+var CH=60;
+function park(t,from){var m=[],fr=document.createDocumentFragment();while(t.rows.length>from){var r=t.rows[from];m.push(r);fr.appendChild(r);}return m;}
+function feed(t){var m=t.__more;if(!m||!m.length)return null;var tb=t.tBodies[t.tBodies.length-1]||t;var fr=document.createDocumentFragment();var take=m.splice(0,CH);for(var i=0;i<take.length;i++)fr.appendChild(take[i]);tb.appendChild(fr);return take;}
+function flushMore(t){if(t&&t.__more)while(feed(t)){}}
 function splitTable(tbl,rec){
- // pindahkan baris dari akhir sampai muat; sisanya ke halaman berikut (baris judul diulang)
- var rows=Array.prototype.slice.call(tbl.rows);if(rows.length<2)return null;
- var head=rows.filter(function(r){return r.classList.contains('th')});
- var rest=tbl.cloneNode(false);var cg=tbl.querySelector('colgroup');if(cg)rest.appendChild(cg.cloneNode(true));
+ // Baris yang tidak muat pindah ke tabel lanjutan di halaman berikut (baris judul diulang). Titik potong dicari dari
+ // posisi baris dengan SEKALI ukur — dulu baris dipindah satu per satu dan diukur ulang tiap kali: tabel ribuan baris
+ // butuh puluhan ribu tata letak ulang (dokumen 188 halaman: ±45 detik, kini ±2 detik).
+ var rows=tbl.rows,n=rows.length,pend=tbl.__more&&tbl.__more.length?tbl.__more:null;
+ if(n<2&&!pend)return null;
+ var head=0;while(head<n-1&&rows[head].classList.contains('th'))head++;
+ var cb=rec.c.getBoundingClientRect().bottom+1,k=n;
+ for(var i=head;i<n;i++){if(rows[i].getBoundingClientRect().bottom>cb){k=i;break;}}
+ if(k==n&&n>head+1)k=n-1;                         // meluap karena tepi/jarak bawah tabel: lepas baris terakhir
+ if(k<=head){if(rec.c.children.length>1)return null;k=head+1;}   // baris pertama pun tak muat: seluruh tabel pindah
+ if(k>=n&&!pend)return null;
+ var rest=tbl.cloneNode(false);
+ for(var c=tbl.firstElementChild;c;c=c.nextElementSibling)if(c.tagName=='COLGROUP'){rest.appendChild(c.cloneNode(true));break;}
  var tb=document.createElement('tbody');rest.appendChild(tb);
- var moved=0;
- while(tbl.rows.length>head.length+1&&overflow(rec)){var r=tbl.rows[tbl.rows.length-1];if(r.querySelector('[rowspan]')&&moved==0){}tb.insertBefore(r,tb.firstChild);moved++;}
- if(moved==0)return null;
- head.forEach(function(h){tb.insertBefore(h.cloneNode(true),tb.firstChild)});
+ for(var h=0;h<head;h++)tb.appendChild(rows[h].cloneNode(true));
+ var mv=[],fr=document.createDocumentFragment();for(var j=k;j<n;j++)mv.push(rows[j]);
+ var now=Math.min(mv.length,CH);for(var q=0;q<now;q++)fr.appendChild(mv[q]);
+ var more=[],dz=document.createDocumentFragment();for(var z=now;z<mv.length;z++){more.push(mv[z]);dz.appendChild(mv[z]);}
+ tb.appendChild(fr);
+ tbl.__more=null;if(more.length||pend)rest.__more=pend?more.concat(pend):more;
+ // tepi bawah / baris tinggi bisa masih meluap sedikit: lepas baris satu-satu (biasanya 0–1 kali)
+ var g=0;while(tbl.rows.length>head+1&&overflow(rec)&&g++<40)tb.insertBefore(tbl.rows[tbl.rows.length-1],tb.children[head]||null);
  return rest;
 }
 for(var b=0;b<blocks.length;b++){
@@ -1318,12 +1455,16 @@ for(var b=0;b<blocks.length;b++){
  if(cur==null){cur=newPage(si,true);curS=si;}
  if(el.classList.contains('pb')){cur=newPage(curS,false);continue;}
  try{
+ // tabel panjang: baris di luar potongan pertama diparkir dulu (dipasang bertahap oleh feed)
+ if(el.tagName=='TABLE'&&el.rows.length>CH+20){var hd0=0;while(hd0<el.rows.length-1&&el.rows[hd0].classList.contains('th'))hd0++;el.__more=park(el,hd0+CH);}
  cur.c.appendChild(el);
  if(el.classList.contains('p'))solveTabs({querySelectorAll:function(){return[el].concat(Array.prototype.slice.call(el.querySelectorAll('.p')))}});else solveTabs(el);
  var guard=0;
- while(overflow(cur)&&guard++<200){
+ while(guard++<20000){
+  if(!overflow(cur)){var fed=el.tagName=='TABLE'?feed(el):null;if(fed){for(var f=0;f<fed.length;f++)solveTabs(fed[f]);continue;}break;}
   if(cur.c.children.length==1){
    if(el.tagName=='TABLE'){var rest=splitTable(el,cur);if(rest){cur=newPage(curS,false);cur.c.appendChild(rest);el=rest;continue;}}
+   flushMore(el);
    break;
   }
   if(el.tagName=='TABLE'){var rest2=splitTable(el,cur);if(rest2){cur=newPage(curS,false);cur.c.appendChild(rest2);el=rest2;continue;}}
@@ -1332,11 +1473,11 @@ for(var b=0;b<blocks.length;b++){
   while(prev&&prev.getAttribute('data-kn')=='1'&&mv.length<4&&cur.c.children.length>mv.length+1){mv.unshift(prev);prev=prev.previousElementSibling;}
   cur=newPage(curS,false);mv.forEach(function(m){cur.c.appendChild(m)});
  }
- }catch(err){try{if(el&&el.parentNode!==cur.c)cur.c.appendChild(el);}catch(e2){}if(window.console)console.log('layout: '+err);}
+ }catch(err){try{flushMore(el);if(el&&el.parentNode!==cur.c)cur.c.appendChild(el);}catch(e2){}if(window.console)console.log('layout: '+err);}
 }
 if(!pages.length)newPage(0,true);
 var N=pages.length;
-pages.forEach(function(rec,i){try{var s=SECTS[rec.s];hf(rec.el,s,'hdr',i+1,rec.first);hf(rec.el,s,'ftr',i+1,rec.first);
+pages.forEach(function(rec,i){try{var s=SECTS[rec.s];
  var pg=rec.el.querySelectorAll('.pg');for(var k=0;k<pg.length;k++)pg[k].textContent=String(i+1);
  var np=rec.el.querySelectorAll('.np');for(var k2=0;k2<np.length;k2++)np[k2].textContent=String(N);
  // objek mengambang: posisikan relatif halaman / margin / paragraf

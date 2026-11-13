@@ -287,7 +287,7 @@ object Pdf {
                 break
             }
         }
-        if (date.isBlank()) date = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("id")).format(java.util.Date())
+        if (date.isBlank()) date = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.forLanguageTag("id")).format(java.util.Date())
 
         var total = ""
         val totalRegex = Regex("(?i)(total|grand total|bayar|jumlah|rp)\\s*[:=]?\\s*(rp)?\\s*([\\d.,]{3,15})")

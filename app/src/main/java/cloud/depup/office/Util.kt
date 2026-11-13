@@ -281,6 +281,35 @@ object Files {
         return -1L
     }
 
+    /**
+     * Ukuran berkas yang terakhir diketahui. Daftar berkas (dan pencarian di dalamnya) tidak lagi bertanya ke penyedia
+     * berkas untuk setiap baris di main thread — tiap pertanyaan bisa makan beberapa milidetik (Drive, Unduhan, dst.).
+     */
+    private val knownSize = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Seperti [sizeOf], tapi memakai ukuran yang sudah diketahui bila ada (diisi [prefetchSizes]). */
+    fun sizeCached(ctx: Context, uri: Uri): Long {
+        val k = uri.toString()
+        knownSize[k]?.let { return it }
+        val s = sizeOf(ctx, uri)
+        if (s >= 0) knownSize[k] = s
+        return s
+    }
+
+    /** Perbarui ukuran berkas-berkas ini di thread latar — siap sebelum daftarnya dibangun. */
+    fun prefetchSizes(ctx: Context, uris: List<String>) {
+        if (uris.isEmpty()) return
+        val app = ctx.applicationContext
+        try {
+            Perf.io.execute {
+                for (u in uris) try {
+                    val s = sizeOf(app, Uri.parse(u))
+                    if (s >= 0) knownSize[u] = s else knownSize.remove(u)
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
+    }
+
     /** "10 menit lalu", "Kemarin, 16:40", dst. */
     fun relTime(ms: Long): String {
         if (ms <= 0L) return ""

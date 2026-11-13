@@ -21,7 +21,6 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
-import android.widget.EditText
 
 /** Tipe huruf tampilan untuk nama font Word (Calibri, Times New Roman, ...). */
 object DocFonts {
@@ -97,7 +96,29 @@ class FmtSpan(val fmt: CharFmt, private val host: ParaEdit) : MetricAffectingSpa
  * - Backspace di awal paragraf = gabung dengan paragraf sebelumnya.
  */
 @SuppressLint("ViewConstructor")
-class ParaEdit(ctx: Context, private val host: DocEditorActivity) : EditText(ctx) {
+class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.appcompat.widget.AppCompatEditText(ctx) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val t = System.nanoTime()
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        EdPerf.paraMeasureNs += System.nanoTime() - t; EdPerf.paraMeasures++
+    }
+
+    override fun requestLayout() { EdPerf.paraRequests++; super.requestLayout() }
+
+    override fun onDraw(canvas: Canvas) {
+        val t = System.nanoTime()
+        super.onDraw(canvas)
+        EdPerf.paraDrawNs += System.nanoTime() - t; EdPerf.paraDraws++
+    }
+
+    companion object Follow {
+        const val BASE_TYPE = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        /** Saat terakhir teks/kursor paragraf mana pun berubah (uptime ms) — lihat [EditorScroll]. */
+        @JvmStatic var lastChange = 0L
+        /** Uji performa: ejaan aktif di semua paragraf (perilaku lama). */
+        @JvmStatic var spellAll = false
+    }
+
     lateinit var para: EPara
     var base: CharFmt = CharFmt(sz = 22)
     var ptPx = 1f
@@ -124,7 +145,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : EditText(ctx
         }
 
         override fun afterTextChanged(e: Editable) {
-            if (!binding) { dirty = true; version++ }
+            if (!binding) { dirty = true; version++; lastChange = android.os.SystemClock.uptimeMillis() }
             if (suppress || !::para.isInitialized) return
             host.pending?.let { pd ->
                 if (pd.editor === this@ParaEdit && insCount > 0) {
@@ -148,8 +169,17 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : EditText(ctx
     init {
         background = null
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        // lanskap: keyboard tidak mengambil alih layar penuh — dokumen tetap terlihat saat mengetik
+        imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
         isSingleLine = false
         setHorizontallyScrolling(false)
+        // Pemeriksa ejaan HANYA untuk paragraf yang sedang diketik. Setiap EditText yang tampil otomatis mengirim
+        // seluruh teksnya ke pemeriksa ejaan keyboard (Gboard) — dokumen 600-an paragraf = ratusan sesi pemeriksaan,
+        // lalu garis bawah hasilnya terus menempel → tata letak dihitung ulang tanpa henti: editor patah-patah parah
+        // bahkan untuk berkas ratusan KB. Saran keyboard tetap jalan normal saat paragraf difokuskan.
+        setRawInputType(if (spellAll) BASE_TYPE else BASE_TYPE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
+        if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        if (android.os.Build.VERSION.SDK_INT >= 30) importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO
         minLines = 1
         setPadding(0, 0, 0, 0)
         highlightColor = 0x553B5BFF
@@ -258,10 +288,13 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : EditText(ctx
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
-        if (::para.isInitialized && !suppress) host.onSel(this)
+        if (::para.isInitialized && !suppress) { lastChange = android.os.SystemClock.uptimeMillis(); host.onSel(this) }
     }
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
+        // fokus: saran & ejaan keyboard aktif; lepas fokus: dimatikan lagi (lihat init) dan garis ejaannya dibuang
+        setRawInputType(if (focused || spellAll) BASE_TYPE else BASE_TYPE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
+        if (!focused && !spellAll) text?.let { t -> for (sp in t.getSpans(0, t.length, android.text.style.SuggestionSpan::class.java)) t.removeSpan(sp) }
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
         if (focused && ::para.isInitialized) host.onSel(this)
     }
@@ -357,4 +390,158 @@ class GlyphIcon(ctx: Context, private val kind: Int, private val tint: Int = C.T
             STYLE -> { fill.textSize = 13f * d; c.drawText("Aa", l, b, fill) }
         }
     }
+}
+
+
+/**
+ * Gulir dokumen editor. Kolom teks yang sedang fokus meminta "tampilkan kursor" setiap kali tata letaknya dihitung
+ * ulang (gambar selesai dimuat, blok lanjutan dibangun, kedip pratinjau…) — dulu halaman terus MELOMPAT kembali ke
+ * paragraf yang fokus saat digulir, terasa sangat patah-patah bahkan di dokumen ratusan KB. Permintaan itu kini hanya
+ * dituruti bila memang ada ketikan / perpindahan kursor barusan, dan tidak pernah selagi jari menggulir atau halaman
+ * masih meluncur.
+ */
+class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
+    private var touching = false
+    private var lastMove = 0L
+
+    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean { track(ev); return super.onInterceptTouchEvent(ev) }
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean { track(ev); return super.onTouchEvent(ev) }
+    private fun track(ev: android.view.MotionEvent) {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> touching = true
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { touching = false; lastMove = android.os.SystemClock.uptimeMillis() }
+        }
+    }
+
+    override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+        super.onScrollChanged(l, t, oldl, oldt)
+        lastMove = android.os.SystemClock.uptimeMillis()   // termasuk luncuran (fling) setelah jari lepas
+    }
+
+    override fun draw(canvas: Canvas) {
+        val t = System.nanoTime()
+        super.draw(canvas)
+        EdPerf.drawNs += System.nanoTime() - t; EdPerf.draws++
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val t0 = System.nanoTime()
+        super.onLayout(changed, l, t, r, b)
+        EdPerf.layoutNs += System.nanoTime() - t0; EdPerf.layouts++
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val t0 = System.nanoTime()
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        EdPerf.measureNs += System.nanoTime() - t0; EdPerf.measures++
+    }
+
+    override fun requestChildRectangleOnScreen(child: View, rectangle: android.graphics.Rect, immediate: Boolean): Boolean {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (touching) return false
+        if (now - ParaEdit.lastChange > 700) return false              // bukan karena ketikan / kursor dipindah
+        if (now - lastMove < 250 && ParaEdit.lastChange < lastMove) return false   // masih meluncur
+        return super.requestChildRectangleOnScreen(child, rectangle, immediate)
+    }
+}
+
+/**
+ * Tata letak per lembar seperti Word: blok dokumen disusun ke lembar berukuran kertas ASLI (rasio & margin dari
+ * dokumen) dengan jarak antarlembar. Blok yang tidak muat di sisa lembar pindah utuh ke lembar berikutnya; blok yang
+ * lebih tinggi dari satu lembar (tabel/paragraf sangat panjang) dibiarkan melintas. Lembar putih digambar sendiri.
+ * Margin kiri/kanan = padding; margin atas/bawah = [mTop]/[mBottom].
+ */
+class PagedBox(ctx: Context) : android.widget.LinearLayout(ctx) {
+    /** tinggi ÷ lebar kertas */
+    var ratio = 16838f / 11906f
+    var mTop = 0
+    var mBottom = 0
+    var gap = (14 * ctx.resources.displayMetrics.density).toInt()
+    /** Mulai di lembar baru sebelum view ini (paragraf "pemisah halaman sebelum"). */
+    val breakBefore: MutableSet<View> = java.util.Collections.newSetFromMap(java.util.WeakHashMap())
+    /** Lembar baru sesudah view ini (blok pemisah halaman). */
+    val breakAfter: MutableSet<View> = java.util.Collections.newSetFromMap(java.util.WeakHashMap())
+    var pages = 1
+        private set
+    /** false = tanpa pemenggalan lembar (satu kolom panjang) — untuk pengujian performa. */
+    var paged = true
+        set(v) { if (field != v) { field = v; requestLayout(); invalidate() } }
+    private var tops = IntArray(64)
+    private val paper = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val edge = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 1f; color = 0x24000000 }
+    private val shade = Paint().apply { color = 0x12000000 }
+
+    init { orientation = VERTICAL; setWillNotDraw(false) }
+
+    fun pageH(w: Int = width): Int = Math.round(w * ratio)
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        val ph = if (paged) pageH(w) else Int.MAX_VALUE / 4; val stride = ph + gap
+        val bodyH = (ph - mTop - mBottom).coerceAtLeast(1)
+        val unspec = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+        if (tops.size < childCount) tops = IntArray(childCount + 64)
+        var page = 0
+        var y = mTop
+        var force = false
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            measureChildWithMargins(c, widthMeasureSpec, 0, unspec, 0)
+            val lp = c.layoutParams as LayoutParams
+            val h = c.measuredHeight + lp.topMargin + lp.bottomMargin
+            val atTop = y == page * stride + mTop
+            if (!atTop && (force || c in breakBefore || (y + h > page * stride + ph - mBottom && h <= bodyH))) {
+                page++; y = page * stride + mTop
+            }
+            tops[i] = y + lp.topMargin
+            y += h
+            force = c in breakAfter
+            // blok yang melintasi lembar: lanjut dari lembar tempat ia berakhir
+            while (y > page * stride + ph - mBottom) page++
+            if (y < page * stride + mTop) y = page * stride + mTop
+        }
+        pages = page + 1
+        setMeasuredDimension(w, if (paged) pages * stride - gap else y + mBottom)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val inner = r - l - paddingLeft - paddingRight
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == GONE) continue
+            val lp = c.layoutParams as LayoutParams
+            val cw = c.measuredWidth
+            val x = when ((if (lp.gravity >= 0) lp.gravity else 0) and android.view.Gravity.HORIZONTAL_GRAVITY_MASK) {
+                android.view.Gravity.CENTER_HORIZONTAL -> paddingLeft + (inner - cw) / 2 + lp.leftMargin - lp.rightMargin
+                android.view.Gravity.RIGHT, android.view.Gravity.END -> paddingLeft + inner - cw - lp.rightMargin
+                else -> paddingLeft + lp.leftMargin
+            }
+            c.layout(x, tops[i], x + cw, tops[i] + c.measuredHeight)
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        if (!paged) { canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paper); return }
+        val ph = pageH(); val stride = ph + gap
+        val w = width.toFloat()
+        for (p in 0 until pages) {
+            val top = (p * stride).toFloat()
+            canvas.drawRect(1f, top + 2f, w + 1f, top + ph + 2f, shade)
+            canvas.drawRect(0f, top, w, top + ph, paper)
+            canvas.drawRect(0.5f, top + 0.5f, w - 0.5f, top + ph - 0.5f, edge)
+        }
+    }
+}
+
+
+/** Penghitung performa editor (sementara, untuk diagnosis di HP pengguna). Semua di thread UI. */
+object EdPerf {
+    var measureNs = 0L; var measures = 0
+    var layoutNs = 0L; var layouts = 0
+    var drawNs = 0L; var draws = 0
+    var paraMeasureNs = 0L; var paraMeasures = 0
+    var paraDrawNs = 0L; var paraDraws = 0
+    var paraRequests = 0
+    fun reset() { measureNs = 0; measures = 0; layoutNs = 0; layouts = 0; drawNs = 0; draws = 0; paraMeasureNs = 0; paraMeasures = 0; paraDrawNs = 0; paraDraws = 0; paraRequests = 0 }
 }

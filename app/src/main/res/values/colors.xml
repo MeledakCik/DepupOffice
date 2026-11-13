@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Depup Fresh (v3) — tema TERANG. Nilai sama dengan token di Ui.kt (object C). Versi gelap: values-night/colors.xml -->
+<!-- Minimalis netral-hangat — tema TERANG. Nilai sama dengan token di Ui.kt (object C). Versi gelap: values-night/colors.xml -->
 <resources>
-    <color name="bg">#F5F6FA</color>
+    <color name="bg">#F1F0EC</color>
     <color name="surface">#FFFFFF</color>
-    <color name="accent">#4338CA</color>
-    <color name="accent_soft">#4338CA</color>
+    <color name="accent">#111111</color>
+    <color name="accent_soft">#111111</color>
     <color name="gold">#F5A524</color>
     <color name="cream">#FFFFFF</color>
-    <color name="line">#D5D9E3</color>
-    <color name="text">#151823</color>
-    <color name="muted">#535A6C</color>
-    <color name="ic_launcher_background">#E7E6FC</color>
-    <color name="splash_bg">#4338CA</color>
+    <color name="line">#E4E2DD</color>
+    <color name="text">#111111</color>
+    <color name="muted">#6B6863</color>
+    <!-- Logo Depup: biru merek di latar ikon & ubin logo, tanda putih di atasnya. logo_body = tanda satu warna (ikut tema) -->
+    <color name="brand">#0037FF</color>
+    <color name="ic_launcher_background">#0037FF</color>
+    <color name="logo_body">#111111</color>
+    <color name="splash_bg">#111111</color>
 </resources>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ubin logo Depup: sama dengan ikon aplikasi (latar biru #0037FF, sudut membulat 35%, logo putih).
+     Dipakai di layar pembuka, bilah atas Beranda, dan kepala tab Saya. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="2000"
+    android:viewportHeight="2000">
+    <path android:fillColor="@color/brand" android:pathData="M708.1,0 H1291.9 A708.1,708.1 0 0 1 2000,708.1 V1291.9 A708.1,708.1 0 0 1 1291.9,2000 H708.1 A708.1,708.1 0 0 1 0,1291.9 V708.1 A708.1,708.1 0 0 1 708.1,0Z" />
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M1075.32,481.36 L539.81,1016.87 L539.81,1518.9 L1058.71,1518.9 C1344.83,1518.9 1577.61,1286.11 1577.61,1000 C1577.61,713.89 1353.77,490.15 1075.32,481.36Z M1058.71,1251.03 C920.3,1251.03 807.68,1138.41 807.68,1000 C807.68,861.59 920.3,748.97 1058.71,748.97 C1197.12,748.97 1309.74,861.59 1309.74,1000 C1309.74,1138.41 1197.12,1251.03 1058.71,1251.03Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M539.81,481.1 H807.69 V748.98 H539.81Z" />
+</vector>

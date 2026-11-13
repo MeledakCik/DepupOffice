@@ -84,7 +84,9 @@ class GuideView(ctx: Context) : View(ctx) {
 }
 
 /** UI kamera selalu gelap (di atas pratinjau foto), jadi warnanya tidak ikut tema terang/gelap. */
-private val CAM_ACCENT = 0xFF4338CA.toInt()
+/** Kamera minimalis: putih di atas hitam (seperti kamera bawaan), tanpa warna merek. */
+private val CAM_ACCENT = 0xFFFFFFFF.toInt()
+private val CAM_ON_ACCENT = 0xFF111111.toInt()
 
 /** Viewfinder sendiri (CameraX): mode multi-halaman / KTP / dokumen, flash, grid, filter bawaan. */
 class CameraActivity : AppCompatActivity() {
@@ -164,8 +166,8 @@ class CameraActivity : AppCompatActivity() {
             contentDescription = "Ganti mode lampu kilat"
             setOnClickListener { cycleFlash() }
         }
-        fp.add(icon(R.drawable.ic_flash, C.GOLD, 18), w = dp(18), h = dp(18))
-        flashLabel = tv("Otomatis", 13f, Color.WHITE, true).apply {
+        fp.add(icon(R.drawable.ic_flash, Color.WHITE, 18), w = dp(18), h = dp(18))
+        flashLabel = tv("Otomatis", 13f, CAM_ON_ACCENT, true).apply {
             background = shape(CAM_ACCENT, 100)
             setPadding(dp(12), dp(5), dp(12), dp(5))
         }
@@ -193,7 +195,7 @@ class CameraActivity : AppCompatActivity() {
         // ----- bawah -----
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xE6101218.toInt())
+            setBackgroundColor(0xE60C0C0C.toInt())
             setPadding(dp(16), dp(12), dp(16), dp(14))
         }
         val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
@@ -223,7 +225,7 @@ class CameraActivity : AppCompatActivity() {
             setOnClickListener { finishWithShots() }
         }
         tf.addView(thumb, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER))
-        badge = tv("0", 11f, Color.WHITE, true).apply {
+        badge = tv("0", 11f, CAM_ON_ACCENT, true).apply {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(CAM_ACCENT) }
             visibility = View.GONE
@@ -239,12 +241,21 @@ class CameraActivity : AppCompatActivity() {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0); setStroke(dp(4), Color.WHITE) }
         }
         shutter = FrameLayout(this).apply {
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(CAM_ACCENT) }
-            addView(icon(R.drawable.ic_camera, Color.WHITE, 28), FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
             contentDescription = "Ambil foto"
             setOnClickListener { snap() }
+            // tekan: rana mengecil sedikit; lepas: kembali mulus (tanpa pantulan)
+            setOnTouchListener { v, e ->
+                when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.9f).scaleY(0.9f).setStartDelay(0)
+                        .setDuration(Motion.PRESS_DOWN).setInterpolator(Motion.STANDARD).start()
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL ->
+                        v.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.PRESS_UP).setInterpolator(Motion.STANDARD).start()
+                }
+                false
+            }
         }
-        outer.addView(shutter, FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER))
+        outer.addView(shutter, FrameLayout.LayoutParams(dp(66), dp(66), Gravity.CENTER))
         actions.add(outer, w = dp(84), h = dp(84))
 
         // kanan: filter bawaan
@@ -273,7 +284,7 @@ class CameraActivity : AppCompatActivity() {
 
     private fun paintAuto() {
         autoPill.text = if (autoScan) "● Pindai otomatis: AKTIF" else "○ Pindai otomatis: MATI"
-        autoPill.background = shape(if (autoScan) 0xE60F7040.toInt() else 0x99000000.toInt(), 100)
+        autoPill.background = shape(if (autoScan) 0xE635754C.toInt() else 0x99000000.toInt(), 100)
     }
 
     private fun hint(t: String) {
@@ -355,7 +366,7 @@ class CameraActivity : AppCompatActivity() {
         modeIdx = i
         tabs.forEachIndexed { k, t ->
             val on = k == i
-            t.setTextColor(if (on) Color.WHITE else 0xCCFFFFFF.toInt())
+            t.setTextColor(if (on) CAM_ON_ACCENT else 0xCCFFFFFF.toInt())
             t.background = if (on) shape(CAM_ACCENT, 100) else null
             t.isSelected = on
         }
@@ -472,6 +483,17 @@ class CameraActivity : AppCompatActivity() {
         cam.cameraControl.startFocusAndMetering(act)
     }
 
+    /** Kilatan putih tipis di atas pratinjau saat memotret (tanpa mengganggu kamera). */
+    private fun shutterFlash() {
+        if (!Motion.on()) return
+        val root = window.decorView as? FrameLayout ?: return
+        val f = View(this).apply { setBackgroundColor(Color.WHITE); alpha = 0f; isClickable = false; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        root.addView(f, FrameLayout.LayoutParams(MATCH, MATCH))
+        f.animate().alpha(0.55f).setDuration(60).withEndAction {
+            f.animate().alpha(0f).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).withEndAction { root.removeView(f) }.start()
+        }.start()
+    }
+
     private fun snap() {
         val cap = capture ?: return
         if (busyShot) return
@@ -479,6 +501,8 @@ class CameraActivity : AppCompatActivity() {
         armed = false
         stableSince = 0L
         shutter.isEnabled = false
+        shutterFlash()
+        shutter.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
         val dir = File(cacheDir, "scan").apply { mkdirs() }
         val f = File(dir, "scan_${System.currentTimeMillis()}.jpg")
         cap.takePicture(
@@ -514,6 +538,13 @@ class CameraActivity : AppCompatActivity() {
         try { thumb.setImageBitmap(Pdf.decode(this, Uri.fromFile(f), 220)) } catch (_: Throwable) {}
         badge.visibility = View.VISIBLE
         badge.text = shots.size.toString()
+        // gambar kecil "menerima" foto: membesar ke ukuran asli, lencana jumlah ikut bersamaan — tanpa pantulan
+        if (Motion.on()) {
+            thumb.scaleX = 0.85f; thumb.scaleY = 0.85f
+            thumb.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
+            badge.scaleX = 0.6f; badge.scaleY = 0.6f
+            badge.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
+        }
         thumbLabel.text = "${shots.size} Halaman"
     }
 

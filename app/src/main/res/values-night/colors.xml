@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Depup Fresh (v3) — tema GELAP. -->
+<!-- Minimalis netral-hangat — tema GELAP. -->
 <resources>
-    <color name="bg">#0E1016</color>
-    <color name="surface">#181B23</color>
-    <color name="accent">#A8B1FF</color>
-    <color name="accent_soft">#A8B1FF</color>
+    <color name="bg">#0F0F0E</color>
+    <color name="surface">#1B1B1A</color>
+    <color name="accent">#F2F1EE</color>
+    <color name="accent_soft">#F2F1EE</color>
     <color name="gold">#F5B53D</color>
-    <color name="cream">#181B23</color>
-    <color name="line">#373C4C</color>
-    <color name="text">#ECEEF4</color>
-    <color name="muted">#A9AFC1</color>
-    <color name="splash_bg">#0E1016</color>
+    <color name="cream">#1B1B1A</color>
+    <color name="line">#2C2C29</color>
+    <color name="text">#F2F1EE</color>
+    <color name="muted">#9C9A95</color>
+    <color name="splash_bg">#0F0F0E</color>
+    <!-- Logo di tema gelap: warna putih kertas -->
+    <color name="logo_body">#F2F1EE</color>
 </resources>

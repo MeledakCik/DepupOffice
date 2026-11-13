@@ -12,10 +12,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.print.PrintAttributes
 import android.print.PrintManager
 import android.text.InputType
-import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.TextUtils
@@ -60,6 +60,10 @@ import kotlin.math.roundToInt
 class DocEditorActivity : AppCompatActivity() {
 
     companion object {
+        /** Jumlah baris tabel per potongan pembangunan bertahap. */
+        private const val TABLE_CHUNK = 8
+        /** Anggaran waktu membangun tampilan per frame (ms) — sisa frame untuk ukur/gambar & masukan pengguna. */
+        private const val FRAME_BUDGET_MS = 6L
         const val EXTRA_URI = "uri"
         const val EXTRA_TEMPLATE = "template"
         const val TEMPLATE_SURAT = "surat"
@@ -108,17 +112,26 @@ class DocEditorActivity : AppCompatActivity() {
 
     private lateinit var scroll: ScrollView
     private lateinit var pageCard: LinearLayout
-    private lateinit var pageBox: LinearLayout
+    private lateinit var pageBox: PagedBox
     private lateinit var titleTv: TextView
     private lateinit var subTv: TextView
-    private lateinit var tabRow: LinearLayout
+    private lateinit var tabRow: PillRow
     private lateinit var ribbonScroll: HorizontalScrollView
     private lateinit var ribbon: LinearLayout
     private lateinit var statusTv: TextView
+    private lateinit var topBarV: View
+    private lateinit var tabsBarV: View
+    private lateinit var statusBarV: View
+    /** Baris status di bawah judul (titik + teks); disembunyikan saat HP dimiringkan. */
+    private lateinit var statusRow: View
+    private lateinit var statusDot: View
+    /** Keyboard sedang tampil (diperkirakan dari tinggi area tampak jendela). */
+    private var imeShown = false
     private lateinit var zoomTv: TextView
     private lateinit var undoBtn: View
     private lateinit var redoBtn: View
     private var findBar: View? = null
+    private var glass: GlassScaffold? = null
 
     private val rows = HashMap<EPara, ParaRow>()
     private val owners = HashMap<EPara, Owner>()
@@ -139,7 +152,15 @@ class DocEditorActivity : AppCompatActivity() {
     private val statusTick = Runnable { updateStatus() }
 
     private val toolStates = ArrayList<() -> Unit>()
-    private val imgCache = HashMap<String, Bitmap?>()
+    /**
+     * Bitmap gambar dokumen, LRU berbatas byte. Dulu HashMap tanpa batas: dokumen penuh foto menumpuk puluhan MB
+     * bitmap → GC berat (ketikan tersendat) sampai kehabisan memori (gambar berikutnya gagal tampil).
+     */
+    private val imgCache = object : android.util.LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8).coerceIn(8L shl 20, 48L shl 20).toInt()) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+    /** Gambar yang memang tidak bisa dibaca (tidak dicoba ulang tiap render). */
+    private val imgFailed = HashSet<String>()
     private var printView: WebView? = null
 
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { insertImageFrom(it) } }
@@ -150,7 +171,7 @@ class DocEditorActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Theme.apply(this, C.ACCENT)
+        Theme.apply(this)
         // Membaca & mengurai .docx bisa makan waktu (dokumen puluhan halaman) — dikerjakan di latar,
         // layar memuat tampil seketika alih-alih aplikasi terlihat membeku.
         val loading = LinearLayout(this).apply {
@@ -176,8 +197,8 @@ class DocEditorActivity : AppCompatActivity() {
     private fun buildUi() {
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(C.SURFACE2) }
-        root.add(topBar())
-        root.add(tabsBar())
+        root.add(topBar().also { topBarV = it })
+        root.add(tabsBar().also { tabsBarV = it })
         ribbonScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             setBackgroundColor(C.SURFACE)
@@ -185,34 +206,51 @@ class DocEditorActivity : AppCompatActivity() {
         ribbon = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(6), dp(4), dp(6), dp(6))
+            setPadding(dp(12), 0, dp(12), dp(8))
         }
         ribbonScroll.addView(ribbon)
         root.add(ribbonScroll)
         root.add(View(this).apply { setBackgroundColor(C.LINE) }, h = dp(1))
 
         val docArea = FrameLayout(this)
-        scroll = ScrollView(this).apply {
+        scroll = EditorScroll(this).apply {
             isFillViewport = true
             setBackgroundColor(C.CANVAS)
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
-        val pad = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(10), dp(8), dp(80)) }
+        // tata letak per lembar seperti Word (kertas asli, lembar demi lembar); zoom > 100% → bisa digeser mendatar
+        val hsv = HorizontalScrollView(this).apply { isFillViewport = true; isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        val pad = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(8), dp(10), dp(8), dp(80))
+        }
+        // fokus awal jatuh ke wadah halaman, bukan paragraf pertama: kursor tak "menarik" layar saat dokumen digulir
         pageCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = dp(2).toFloat(); setStroke(1, 0xFFD5D8E0.toInt()) }
-            elevation = dp(2).toFloat()
+            isFocusableInTouchMode = true
+            descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
         }
-        pageBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        pageBox = PagedBox(this).apply {
+            // ratusan kolom teks: jangan dilacak Autofill / Content Capture sistem tiap kali digulir
+            if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
         pageCard.add(pageBox)
-        pad.add(pageCard)
-        scroll.addView(pad)
+        pad.addView(pageCard, LinearLayout.LayoutParams(WRAP, WRAP))
+        hsv.addView(pad)
+        scroll.addView(hsv)
         // Ketuk area kosong di bawah halaman -> kursor ke akhir dokumen
         pad.setOnClickListener { focusEnd() }
         docArea.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
+        installPerfHud(docArea)
         root.add(docArea, h = 0, weight = 1f)
-        root.add(statusBar())
-        setContentView(root)
+        root.add(statusBar().also { statusBarV = it })
+        val screen = Glass.scaffold(root)
+        glass = screen as? GlassScaffold
+        setContentView(screen)
+        // dari layar "Membuka dokumen…" ke editor: halaman bergeser naik sedikit ke tempatnya, bukan berkedip
+        pageCard.glide(0, Motion.SHIFT_DP + 2)
+        pageCard.post { pageCard.requestFocus() }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { askClose() }
@@ -221,12 +259,106 @@ class DocEditorActivity : AppCompatActivity() {
         applyPageLook()
         renderAll()
         showTab(0)
+        applyDensity()
+        window.decorView.viewTreeObserver.addOnGlobalLayoutListener(imeWatch)
         updateUndoButtons()
         pageBox.post { focusFirst() }
     }
 
+    /**
+     * Pengukur performa SEMENTARA (diagnosis lag di HP pengguna): FPS, frame terlama, waktu ukur/tata letak/gambar
+     * per detik, jumlah paragraf yang minta diukur ulang — plus sakelar untuk mematikan kaca / lembar / ejaan satu
+     * per satu, supaya penyebabnya ketahuan pasti.
+     */
+    private fun installPerfHud(host: FrameLayout) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = shape(0xE6111111.toInt(), 12)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            elevation = dp(6).toFloat()
+        }
+        val txt = TextView(this).apply { setTextColor(Color.WHITE); textSize = 11f; typeface = Typeface.MONOSPACE }
+        box.addView(txt)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun chip(label: () -> String, act: () -> Unit) = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 12f; typeface = Typeface.DEFAULT_BOLD
+            background = shape(0xFF3A3A3A.toInt(), 100); setPadding(dp(10), dp(6), dp(10), dp(6))
+            text = label(); setOnClickListener { act(); text = label(); EdPerf.reset() }
+        }
+        row.addView(chip({ "Kaca: " + if (glass?.forceDirect == true) "MATI" else "nyala" }) { glass?.let { it.forceDirect = !it.forceDirect } })
+        row.addView(chip({ "Lembar: " + if (pageBox.paged) "nyala" else "MATI" }) { pageBox.paged = !pageBox.paged }, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
+        row.addView(chip({ "Ejaan: " + if (ParaEdit.spellAll) "SEMUA" else "fokus" }) {
+            ParaEdit.spellAll = !ParaEdit.spellAll
+            val t = if (ParaEdit.spellAll) ParaEdit.BASE_TYPE else ParaEdit.BASE_TYPE or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            for (e in allEditors()) if (!e.isFocused) e.setRawInputType(t)
+        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
+        row.addView(chip({ "×" }) { box.visibility = View.GONE }, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
+        box.addView(row, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(6) })
+        host.addView(box, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(8), 0, dp(8), dp(64)) })
+        var frames = 0; var worst = 0L; var lastNs = 0L
+        val cb = object : android.view.Choreographer.FrameCallback {
+            override fun doFrame(now: Long) {
+                if (lastNs != 0L) { worst = max(worst, now - lastNs); frames++ }
+                lastNs = now
+                if (!isFinishing) android.view.Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+        android.view.Choreographer.getInstance().postFrameCallback(cb)
+        val tick = object : Runnable {
+            override fun run() {
+                if (isFinishing) return
+                val P = EdPerf
+                fun ms(ns: Long) = ns / 1_000_000
+                txt.text = "FPS ${frames}  terlama ${ms(worst)} ms  paragraf ${rows.size}\n" +
+                    "ukur ${P.measures}x ${ms(P.measureNs)}ms | tata ${P.layouts}x ${ms(P.layoutNs)}ms\n" +
+                    "gambar ${P.draws}x ${ms(P.drawNs)}ms | para-ukur ${P.paraMeasures}x ${ms(P.paraMeasureNs)}ms\n" +
+                    "para-gambar ${P.paraDraws}x ${ms(P.paraDrawNs)}ms | minta-ukur ${P.paraRequests}x"
+                frames = 0; worst = 0; P.reset()
+                host.postDelayed(this, 1000)
+            }
+        }
+        host.postDelayed(tick, 1000)
+    }
+
+    private fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    /** Keyboard muncul/hilang → atur ulang kepadatan bilah (lanskap + keyboard = hanya bilah atas & pita). */
+    private val imeWatch = android.view.ViewTreeObserver.OnGlobalLayoutListener {
+        val r = android.graphics.Rect()
+        window.decorView.getWindowVisibleDisplayFrame(r)
+        val h = window.decorView.rootView.height
+        val shown = h > 0 && h - r.bottom > h * 0.15f
+        if (shown != imeShown) { imeShown = shown; applyDensity() }
+    }
+
+    /**
+     * Kepadatan bilah mengikuti orientasi. Saat HP dimiringkan, bilah atas + tab + pita + status dulu ±205 dp — lebih
+     * dari separuh layar lanskap, dan dengan keyboard terbuka dokumen nyaris tak terlihat. Lanskap kini: bilah atas
+     * ringkas, pita ikon tanpa label, bilah status tipis; selagi keyboard terbuka, baris tab & status disembunyikan.
+     */
+    private fun applyDensity() {
+        if (!::topBarV.isInitialized) return
+        val land = isLandscape()
+        val v = if (land) dp(3) else dp(6)
+        topBarV.setPadding(dp(12), v, dp(12), v)
+        statusRow.visibility = if (land) View.GONE else View.VISIBLE
+        // lanskap + keyboard: hanya bilah atas & pita yang tersisa; tanpa keyboard status (zoom) tetap ada, lebih tipis
+        statusBarV.visibility = if (land && imeShown) View.GONE else View.VISIBLE
+        statusBarV.setPadding(dp(16), if (land) dp(2) else dp(6), dp(12), if (land) dp(2) else dp(6))
+        tabsBarV.visibility = if (land && imeShown) View.GONE else View.VISIBLE
+        tabsBarV.setPadding(dp(12), 0, dp(12), if (land) dp(4) else dp(8))
+        for (t in tabViews) t.setPadding(dp(14), if (land) dp(5) else dp(7), dp(14), if (land) dp(5) else dp(7))
+        ribbon.setPadding(dp(12), 0, dp(12), if (land) dp(4) else dp(8))
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyDensity()
+    }
+
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        if (::topBarV.isInitialized) try { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(imeWatch) } catch (_: Exception) {}
         super.onDestroy()
     }
 
@@ -298,87 +430,117 @@ class DocEditorActivity : AppCompatActivity() {
     // Bilah atas, tab, pita, status
     // =========================================================================================
 
+    /**
+     * Bilah atas bergaya kaca (sama dengan tombol bulat di beranda): tombol kembali bulat, judul + status bertitik
+     * warna, kapsul urungkan/ulangi berikon garis, dan Simpan sebagai kapsul tinta setinggi tombol lain.
+     * Dulu: panah teks "↶ ↷", judul besar huruf kapital, tombol hitam besar — terlihat seperti templat bawaan.
+     */
     private fun topBar(): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(C.ACCENT)
-            setPadding(dp(6), dp(6), dp(10), dp(6))
+            setBackgroundColor(C.SURFACE)   // jadi kaca netral (dibuang bilah kaca)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
         }
-        bar.add(icon(R.drawable.ic_back, C.ON_PRIMARY, 22).apply {
-            contentDescription = "Kembali"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES; background = rippleBg()
-            setPadding(dp(9), dp(9), dp(9), dp(9)); setOnClickListener { askClose() }
-        }, w = dp(40), h = dp(40))
-        val col = vbox().apply { setOnClickListener { renameDoc() } }
-        titleTv = tv(docName, 15f, C.ON_PRIMARY, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.MIDDLE }
-        subTv = tv("Belum disimpan", 12f, onBarMuted)
-        col.add(titleTv); col.add(subTv)
-        bar.add(col, w = 0, weight = 1f, side = 6)
-        undoBtn = topText("↶", "Urungkan") { doUndo() }
-        redoBtn = topText("↷", "Ulangi") { doRedo() }
-        bar.add(undoBtn, w = dp(40), h = dp(40))
-        bar.add(redoBtn, w = dp(40), h = dp(40))
-        bar.add(tv("Simpan", 13f, C.ACCENT, true).apply {
-            background = shape(C.ON_PRIMARY, 10)
-            minHeight = dp(40)
-            gravity = Gravity.CENTER
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setOnClickListener { save(false) }
-        }, w = WRAP, side = 4)
+        bar.add(navCircle(R.drawable.ic_back, "Kembali") { askClose() }, w = dp(40), h = dp(40))
+        val col = vbox().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            tappable { renameDoc() }   // pembaca layar membacakan nama & status; ketuk ganda = ganti nama
+            minimumHeight = dp(44)
+        }
+        titleTv = tv(docName, 16f, C.TEXT, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.MIDDLE }
+        col.add(titleTv)
+        val st = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        statusDot = View(this).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.LINE_STRONG) } }
+        st.addView(statusDot, LinearLayout.LayoutParams(dp(6), dp(6)).apply { marginEnd = dp(6) })
+        // berkas yang dibuka belum berubah = "Siap diedit"; dokumen baru dari templat = "Belum disimpan"
+        subTv = tv(if (intent.getStringExtra(EXTRA_URI) != null) "Siap diedit" else "Belum disimpan", 12f, C.MUTED)
+            .apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        st.addView(subTv, LinearLayout.LayoutParams(WRAP, WRAP))
+        statusRow = st
+        col.add(st, top = 1)
+        bar.add(col, w = 0, weight = 1f, side = 4)
+        val ur = navCapsule()
+        undoBtn = capsuleBtn(R.drawable.ic_undo, "Urungkan") { doUndo() }
+        redoBtn = capsuleBtn(R.drawable.ic_redo, "Ulangi") { doRedo() }
+        ur.add(undoBtn, w = dp(38), h = dp(40)); ur.add(redoBtn, w = dp(38), h = dp(40))
+        bar.addView(ur, LinearLayout.LayoutParams(WRAP, dp(42)))
+        bar.addView(navPrimary("Simpan") { save(false) }, LinearLayout.LayoutParams(WRAP, dp(42)).apply { marginStart = dp(8) })
         return bar
     }
 
-    private fun topText(glyph: String, desc: String, onClick: () -> Unit): TextView =
-        tv(glyph, 22f, C.ON_PRIMARY, true).apply {
-            gravity = Gravity.CENTER; contentDescription = desc
-            setOnClickListener { onClick() }
-            setOnLongClickListener { toast(desc); true }
-        }
+    /** Status dokumen: teks + titik warna (abu = belum pernah disimpan, kuning = ada perubahan, hijau = tersimpan). */
+    private fun setStatus(text: String, color: Int) {
+        if (!::subTv.isInitialized) return
+        subTv.text = text
+        (statusDot.background as? GradientDrawable)?.setColor(color)
+    }
 
     private val tabNames = listOf("Beranda", "Sisipkan", "Tata Letak", "Tinjau", "Tabel")
     /** Teks sekunder di atas bilah warna utama (kontras tetap >= 4.5:1 di kedua tema). */
-    private val onBarMuted: Int get() = (C.ON_PRIMARY and 0x00FFFFFF) or 0xE6000000.toInt()
+    private val onBarMuted: Int get() = C.MUTED
     private val tabViews = ArrayList<TextView>()
 
     private fun tabsBar(): View {
-        tabRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(C.ACCENT)
-            setPadding(dp(4), 0, dp(4), 0)
+        // tab pita = kontrol segmen: jalur kapsul putih bergaris tipis, pil tinta meluncur cair ke tab terpilih.
+        // (Dulu baris putih polos selebar isinya saja — terpotong di tengah layar.)
+        tabRow = PillRow(this).apply {
+            background = shape(C.SURFACE, 100, C.LINE, 1)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            textOff = onBarMuted
         }
+        tabRow.pillEdge = dp(3).toFloat()
         tabNames.forEachIndexed { i, n ->
             val t = tv(n, 14f, onBarMuted, true).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(12), dp(8), dp(12), dp(9))
-                setOnClickListener { showTab(i) }
+                setPadding(dp(14), dp(7), dp(14), dp(7))
+                background = rippleBg(100)
+                setOnClickListener { if (i != tab) haptic(this); showTab(i) }
             }
+            t.squish(0.95f) { tabRow.invalidate() }
             tabViews.add(t)
-            tabRow.add(t, w = WRAP)
+            tabRow.add(t, w = WRAP, weight = 1f)
         }
         tabViews[4].visibility = View.GONE
-        return HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(tabRow) }
+        // kontrol segmen selebar layar seperti iOS (segmen dibagi rata); bila tab tidak muat, bisa digeser
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = true
+            clipToPadding = false
+            setPadding(dp(12), 0, dp(12), dp(8))
+            addView(tabRow)
+        }
     }
 
+    private var tabShown = false
+
     private fun showTab(i: Int) {
+        val prev = tab
         tab = i
-        tabViews.forEachIndexed { k, t ->
-            val sel = k == i
-            t.setTextColor(if (sel) C.ACCENT else onBarMuted)
-            t.isSelected = sel
-            t.background = if (sel) GradientDrawable().apply {
-                setColor(C.SURFACE); val r = dp(10).toFloat(); cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
-            } else null
-        }
-        ribbon.removeAllViews()
-        toolStates.clear()
-        when (i) {
-            0 -> buildHome()
-            1 -> buildInsert()
-            2 -> buildLayout()
-            3 -> buildReview()
-            4 -> buildTableTab()
+        tabViews.forEachIndexed { k, t -> t.isSelected = k == i }
+        // tab terpilih = pil tinta yang meluncur dari tab sebelumnya (warna teks diatur baris pil)
+        val animate = tabShown && prev != i
+        tabRow.mark(tabViews[i], animate)
+        tabShown = true
+        val build = {
+            ribbon.removeAllViews()
+            toolStates.clear()
+            toolGroup = null
+            // Beranda: ikon format dalam kapsul berkelompok (seperti Pages); tab lain: tombol kapsul ikon + label
+            chipMode = i != 0
+            when (i) {
+                0 -> buildHome()
+                1 -> buildInsert()
+                2 -> buildLayout()
+                3 -> buildReview()
+                4 -> buildTableTab()
+            }
         }
         ribbonScroll.scrollTo(0, 0)
+        // isi pita berganti tanpa kedip: alat lama memudar di atas, alat baru bergeser masuk bersama (satu blok)
+        // dari arah tab yang dipilih, seirama dengan pil penanda
+        if (animate) ribbon.swapContent(if (i > prev) Motion.SHIFT_DP else -Motion.SHIFT_DP, 0) { build() } else build()
         refreshTools()
     }
 
@@ -389,12 +551,19 @@ class DocEditorActivity : AppCompatActivity() {
             setBackgroundColor(C.SURFACE)
             setPadding(dp(14), dp(4), dp(8), dp(4))
         }
-        statusTv = tv("", 11.5f, C.MUTED)
+        statusTv = tv("", 12f, C.MUTED).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         bar.add(statusTv, w = 0, weight = 1f)
-        bar.add(tv("−", 20f, C.TEXT, true).apply { gravity = Gravity.CENTER; setOnClickListener { setZoom(zoom - 0.15f) } }, w = dp(36), h = dp(32))
-        zoomTv = tv("100%", 12f, C.TEXT, true).apply { gravity = Gravity.CENTER; setOnClickListener { setZoom(1f) } }
-        bar.add(zoomTv, w = dp(48))
-        bar.add(tv("+", 20f, C.TEXT, true).apply { gravity = Gravity.CENTER; setOnClickListener { setZoom(zoom + 0.15f) } }, w = dp(36), h = dp(32))
+        // zoom = kapsul kecil berikon, senada dengan bilah atas
+        val z = navCapsule()
+        z.add(capsuleBtn(R.drawable.ic_zoom_out, "Perkecil tampilan", padDp = 8) { setZoom(zoom - 0.15f) }, w = dp(36), h = dp(34))
+        zoomTv = tv("100%", 12f, C.TEXT, true).apply {
+            gravity = Gravity.CENTER
+            contentDescription = "Zoom. Ketuk untuk kembali ke 100%"
+            setOnClickListener { setZoom(1f) }
+        }
+        z.add(zoomTv, w = dp(46), h = dp(34))
+        z.add(capsuleBtn(R.drawable.ic_zoom_in, "Perbesar tampilan", padDp = 8) { setZoom(zoom + 0.15f) }, w = dp(36), h = dp(34))
+        bar.addView(z, LinearLayout.LayoutParams(WRAP, dp(36)))
         return bar
     }
 
@@ -420,33 +589,60 @@ class DocEditorActivity : AppCompatActivity() {
     // Alat pita
     // =========================================================================================
 
+    /** Kapsul kelompok alat yang sedang diisi (tab Beranda); [sep] menutupnya. */
+    private var toolGroup: LinearLayout? = null
+    /** true = alat tampil sebagai kapsul ikon + label (tab selain Beranda). */
+    private var chipMode = false
+
+    private fun ribbonGroup(): LinearLayout = toolGroup ?: LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = shape(C.SURFACE, 100, C.LINE, 1)
+        setPadding(dp(3), 0, dp(3), 0)
+        ribbon.addView(this, LinearLayout.LayoutParams(WRAP, dp(40)).apply { marginEnd = dp(8) })
+        toolGroup = this
+    }
+
+    /**
+     * Alat pita. Beranda: tombol ikon di dalam kapsul berkelompok (B I U …, rata, daftar) — rapi seperti Pages/Word
+     * modern. Tab lain: kapsul ikon + label mendatar (perintahnya kurang jelas tanpa nama). Nama alat selalu ada di
+     * pembaca layar & tooltip (tekan lama). Dulu: kotak ikon dengan label kecil di bawahnya — terlihat seperti templat.
+     */
     private fun toolBox(label: String, glyph: View, glyphW: Int = 26, onClick: () -> Unit, isActive: (() -> Boolean)? = null): View {
         val b = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(7), dp(5), dp(7), dp(4))
-            minimumWidth = dp(52)
-            minimumHeight = dp(52)
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
             isClickable = true
             isFocusable = true
             contentDescription = label
             if (android.os.Build.VERSION.SDK_INT >= 26) tooltipText = label
-            background = rippleBg(10)
             setOnClickListener { onClick(); refreshTools() }
         }
         glyph.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         b.add(glyph, w = dp(glyphW), h = dp(24))
-        b.add(tv(label, 10f, C.MUTED).apply { gravity = Gravity.CENTER; maxLines = 1 }, w = WRAP, top = 2)
+        val chip = chipMode
+        fun bg(on: Boolean) = if (chip) RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(if (on) C.SURFACE3 else C.SURFACE, 100, C.LINE, 1), null)
+            else if (on) RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE3, 100), null) else rippleBg(100)
+        b.background = bg(false)
+        if (chip) {
+            b.setPadding(dp(10), 0, dp(14), 0)
+            b.addView(tv(label, 13f, C.TEXT, true).apply { maxLines = 1; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO },
+                LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
+            ribbon.addView(b, LinearLayout.LayoutParams(WRAP, dp(40)).apply { marginEnd = dp(6) })
+        } else {
+            b.setPadding(dp(6), 0, dp(6), 0)
+            b.minimumWidth = dp(38)
+            ribbonGroup().addView(b, LinearLayout.LayoutParams(WRAP, dp(34)))
+        }
         var last: Boolean? = null
         if (isActive != null) toolStates.add {
             val on = isActive()
             if (on == last) return@add
             last = on
-            b.background = if (on) RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.BLUE_BG, 10), null) else rippleBg(10)
+            b.background = bg(on)
             b.isSelected = on
             b.contentDescription = label + if (on) ", aktif" else ""
         }
-        ribbon.add(b, w = WRAP, h = WRAP)
         return b
     }
 
@@ -457,32 +653,36 @@ class DocEditorActivity : AppCompatActivity() {
             includeFontPadding = false
         }
 
+    /** Pilihan bergaya kapsul (Gaya, Font, Ukuran): nilai saat ini + panah kecil. Namanya ada di pembaca layar. */
     private fun drop(label: String, value: () -> String, widthDp: Int, onClick: () -> Unit) {
+        toolGroup = null
         val b = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(5), dp(5), dp(5), dp(4))
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(8), 0)
             isClickable = true
             isFocusable = true
-            background = rippleBg(8)
+            contentDescription = label
+            if (android.os.Build.VERSION.SDK_INT >= 26) tooltipText = label
+            background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
             setOnClickListener { onClick() }
         }
-        val v = tv("", 13f, C.TEXT, true).apply {
-            maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-            background = shape(C.SURFACE, 6, C.LINE_STRONG, 1)
-            setPadding(dp(8), dp(4), dp(8), dp(4))
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        b.add(v, w = dp(widthDp), h = dp(26))
-        b.add(tv(label, 10f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 2)
+        val v = tv("", 13f, C.TEXT, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        b.add(v, w = 0, weight = 1f)
+        b.add(icon(R.drawable.ic_down, C.MUTED, 14), w = dp(14), h = dp(14), side = 2)
         var last: String? = null
         toolStates.add {
             val now = value()
-            if (now != last) { last = now; v.text = "$now  ▾"; b.contentDescription = "$label: $now. Ketuk untuk mengganti" }
+            if (now != last) { last = now; v.text = now; b.contentDescription = "$label: $now. Ketuk untuk mengganti" }
         }
-        ribbon.add(b, w = WRAP)
+        ribbon.addView(b, LinearLayout.LayoutParams(dp(widthDp + 22), dp(40)).apply { marginEnd = dp(6) })
     }
 
-    private fun sep() = ribbon.add(View(this).apply { setBackgroundColor(C.LINE) }, w = dp(1), h = dp(38), side = 4)
+    /** Pemisah kelompok: kapsul berikutnya dimulai baru (jarak antar-kapsul sudah memisahkan). */
+    private fun sep() {
+        toolGroup = null
+        if (chipMode) ribbon.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+    }
 
     private var fmtMemo: CharFmt? = null
     private var refreshQueued = false
@@ -593,21 +793,31 @@ class DocEditorActivity : AppCompatActivity() {
     // Render dokumen
     // =========================================================================================
 
-    private fun ptPx(): Float = 1.25f * zoom * resources.displayMetrics.density
+    /** Lebar lembar di layar: pada 100% kertas pas selebar layar (seperti tata letak cetak Word), zoom memperbesar. */
+    private fun pageWpx(): Int = ((resources.displayMetrics.widthPixels - dp(16)) * zoom).roundToInt()
+    /** 1 pt kertas dalam px — skala ASLI kertas, jadi baris & lembar terpotong mirip Word. */
+    private fun ptPx(): Float = pageWpx() / ((doc.page?.w ?: 11906) / 20f)
     private fun twPx(tw: Int?): Int = (((tw ?: 0) / 20f) * ptPx()).roundToInt()
-    private fun innerWidth(): Int = resources.displayMetrics.widthPixels - dp(16) - pageCard.paddingLeft - pageCard.paddingRight
+    private fun innerWidth(): Int = pageWpx() - pageBox.paddingLeft - pageBox.paddingRight
 
     private fun applyPageLook() {
         val pg = doc.page
-        fun m(tw: Int?) = (twPx(tw) * 0.35f).roundToInt().coerceIn(dp(12), dp(36))
-        pageCard.setPadding(m(pg?.left), m(pg?.top), m(pg?.right), m(pg?.bottom))
+        val w = pageWpx()
+        pageBox.ratio = (pg?.h ?: 16838).toFloat() / (pg?.w ?: 11906).coerceAtLeast(1)
+        fun m(tw: Int?, def: Int) = twPx(tw ?: def).coerceAtLeast(dp(4))
+        pageBox.setPadding(m(pg?.left, 1440), 0, m(pg?.right, 1440), 0)
+        pageBox.mTop = m(pg?.top, 1440); pageBox.mBottom = m(pg?.bottom, 1440)
+        pageBox.layoutParams = (pageBox.layoutParams ?: LinearLayout.LayoutParams(w, WRAP)).apply { width = w }
+        pageBox.requestLayout()
     }
 
     private var renderGen = 0
 
     /**
-     * Bangun ulang tampilan. Dokumen panjang dibangun bertahap: blok sekitar fokus langsung, sisanya per potongan
-     * tiap frame — layar tidak membeku saat membuka, mengurungkan atau mengubah zoom.
+     * Bangun ulang tampilan. Dokumen panjang dibangun BERTAHAP dengan anggaran waktu per frame: blok sekitar fokus
+     * langsung, sisanya ±6 ms per frame. Tabel besar dipecah per beberapa baris — dulu satu tabel ratusan baris dibangun
+     * dalam satu frame (layar membeku beberapa detik) dan potongan 30 blok per frame membuat mengetik tersendat selama
+     * dokumen besar masih dimuat.
      */
     private fun renderAll(focus: EPara? = null, focusPos: Int = -1) {
         val gen = ++renderGen
@@ -617,34 +827,60 @@ class DocEditorActivity : AppCompatActivity() {
         current = null
         val blocks = ArrayList(doc.body)
         val owner = Owner(doc.body, pageBox, null, null, null)
-        // blok yang memuat paragraf fokus harus ada di potongan pertama
         val focusIdx = if (focus == null) -1 else blocks.indexOfFirst { b -> b === focus || (b is ETable && b.rows.any { r -> r.cells.any { c -> c.paras.any { it === focus } } }) }
-        val first = max(40, focusIdx + 1)
-        var i = 0
+        // antrean tugas: blok biasa = 1 tugas; tabel = kerangka + potongan baris
+        val tasks = ArrayDeque<() -> Unit>()
+        var focusTask = -1
+        for ((bi, b) in blocks.withIndex()) {
+            if (b is ETable && b.rows.size > TABLE_CHUNK) {
+                val tb = TableBuild()
+                tasks.add { tb.init(this, b); pageBox.addView(tb.root) }
+                var r = 0
+                while (r < b.rows.size) {
+                    val from = r; val to = min(b.rows.size, r + TABLE_CHUNK)
+                    tasks.add { for (k in from until to) tb.table.add(tableRowView(b, b.rows[k], tb.colPx), w = WRAP) }
+                    r = to
+                }
+            } else tasks.add { pageBox.addView(blockView(b, owner)) }
+            if (bi == focusIdx) focusTask = tasks.size - 1
+        }
+        var doneCount = 0
+        fun runOne() { tasks.removeFirst()(); doneCount++ }
         fun done() {
             refreshLists()
             updateStatus()
             updateTableTab()
             if (focus != null) rows[focus]?.editor?.let { e -> e.post { focusEditor(e, if (focusPos < 0) e.length() else focusPos) } }
         }
-        while (i < blocks.size && i < first) pageBox.addView(blockView(blocks[i++], owner))
-        if (i >= blocks.size) { done(); return }
+        // potongan pertama: sampai blok fokus, lalu isi layar pertama (±24 ms)
+        while (tasks.isNotEmpty() && doneCount <= focusTask) runOne()
+        val firstDeadline = SystemClock.uptimeMillis() + 24
+        while (tasks.isNotEmpty() && (doneCount < 12 || SystemClock.uptimeMillis() < firstDeadline)) runOne()
+        if (tasks.isEmpty()) { done(); return }
         refreshLists()
         val step = object : Runnable {
             override fun run() {
                 if (gen != renderGen || isFinishing) return
-                val until = min(blocks.size, i + 30)
-                while (i < until) pageBox.addView(blockView(blocks[i++], owner))
-                if (i < blocks.size) pageBox.postOnAnimation(this) else { flushRender = null; done() }
+                val deadline = SystemClock.uptimeMillis() + FRAME_BUDGET_MS
+                do runOne() while (tasks.isNotEmpty() && SystemClock.uptimeMillis() < deadline)
+                if (tasks.isNotEmpty()) pageBox.postOnAnimation(this) else { flushRender = null; done() }
             }
         }
         flushRender = {
             flushRender = null
             renderGen++ // hentikan potongan terjadwal
-            while (i < blocks.size) pageBox.addView(blockView(blocks[i++], owner))
+            while (tasks.isNotEmpty()) runOne()
             done()
         }
         pageBox.postOnAnimation(step)
+    }
+
+    /** Kerangka tabel yang barisnya ditambahkan bertahap. */
+    private class TableBuild {
+        lateinit var root: View
+        lateinit var table: LinearLayout
+        lateinit var colPx: List<Int>
+        fun init(a: DocEditorActivity, t: ETable) { a.tableShell(t, this) }
     }
 
     /** Selesaikan pembangunan bertahap sekarang juga — sebelum operasi yang mengubah struktur dokumen. */
@@ -660,7 +896,7 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun paraRow(p: EPara, owner: Owner): ParaRow {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        if (p.pageBreak) root.add(breakLabel())
+        if (p.pageBreak) { root.add(breakLabel()); pageBox.breakBefore.add(root) }
         val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val label = TextView(this).apply { includeFontPadding = true; visibility = View.GONE }
         val ed = ParaEdit(this, this)
@@ -692,6 +928,7 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     private fun breakView(b: EBreak, owner: Owner): View = breakLabel().apply {
+        pageBox.breakAfter.add(this)
         setOnClickListener {
             sheetActions("Pemisah Halaman", listOf("Hapus pemisah halaman" to { command { removeBlock(b, owner) } }))
         }
@@ -711,7 +948,7 @@ class DocEditorActivity : AppCompatActivity() {
         ed.typeface = DocFonts.get(base.font, base.b == true, base.i == true)
         ed.setTextColor(base.color.let { if (it == null || it == CharFmt.AUTO) ed.autoColor else it })
         ed.gravity = Gravity.TOP or when (e.align) { 1 -> Gravity.CENTER_HORIZONTAL; 2 -> Gravity.END; else -> Gravity.START }
-        ed.justificationMode = if (e.align == 3) Layout.JUSTIFICATION_MODE_INTER_WORD else Layout.JUSTIFICATION_MODE_NONE
+        ed.justificationMode = if (e.align == 3) android.graphics.text.LineBreaker.JUSTIFICATION_MODE_INTER_WORD else android.graphics.text.LineBreaker.JUSTIFICATION_MODE_NONE
         val line = e.line ?: 240
         val mult = if (e.lineRule == null || e.lineRule == "auto") line / 240f
         else ((line / 20f) * ed.ptPx) / (ed.ptPx * (base.sz ?: 22) / 2f * 1.17f)
@@ -774,76 +1011,137 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     private fun loadImage(rId: String, targetW: Int, done: (Bitmap?) -> Unit) {
-        if (imgCache.containsKey(rId)) { done(imgCache[rId]); return }
+        val key = "$rId@$targetW"
+        imgCache.get(key)?.let { done(it); return }
+        if (rId in imgFailed) { done(null); return }
         // Pool bersama (2–3 thread), bukan satu thread baru per gambar: dokumen bergambar banyak tidak membanjiri CPU/RAM.
         Perf.io.execute {
-            val bmp = doc.imageBytes(rId)?.let { decodeSampled(it, targetW) }
-            runOnUiThread { imgCache[rId] = bmp; if (!isFinishing) done(bmp) }
+            val bmp = try { doc.imageBytes(rId)?.let { decodeAny(it, targetW) } } catch (_: Throwable) { null }
+            runOnUiThread { if (bmp != null) imgCache.put(key, bmp) else imgFailed.add(rId); if (!isFinishing) done(bmp) }
         }
+    }
+
+    /**
+     * Gambar dokumen untuk editor. Yang tidak dikenal BitmapFactory diubah dulu seperti di pembaca: TIFF → PNG,
+     * EMF/WMF yang isinya foto/pindaian (gambar tempelan dari Windows) → bitmap di dalamnya. Dulu tampil kotak abu kosong.
+     */
+    private fun decodeAny(b: ByteArray, targetW: Int): Bitmap? {
+        decodeSampled(b, targetW)?.let { return it }
+        val p = try { OfficeImage.prepare(b, (targetW * 2).coerceIn(256, 2048)) } catch (_: Throwable) { null } ?: return null
+        if (p.mime != "image/svg+xml") return decodeSampled(p.bytes, targetW)
+        // metafile: pakai bitmap tertanam terbesar bila memang itu isi utamanya (vektor murni tidak bisa digambar ImageView)
+        val svg = String(p.bytes, Charsets.UTF_8)
+        var best: String? = null; var i = 0
+        while (true) {
+            val a = svg.indexOf(";base64,", i); if (a < 0) break
+            val e = svg.indexOf('"', a); if (e < 0) break
+            if (best == null || e - a - 8 > best.length) best = svg.substring(a + 8, e)
+            i = e
+        }
+        if (best == null || best.length < svg.length / 2) return null
+        return try { decodeSampled(android.util.Base64.decode(best, android.util.Base64.DEFAULT), targetW) } catch (_: Throwable) { null }
     }
 
     private fun decodeSampled(b: ByteArray, targetW: Int): Bitmap? = try {
         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(b, 0, b.size, o)
+        val tw = targetW.coerceAtLeast(64)
         var s = 1
-        while (o.outWidth / (s * 2) >= targetW.coerceAtLeast(64)) s *= 2
-        BitmapFactory.decodeByteArray(b, 0, b.size, BitmapFactory.Options().apply { inSampleSize = s })
+        while (o.outWidth / (s * 2) >= tw) s *= 2
+        val bmp = BitmapFactory.decodeByteArray(b, 0, b.size, BitmapFactory.Options().apply { inSampleSize = s })
+        // langkah 2ⁿ bisa menyisakan bitmap hampir 2× lebar tampil (4× memori): perkecil tepat ke lebar tampilnya
+        if (bmp != null && bmp.width > tw * 5 / 4) {
+            val th = max(1, (bmp.height.toLong() * tw / bmp.width).toInt())
+            val sc = Bitmap.createScaledBitmap(bmp, tw, th, true)
+            if (sc !== bmp) bmp.recycle()
+            sc
+        } else bmp
     } catch (_: Throwable) { null }
 
     private fun newImageView(img: EImage, owner: Owner): View {
         val box = LinearLayout(this).apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
         val iv = ImageView(this).apply {
             adjustViewBounds = true
-            setImageBitmap(decodeSampled(img.bytes, innerWidth()))
+            setBackgroundColor(0xFFF2F3F6.toInt())
             setOnClickListener {
                 sheetActions("Gambar", listOf(
-                    "Ukuran kecil (30%)" to { command { img.widthFrac = 0.3f; renderAll() } },
-                    "Ukuran sedang (50%)" to { command { img.widthFrac = 0.5f; renderAll() } },
-                    "Ukuran besar (75%)" to { command { img.widthFrac = 0.75f; renderAll() } },
-                    "Selebar halaman (100%)" to { command { img.widthFrac = 1f; renderAll() } },
+                    "Ukuran kecil (30%)" to { command { img.widthFrac = 0.3f; rerenderBlock(img) } },
+                    "Ukuran sedang (50%)" to { command { img.widthFrac = 0.5f; rerenderBlock(img) } },
+                    "Ukuran besar (75%)" to { command { img.widthFrac = 0.75f; rerenderBlock(img) } },
+                    "Selebar halaman (100%)" to { command { img.widthFrac = 1f; rerenderBlock(img) } },
                     "Hapus gambar" to { command { removeBlock(img, owner) } }
                 ))
             }
         }
         val w = (innerWidth() * img.widthFrac).toInt()
         box.add(iv, w = w, h = (w * img.hPx.toDouble() / img.wPx.coerceAtLeast(1)).toInt())
+        // didekode di latar (dulu di thread UI saat membangun tampilan: foto besar = layar tersendat)
+        val key = "blk${System.identityHashCode(img.bytes)}@$w"
+        val hit = imgCache.get(key)
+        if (hit != null) { iv.setImageBitmap(hit); iv.background = null }
+        else Perf.io.execute {
+            val bmp = try { decodeAny(img.bytes, w) } catch (_: Throwable) { null }
+            runOnUiThread { if (bmp != null) { imgCache.put(key, bmp); if (!isFinishing) { iv.setImageBitmap(bmp); iv.background = null } } }
+        }
         return box
     }
 
     private fun tableView(t: ETable): View {
+        val tb = TableBuild()
+        tableShell(t, tb)
+        for (row in t.rows) tb.table.add(tableRowView(t, row, tb.colPx), w = WRAP)
+        return tb.root
+    }
+
+    private fun tableShell(t: ETable, tb: TableBuild) {
         val avail = innerWidth()
         val total = t.grid.sum().coerceAtLeast(1)
         val scale = avail.toFloat() / total
         val minCol = dp(56)
-        val colPx = t.grid.map { max((it * scale).toInt(), minCol) }
-        val table = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        for (row in t.rows) {
-            val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            var col = 0
-            for (cell in row.cells) {
-                val wpx = (col until min(colPx.size, col + cell.span)).sumOf { colPx[it] }.takeIf { it > 0 } ?: dp(100)
-                col += cell.span
-                val cb = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    background = GradientDrawable().apply {
-                        setColor(cell.fill ?: Color.WHITE)
-                        setStroke(max(1, dp(1) / 2), if (t.bordered) 0xFF6B6F7A.toInt() else 0xFFD0D3DA.toInt())
-                    }
-                    setPadding(dp(4), dp(2), dp(4), dp(2))
-                }
-                val owner = Owner(asBlocks(cell.paras), cb, cell, row, t)
-                if (cell.paras.isEmpty()) cell.paras.add(EPara.blank(-1, ParaFmt()))
-                cell.paras.forEach { p -> cb.addView(paraRow(p, owner).root) }
-                rowBox.add(cb, w = wpx, h = MATCH)
-            }
-            table.add(rowBox, w = WRAP)
-        }
-        return HorizontalScrollView(this).apply {
+        tb.colPx = t.grid.map { max((it * scale).toInt(), minCol) }
+        tb.table = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        tb.root = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = true
             setPadding(0, dp(4), 0, dp(4))
-            addView(table)
+            addView(tb.table)
         }
     }
+
+    private fun tableRowView(t: ETable, row: ERow, colPx: List<Int>): View {
+        val rowBox = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var col = 0
+        for (cell in row.cells) {
+            val wpx = (col until min(colPx.size, col + cell.span)).sumOf { colPx[it] }.takeIf { it > 0 } ?: dp(100)
+            col += cell.span
+            val cb = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = GradientDrawable().apply {
+                    setColor(cell.fill ?: Color.WHITE)
+                    setStroke(max(1, dp(1) / 2), if (t.bordered) 0xFF6B6F7A.toInt() else 0xFFD0D3DA.toInt())
+                }
+                setPadding(dp(4), dp(2), dp(4), dp(2))
+            }
+            val owner = Owner(asBlocks(cell.paras), cb, cell, row, t)
+            if (cell.paras.isEmpty()) cell.paras.add(EPara.blank(-1, ParaFmt()))
+            cell.paras.forEach { p -> cb.addView(paraRow(p, owner).root) }
+            rowBox.add(cb, w = wpx, h = MATCH)
+        }
+        return rowBox
+    }
+
+    /** Bangun ulang SATU blok di tempatnya (tabel diubah, ukuran gambar) — bukan seluruh dokumen. */
+    private fun rerenderBlock(b: EBlock, old: List<EPara> = emptyList()) {
+        ensureRendered()
+        for (p in old) { rows.remove(p); owners.remove(p) }
+        val idx = doc.body.indexOf(b)
+        if (idx < 0 || idx >= pageBox.childCount) { renderAll(cur()?.para); return }
+        pageBox.removeViewAt(idx)
+        pageBox.addView(blockView(b, Owner(doc.body, pageBox, null, null, null)), idx)
+        refreshLists()
+        updateTableTab()
+    }
+
+    private fun parasOf(t: ETable): List<EPara> = t.rows.flatMap { r -> r.cells.flatMap { it.paras } }
 
     @Suppress("UNCHECKED_CAST")
     private fun asBlocks(l: MutableList<EPara>): MutableList<EBlock> = l as MutableList<EBlock>
@@ -928,7 +1226,8 @@ class DocEditorActivity : AppCompatActivity() {
         syncAll()
         val all = doc.allParas()
         val c = cur()
-        return Snap(doc.body.map { it.deepCopy() }, doc.page, c?.let { all.indexOf(it.para) } ?: -1, c?.selectionStart ?: 0)
+        // salinan BEKU berbagi-isi: blok yang tidak berubah sejak titik urungkan sebelumnya dipakai ulang
+        return Snap(doc.body.map { it.freeze() }, doc.page, c?.let { all.indexOf(it.para) } ?: -1, c?.selectionStart ?: 0)
     }
 
     private fun pushUndo() {
@@ -968,10 +1267,64 @@ class DocEditorActivity : AppCompatActivity() {
     private fun scheduleStatus() { handler.removeCallbacks(statusTick); handler.postDelayed(statusTick, 500) }
 
     private fun restore(s: Snap) {
+        if (restoreInPlace(s)) return
         doc.body.clear(); doc.body.addAll(s.body.map { it.deepCopy() }); doc.page = s.page
         applyPageLook()
         val focus = doc.allParas().getOrNull(s.focusIdx)
         renderAll(focus, s.focusPos)
+    }
+
+    /**
+     * Urungkan DI TEMPAT bila susunan dokumen sama (kasus paling umum: mengurungkan ketikan/format): hanya paragraf yang
+     * berbeda yang diikat ulang. Dulu setiap urungkan membangun ulang seluruh dokumen.
+     */
+    private fun restoreInPlace(s: Snap): Boolean {
+        if (s.page != doc.page) return false
+        val live = doc.body
+        if (live.size != s.body.size) return false
+        val pairs = ArrayList<Pair<EPara, EPara>>()
+        for (i in live.indices) {
+            val f = s.body[i]; val l = live[i]
+            if (f.src !== l) return false
+            when (f) {
+                is EPara -> pairs.add(l as EPara to f)
+                is ETable -> {
+                    val lt = l as ETable
+                    if (lt.grid != f.grid || lt.rows.size != f.rows.size) return false
+                    for (ri in f.rows.indices) {
+                        val fr = f.rows[ri]; val lr = lt.rows[ri]
+                        if (fr.cells.size != lr.cells.size) return false
+                        for (ci in fr.cells.indices) {
+                            val fc = fr.cells[ci]; val lc = lr.cells[ci]
+                            if (fc.paras.size != lc.paras.size) return false
+                            for (pi in fc.paras.indices) { if (fc.paras[pi].src !== lc.paras[pi]) return false; pairs.add(lc.paras[pi] to fc.paras[pi]) }
+                        }
+                    }
+                }
+                is EImage -> if ((l as EImage).widthFrac != f.widthFrac) return false
+                is EBreak -> {}
+            }
+        }
+        for ((l, f) in pairs) if (l.pageBreak != f.pageBreak || l.hasObject != f.hasObject || l.locked != f.locked) return false
+        ensureRendered()
+        var listsChanged = false
+        for ((l, f) in pairs) {
+            if (l.sameAs(f)) continue
+            val pfChanged = l.pf != f.pf
+            val imgChanged = l.images.size != f.images.size || l.images.indices.any { l.images[it] !== f.images[it] }
+            l.text = f.text; l.fmts = f.fmts; l.pf = f.pf; l.tpl = f.tpl
+            if (imgChanged) l.images = ArrayList(f.images)
+            if (pfChanged) listsChanged = true
+            val r = rows[l] ?: continue
+            if (pfChanged) applyParaLook(l, relayout = false)
+            r.editor.bind(l)
+            if (imgChanged) renderParaImages(l)
+        }
+        if (listsChanged) refreshLists()
+        val focus = doc.allParas().getOrNull(s.focusIdx)
+        focus?.let { p -> rows[p]?.editor?.let { e -> e.post { focusEditor(e, s.focusPos.coerceIn(0, e.length())) } } }
+        refreshTools(); scheduleStatus()
+        return true
     }
 
     private fun doUndo() {
@@ -992,12 +1345,12 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun updateUndoButtons() {
         if (!::undoBtn.isInitialized) return
-        undoBtn.alpha = if (undo.isEmpty()) 0.4f else 1f
-        redoBtn.alpha = if (redo.isEmpty()) 0.4f else 1f
+        undoBtn.alpha = if (undo.isEmpty()) 0.35f else 1f
+        redoBtn.alpha = if (redo.isEmpty()) 0.35f else 1f
     }
 
     private fun markDirty() {
-        if (!dirty) { dirty = true; subTv.text = "Ada perubahan belum disimpan" }
+        if (!dirty) { dirty = true; setStatus("Ada perubahan", C.AMBER_FILL) }
         updateUndoButtons()
     }
 
@@ -1550,6 +1903,8 @@ class DocEditorActivity : AppCompatActivity() {
         if (op == "rowDel" && !t.simple && t.rows.size > 1) { toast("Tabel ini memiliki sel gabungan; baris tidak bisa dihapus di sini."); return }
         command {
             syncAll()
+            val oldParas = parasOf(t)
+            val tIdx = doc.body.indexOf(t)
             when (op) {
                 "rowAdd" -> {
                     val nr = ERow(-1, row.cells.mapTo(ArrayList()) { c ->
@@ -1582,8 +1937,19 @@ class DocEditorActivity : AppCompatActivity() {
                 }
                 "delete" -> doc.body.remove(t)
             }
-            renderAll()
+            // hanya tabel ini yang dibangun ulang (dulu seluruh dokumen — lama pada dokumen besar)
+            if (doc.body.indexOf(t) == tIdx && tIdx >= 0) rerenderBlock(t, oldParas)
+            else if (tIdx >= 0 && tIdx < pageBox.childCount && doc.body.indexOf(t) < 0) {
+                for (p in oldParas) { rows.remove(p); owners.remove(p) }
+                pageBox.removeViewAt(tIdx)
+                if (doc.body.isEmpty() || doc.body.last() !is EPara) {
+                    val np = EPara.blank(-1, ParaFmt()); doc.body.add(np); pageBox.addView(paraRow(np, Owner(doc.body, pageBox, null, null, null)).root)
+                }
+                refreshLists(); updateTableTab()
+                (doc.body.getOrNull(min(tIdx, doc.body.size - 1)) as? EPara)?.let { p -> rows[p]?.editor?.let { focusEditor(it, 0) } }
+            } else renderAll()
             if (op == "rowAdd") t.rows.getOrNull(ri + 1)?.cells?.getOrNull(ci)?.paras?.firstOrNull()?.let { p -> rows[p]?.editor?.let { focusEditor(it, 0) } }
+            else if (op != "delete" && doc.body.contains(t)) t.rows.getOrNull(min(ri, t.rows.size - 1))?.cells?.getOrNull(min(ci, (t.rows.getOrNull(min(ri, t.rows.size - 1))?.cells?.size ?: 1) - 1))?.paras?.firstOrNull()?.let { p -> rows[p]?.editor?.let { focusEditor(it, 0) } }
         }
     }
 
@@ -1696,29 +2062,33 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun toggleFindBar() {
         findBar?.let { (it.parent as? ViewGroup)?.removeView(it); findBar = null; return }
-        val bar = vbox().apply { setBackgroundColor(C.SURFACE); setPadding(dp(12), dp(8), dp(12), dp(8)) }
-        val find = EditText(this).apply { hint = "Cari kata…"; isSingleLine = true; textSize = 14f; background = shape(C.SURFACE2, 8, C.LINE_STRONG, 1); setTextColor(C.TEXT); setHintTextColor(C.MUTED); minHeight = dp(44); setPadding(dp(10), dp(6), dp(10), dp(6)) }
-        val repl = EditText(this).apply { hint = "Ganti dengan…"; isSingleLine = true; textSize = 14f; background = shape(C.SURFACE2, 8, C.LINE_STRONG, 1); setTextColor(C.TEXT); setHintTextColor(C.MUTED); minHeight = dp(44); setPadding(dp(10), dp(6), dp(10), dp(6)) }
+        // senada dengan bilah atas: isian kapsul putih bergaris tipis, tombol kapsul tinta, tutup = tombol bulat
+        val bar = vbox().apply { setBackgroundColor(C.SURFACE); setPadding(dp(12), 0, dp(12), dp(8)) }
+        fun field(h: String) = EditText(this).apply {
+            hint = h; isSingleLine = true; imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI; textSize = 14f
+            background = shape(C.SURFACE, 100, C.LINE, 1); setTextColor(C.TEXT); setHintTextColor(C.MUTED); setPadding(dp(16), 0, dp(12), 0)
+        }
+        val find = field("Cari kata…")
+        val repl = field("Ganti dengan…")
         val caseBox = CheckBox(this).apply { text = "Huruf besar/kecil sama persis"; textSize = 12f; setTextColor(C.MUTED) }
         val r1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        r1.add(find, w = 0, weight = 1f)
-        r1.add(smallBtn("Berikutnya") { findNext(find.text.toString(), caseBox.isChecked) }, w = WRAP, side = 4)
-        r1.add(tv("✕", 18f, C.MUTED, true).apply { setPadding(dp(8), dp(4), dp(4), dp(4)); setOnClickListener { toggleFindBar() } }, w = WRAP)
+        r1.add(find, w = 0, h = dp(42), weight = 1f)
+        r1.addView(smallBtn("Berikutnya") { findNext(find.text.toString(), caseBox.isChecked) }, LinearLayout.LayoutParams(WRAP, dp(42)).apply { marginStart = dp(6) })
+        r1.addView(navCircle(R.drawable.ic_close, "Tutup pencarian") { toggleFindBar() }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
         val r2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        r2.add(repl, w = 0, weight = 1f)
-        r2.add(smallBtn("Ganti") { replaceOne(find.text.toString(), repl.text.toString(), caseBox.isChecked) }, w = WRAP, side = 4)
-        r2.add(smallBtn("Semua") { replaceAll(find.text.toString(), repl.text.toString(), caseBox.isChecked) }, w = WRAP)
+        r2.add(repl, w = 0, h = dp(42), weight = 1f)
+        r2.addView(smallBtn("Ganti") { replaceOne(find.text.toString(), repl.text.toString(), caseBox.isChecked) }, LinearLayout.LayoutParams(WRAP, dp(42)).apply { marginStart = dp(6) })
+        r2.addView(smallBtn("Semua") { replaceAll(find.text.toString(), repl.text.toString(), caseBox.isChecked) }, LinearLayout.LayoutParams(WRAP, dp(42)).apply { marginStart = dp(6) })
         bar.add(r1); bar.add(r2, top = 6); bar.add(caseBox)
-        val root = (scroll.parent as ViewGroup).parent as LinearLayout
-        root.addView(bar, root.indexOfChild(scroll.parent as View), LinearLayout.LayoutParams(MATCH, WRAP))
+        // bilah cari menempel di bawah pita, ikut menjadi bagian kaca atas
+        val host = glass?.top ?: ((scroll.parent as ViewGroup).parent as LinearLayout)
+        val at = if (glass != null) host.childCount else host.indexOfChild(scroll.parent as View)
+        host.addView(bar, at, LinearLayout.LayoutParams(MATCH, WRAP))
         findBar = bar
         find.requestFocus()
     }
 
-    private fun smallBtn(label: String, onClick: () -> Unit) = tv(label, 13f, C.ON_PRIMARY, true).apply {
-        gravity = Gravity.CENTER; minHeight = dp(44)
-        background = shape(C.ACCENT, 8); setPadding(dp(10), dp(8), dp(10), dp(8)); setOnClickListener { onClick() }
-    }
+    private fun smallBtn(label: String, onClick: () -> Unit) = navPrimary(label, onClick).apply { textSize = 13f; setPadding(dp(14), 0, dp(14), 0) }
 
     private fun findNext(q: String, matchCase: Boolean): Boolean {
         ensureRendered()
@@ -1830,6 +2200,14 @@ class DocEditorActivity : AppCompatActivity() {
                 val media = if (pg?.landscape == true) base.asLandscape() else base
                 pm.print(docName, view.createPrintDocumentAdapter(docName), PrintAttributes.Builder().setMediaSize(media).build())
             }
+
+            // mesin WebView berhenti (dokumen sangat besar / memori habis): jangan ikut menutup aplikasi & isi editor
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                if (printView === view) printView = null
+                try { view.destroy() } catch (_: Throwable) {}
+                if (!isFinishing && !isDestroyed) toast("Pratinjau cetak gagal dimuat. Coba simpan lalu cetak dari pembaca.")
+                return true
+            }
         }
         wv.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
         toast("Pilih printer atau “Simpan sebagai PDF”")
@@ -1872,7 +2250,7 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     private fun setZoom(z: Float) {
-        val nz = z.coerceIn(0.7f, 2.2f)
+        val nz = z.coerceIn(0.7f, 3f)   // 100% = lembar pas selebar layar; perbesar untuk mengetik nyaman
         if (kotlin.math.abs(nz - zoom) < 0.01f) return
         syncAll()
         val focus = cur()?.para; val pos = cur()?.selectionStart ?: -1
@@ -1920,7 +2298,7 @@ class DocEditorActivity : AppCompatActivity() {
     private fun onSaved(f: File, showSheet: Boolean) {
         savedFile = f
         dirty = false
-        subTv.text = "Tersimpan · ${SimpleDateFormat("HH:mm", Locale("id")).format(Date())}"
+        setStatus("Tersimpan · ${SimpleDateFormat("HH:mm", Locale("id")).format(Date())}", C.SUCCESS)
         val uri = Files.uriFor(this, f)
         Recent.add(this, uri, f.name, DOCX)
         Meta.setLastJob(this, "Dokumen Word Tersimpan", f)

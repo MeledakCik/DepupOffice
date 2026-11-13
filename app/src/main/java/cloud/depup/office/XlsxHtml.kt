@@ -15,6 +15,10 @@ import kotlin.math.roundToInt
 object XlsxHtml {
     private const val MAX_ROWS = 3000
     private const val MAX_COLS = 120
+    /** Excel sendiri hanya menampilkan 1.024 karakter di dalam sel (sisanya di bilah rumus). Teks sel super panjang
+     *  yang diulang di ribuan sel dulu menghasilkan HTML bergiga-giga → kehabisan memori & dokumen tidak tampil. */
+    private const val CELL_CHARS = 1024
+    private fun cap(t: String) = if (t.length > CELL_CHARS) t.substring(0, CELL_CHARS) + "…" else t
 
     private class Font(val name: String?, val size: Double, val b: Boolean, val i: Boolean, val u: Boolean, val strike: Boolean, val color: Int?)
     private class Border(val l: Pair<String, Int?>?, val r: Pair<String, Int?>?, val t: Pair<String, Int?>?, val b: Pair<String, Int?>?)
@@ -26,8 +30,20 @@ object XlsxHtml {
         val numFmts = HashMap<Int, String>()
         val shared = ArrayList<String>(); val sharedRich = ArrayList<String?>()
         var date1904 = false
-        val res = HashMap<String, ByteArray>()
+        val res = DocRes(pkg)
+        /**
+         * Gaya sel → kelas CSS bersama. Dulu tiap sel membawa gaya inline sendiri (±200 karakter): lembar besar jadi
+         * HTML puluhan MB dan WebView menghitung gaya tiap sel satu per satu (gaya inline tidak bisa dibagi).
+         */
+        val cellCls = HashMap<String, String>()
+        val clsCss = StringBuilder()
+        fun cls(css: String): String? = cellCls[css] ?: if (cellCls.size >= 6000) null
+            else ("k" + cellCls.size).also { cellCls[css] = it; clsCss.append("table.grid td.").append(it).append('{').append(css).append('}') }
         var indexed: IntArray = DEFAULT_INDEXED.copyOf()
+        /** Gambar di dalam sel: WPS (=DISPIMG("ID_…")) nama → bagian; Excel "Tempatkan di Sel": vm → nilai kaya → bagian. */
+        val wpsImg = HashMap<String, String>()
+        val vmRv = HashMap<Int, Int>()
+        val rvImg = HashMap<Int, String>()
     }
 
     fun render(bytes: ByteArray, title: String): RenderedDoc = render(OPackage(bytes), title)
@@ -41,6 +57,7 @@ object XlsxHtml {
         wbRels.values.firstOrNull { it.type.endsWith("/theme") }?.let { loadTheme(c, it.target) }
         wbRels.values.firstOrNull { it.type.endsWith("/styles") }?.let { loadStyles(c, it.target) }
         wbRels.values.firstOrNull { it.type.endsWith("/sharedStrings") }?.let { loadShared(c, it.target) }
+        try { loadCellImages(c, wbRels) } catch (_: Throwable) {}
 
         val sheets = wb.all("sheet").mapNotNull { s ->
             val rid = s.attr("id") ?: s.attr("r:id") ?: return@mapNotNull null
@@ -64,10 +81,55 @@ object XlsxHtml {
         val defFont = c.fonts.firstOrNull()
         val html = StringBuilder()
         html.append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>")
-            .append(OxUtil.esc(title)).append("</title><style>").append(OxUtil.fontFaces("https://doc.local/_fonts/")).append(CSS)
+            .append(OxUtil.esc(title)).append("</title><style>").append(OxUtil.fontFaces("https://doc.local/_fonts/")).append(CSS).append(OxUtil.viewerCss("xlsx"))
             .append("table.grid{font-family:").append(OxUtil.fontStack(defFont?.name)).append(";font-size:${defFont?.size ?: 11.0}pt}")
+            .append(c.clsCss)
             .append("</style></head><body><div id=\"main\">").append(body).append("</div><div id=\"tabs\">").append(tabs).append("</div><script>").append(JS).append("</script></body></html>")
+        c.res.finish()
         return RenderedDoc(html.toString(), c.res, title, "xlsx")
+    }
+
+    private val DISPIMG = Regex("DISPIMG\\(\\s*\"([^\"]+)\"")
+
+    /** Sumber gambar dalam sel (WPS Spreadsheet & Excel 365). */
+    private fun loadCellImages(c: Ctx, wbRels: Map<String, OPackage.Rel>) {
+        fun part(suffix: String, def: String): String? = wbRels.values.firstOrNull { it.type.endsWith(suffix) }?.target ?: def.takeIf { c.pkg.has(it) }
+        // WPS: xl/cellimages.xml — <etc:cellImage><xdr:pic>… name="ID_…" … <a:blip r:embed>
+        val ci = wbRels.values.firstOrNull { it.type.contains("cellimage", ignoreCase = true) }?.target ?: "xl/cellimages.xml".takeIf { c.pkg.has(it) }
+        if (ci != null) c.pkg.xml(ci)?.let { x ->
+            val rels = c.pkg.rels(ci)
+            for (pic in x.all("pic")) {
+                val name = pic.first("cNvPr")?.attr("name") ?: continue
+                val rel = pic.first("blip")?.attr("embed")?.let { rels[it] } ?: continue
+                if (!rel.external) c.wpsImg[name] = rel.target
+            }
+        }
+        // Excel: sel ber-vm → metadata.xml (XLRICHVALUE) → rdrichvalue.xml → richValueRel.xml → gambar
+        val md = part("/sheetMetadata", "xl/metadata.xml") ?: return
+        val rvPath = part("/rdRichValue", "xl/richData/rdrichvalue.xml") ?: return
+        val relPath = part("/richValueRel", "xl/richData/richValueRel.xml") ?: return
+        val mdx = c.pkg.xml(md) ?: return
+        val types = mdx.first("metadataTypes")?.children("metadataType")?.map { it.attr("name") } ?: return
+        val fut = mdx.all("futureMetadata").firstOrNull { it.attr("name") == "XLRICHVALUE" }?.children("bk")?.map { it.first("rvb")?.attr("i")?.toIntOrNull() ?: -1 } ?: return
+        mdx.first("valueMetadata")?.children("bk")?.forEachIndexed { i, bk ->
+            val rc = bk.child("rc") ?: return@forEachIndexed
+            val t = rc.attr("t")?.toIntOrNull() ?: return@forEachIndexed
+            if (types.getOrNull(t - 1) != "XLRICHVALUE") return@forEachIndexed
+            val rv = fut.getOrNull(rc.attr("v")?.toIntOrNull() ?: -1) ?: return@forEachIndexed
+            if (rv >= 0) c.vmRv[i + 1] = rv
+        }
+        val structs = c.pkg.xml(part("/rdRichValueStructure", "xl/richData/rdrichvaluestructure.xml") ?: "")?.all("s") ?: emptyList()
+        val relx = c.pkg.xml(relPath) ?: return
+        val relRels = c.pkg.rels(relPath)
+        val relIds = relx.all("rel").map { it.attr("r:id") ?: it.attr("id") }
+        c.pkg.xml(rvPath)?.all("rv")?.forEachIndexed { k, rv ->
+            val st = structs.getOrNull(rv.attr("s")?.toIntOrNull() ?: -1)
+            if (st != null && st.attr("t") != "_localImage") return@forEachIndexed
+            val keyIdx = st?.children("k")?.indexOfFirst { it.attr("n") == "_rvRel:LocalImageIdentifier" }?.takeIf { it >= 0 } ?: 0
+            val relIdx = rv.children("v").getOrNull(keyIdx)?.text?.trim()?.toIntOrNull() ?: return@forEachIndexed
+            val rel = relIds.getOrNull(relIdx)?.let { relRels[it] } ?: return@forEachIndexed
+            if (!rel.external) c.rvImg[k] = rel.target
+        }
     }
 
     // ------------------------------------------------------------------ tema & gaya
@@ -130,7 +192,7 @@ object XlsxHtml {
         val sst = x.child("sst") ?: x
         for (si in sst.children("si")) {
             val runs = si.children("r")
-            if (runs.isEmpty()) { c.shared.add(si.child("t")?.text ?: si.all("t").joinToString("") { it.text }); c.sharedRich.add(null) }
+            if (runs.isEmpty()) { c.shared.add(cap(si.child("t")?.text ?: si.all("t").joinToString("") { it.text })); c.sharedRich.add(null) }
             else {
                 val plain = StringBuilder(); val rich = StringBuilder()
                 for (r in runs) {
@@ -150,7 +212,9 @@ object XlsxHtml {
                         rich.append("\">").append(OxUtil.esc(t)).append("</span>")
                     }
                 }
-                c.shared.add(plain.toString()); c.sharedRich.add(rich.toString())
+                // teks kaya yang terlalu panjang: tampilkan polos terpotong (format per-run tidak sebanding biayanya)
+                if (plain.length > CELL_CHARS) { c.shared.add(cap(plain.toString())); c.sharedRich.add(null) }
+                else { c.shared.add(plain.toString()); c.sharedRich.add(rich.toString()) }
             }
         }
     }
@@ -164,7 +228,7 @@ object XlsxHtml {
     private fun rowIndex(ref: String): Int = ref.dropWhile { it.isLetter() || it == '$' }.toIntOrNull()?.minus(1) ?: 0
     fun colName(i: Int): String { var n = i + 1; val sb = StringBuilder(); while (n > 0) { val m = (n - 1) % 26; sb.insert(0, ('A' + m)); n = (n - 1) / 26 }; return sb.toString() }
 
-    private class Cell(val v: String, val rich: String?, val xf: Int, val type: String, val num: Double?)
+    private class Cell(val v: String, val rich: String?, val xf: Int, val type: String, val num: Double?, val img: String? = null)
 
     private fun sheet(c: Ctx, path: String, out: StringBuilder) {
         val x = c.pkg.xml(path) ?: return
@@ -212,8 +276,12 @@ object XlsxHtml {
                     "str" -> vNode?.text ?: ""
                     else -> { num = vNode?.text?.trim()?.toDoubleOrNull(); vNode?.text ?: "" }
                 }
-                if (text.isEmpty() && s == 0) continue
-                cells[(r.toLong() shl 20) or cIdx.toLong()] = Cell(text, rich, s, t, num)
+                // gambar di dalam sel
+                val img = cel.attr("vm")?.toIntOrNull()?.let { c.vmRv[it] }?.let { c.rvImg[it] }
+                    ?: (if (c.wpsImg.isNotEmpty()) (cel.child("f")?.text ?: text).let { f -> if (f.contains("DISPIMG")) DISPIMG.find(f)?.groupValues?.get(1)?.let { c.wpsImg[it] } else null } else null)
+                if (text.isEmpty() && s == 0 && img == null) continue
+                cells[(r.toLong() shl 20) or cIdx.toLong()] = Cell(if (img != null) "" else text, if (img != null) null else rich, s, t, num, img)
+                if (img != null) { maxR = max(maxR, r); maxC = max(maxC, cIdx) }
                 if (text.isNotEmpty() || (c.xfs.getOrNull(s)?.let { it.fill != 0 || it.border != 0 } == true)) { maxR = max(maxR, r); maxC = max(maxC, cIdx) }
             }
             if (row.children("c").isEmpty() && rowH.containsKey(r)) { /* baris kosong bertinggi khusus */ }
@@ -338,7 +406,7 @@ object XlsxHtml {
                         val fmt = fmtCode(c, xf?.numFmt ?: 0)
                         val (s, col) = NumFmt.format(cell.num, fmt, c.date1904)
                         shown = s; colorOverride = col; isNum = true
-                    } else shown = cell.v
+                    } else shown = cap(cell.v)
                 }
                 colorOverride?.let { css.append("color:").append(OxUtil.hex(it)).append(';') }
                 val hAlign = when (align) {
@@ -351,9 +419,21 @@ object XlsxHtml {
                 // teks meluber hanya bila sel tetangga (arah luberan) kosong — seperti Excel
                 val nextKey = if (hAlign == "right") (r.toLong() shl 20) or (ci - 1).toLong() else (r.toLong() shl 20) or (ci + 1).toLong()
                 val overflow = shown.isNotEmpty() && xf?.wrap != true && m == null && !isNum && cells[nextKey]?.v.isNullOrEmpty() && nextKey !in covered
-                if (overflow) out.append(" class=\"o\"")
-                if (css.isNotEmpty()) out.append(" style=\"").append(css).append('"')
+                val cs = if (css.isNotEmpty()) css.toString() else null
+                val k = cs?.let { c.cls(it) }
+                if (overflow || k != null) {
+                    out.append(" class=\"")
+                    if (overflow) out.append('o')
+                    if (k != null) { if (overflow) out.append(' '); out.append(k) }
+                    out.append('"')
+                }
+                if (cs != null && k == null) out.append(" style=\"").append(cs).append('"')
                 out.append(">")
+                cell?.img?.let { part ->
+                    var iw = cw(ci); var ih = rh(r)
+                    if (m != null) { iw = 0.0; for (k in 0 until m[1]) iw += cw(ci + k); ih = 0.0; for (k in 0 until m[0]) ih += rh(r + k) }
+                    c.res.url(part, iw, ih)?.let { src -> out.append("<img class=\"ci\" src=\"").append(src).append("\" style=\"width:${max(1.0, iw - 3)}px;height:${max(1.0, ih - 3)}px\">") }
+                }
                 if (shown.isNotEmpty()) {
                     val content = cell?.rich?.takeIf { cell.type == "s" } ?: OxUtil.esc(shown)
                     if (overflow) out.append("<div class=\"ov ").append(hAlign).append("\">").append(content).append("</div>")
@@ -374,8 +454,9 @@ object XlsxHtml {
                 val h = if (a.hPx > 0) a.hPx else (20 + rowY[a.r1.coerceIn(0, nRows)] + a.dy1) - y0
                 if (w <= 1 || h <= 1) continue
                 out.append("<div class=\"pic\" style=\"left:${x0}px;top:${y0}px;width:${w}px;height:${h}px\">")
-                if (a.src != null) out.append("<img src=\"").append(a.src).append("\" style=\"width:100%;height:100%\">")
-                else out.append("<div class=\"ph\">").append(OxUtil.esc(a.label)).append("</div>")
+                val src = a.part?.let { c.res.url(it, w, h) }
+                if (src != null) out.append("<img src=\"").append(src).append("\" style=\"width:100%;height:100%\">")
+                else out.append("<div class=\"ph\">").append(OxUtil.esc(a.label.ifEmpty { "Gambar" })).append("</div>")
                 out.append("</div>")
             }
         }
@@ -384,7 +465,7 @@ object XlsxHtml {
     }
 
     private class Anchor(val c0: Int, val r0: Int, val dx0: Double, val dy0: Double, val c1: Int, val r1: Int, val dx1: Double, val dy1: Double,
-                         val wPx: Double, val hPx: Double, val src: String?, val label: String)
+                         val wPx: Double, val hPx: Double, val part: String?, val label: String)
 
     private fun anchorsOf(c: Ctx, dx: XNode, path: String): List<Anchor> {
         val rels = c.pkg.rels(path)
@@ -401,8 +482,8 @@ object XlsxHtml {
             var src: String? = null; var label = ""
             val blip = a.first("blip")
             if (blip != null) {
-                val rel = blip.attr("embed")?.let { rels[it] }
-                if (rel != null && !rel.external && OxUtil.isImage(rel.target)) c.pkg.files[rel.target]?.let { c.res[rel.target] = it; src = "https://doc.local/" + rel.target }
+                val rel = (blip.attr("embed") ?: blip.attr("link"))?.let { rels[it] }
+                if (rel != null && !rel.external && c.pkg.has(rel.target)) src = rel.target
                 if (src == null) label = "Gambar"
             } else if (a.first("chart") != null) label = "Grafik"
             else if (a.first("sp") != null) {
@@ -457,6 +538,7 @@ th.rh{left:0;text-align:center;width:40px}
 th.corner{top:0;left:0;z-index:3}
 thead th{position:sticky;top:0}
 .pic{position:absolute;z-index:4}
+img.ci{display:block;object-fit:contain;max-width:none;margin:1px auto}
 .pic .ph{width:100%;height:100%;box-sizing:border-box;border:1px dashed #9aa0a6;background:rgba(241,243,246,.85);display:flex;align-items:center;justify-content:center;font:12px sans-serif;color:#5f6368}
 #tabs{position:fixed;left:0;right:0;bottom:0;background:#f3f4f6;border-top:1px solid #d5d8dc;white-space:nowrap;overflow-x:auto;padding:4px;z-index:10}
 .tab{font:13px sans-serif;border:1px solid #d5d8dc;background:#fff;color:#3c4043;padding:6px 12px;margin-right:4px;border-radius:4px}
@@ -477,30 +559,58 @@ object NumFmt {
     private val MONTHS = arrayOf("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
     private val DAYS = arrayOf("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
 
+    // Pola dikompilasi SEKALI (dulu dikompilasi ulang untuk setiap sel — lembar ribuan baris jadi lambat dibuka).
+    private val COLOR = Regex("\\[(Black|White|Red|Green|Blue|Yellow|Magenta|Cyan|Color\\s*\\d+)]", RegexOption.IGNORE_CASE)
+    private val CONDITION = Regex("\\[[<>=][^]]*]")
+    private val CURRENCY = Regex("\\[\\$([^-\\]]*)(-[^]]*)?]")
+    private val DIGIT_SLOTS = Regex("[0#?]")
+    private val EXP_ZEROS = Regex("0+E")
+    private val FRACTION_SECONDS = Regex("s+\\.0")
+    private val AM_PM = Regex("AM/PM|A/P", RegexOption.IGNORE_CASE)
+
+    /** Satu bagian kode format yang sudah dibersihkan (warna, kondisi, mata uang) — sama untuk semua sel berformat ini. */
+    private class Section(val sec: String, val color: Int?, val date: Boolean)
+    private val sections = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+    private val prepared = java.util.concurrent.ConcurrentHashMap<String, Section>()
+
+    private fun sectionsOf(code: String): List<String> = sections[code] ?: splitSections(code).also {
+        if (sections.size > 256) sections.clear()
+        sections[code] = it
+    }
+
+    private fun prepare(sec0: String): Section = prepared[sec0] ?: run {
+        var color: Int? = null
+        COLOR.find(sec0)?.let { m ->
+            color = when (m.groupValues[1].lowercase()) { "red" -> 0xFF0000; "blue" -> 0x0000FF; "green" -> 0x00B050; "yellow" -> 0xFFFF00; "magenta" -> 0xFF00FF; "cyan" -> 0x00FFFF; "white" -> 0xFFFFFF; else -> 0 }
+        }
+        var sec = COLOR.replace(sec0, "")
+        sec = CONDITION.replace(sec, "")
+        // mata uang [$Rp-421] → Rp
+        sec = CURRENCY.replace(sec) { it.groupValues[1] }
+        val p = Section(sec, color, isDate(sec))
+        if (prepared.size > 512) prepared.clear()
+        prepared[sec0] = p
+        p
+    }
+
     /** Mengembalikan teks + warna (dari [Red] dll) bila ada. */
     fun format(v: Double, code0: String, date1904: Boolean): Pair<String, Int?> {
         val code = code0.trim()
         if (code.equals("General", true) || code.isEmpty()) return general(v) to null
         if (code == "@") return general(v) to null
-        val sections = splitSections(code)
+        val sections = sectionsOf(code)
         var sec: String; var value = v
         when {
             sections.size >= 2 && v < 0 -> { sec = sections[1]; value = -v }
             sections.size >= 3 && v == 0.0 -> sec = sections[2]
             else -> sec = sections[0]
         }
-        // kondisi [>=100] diabaikan; warna
-        var color: Int? = null
-        val colorRe = Regex("\\[(Black|White|Red|Green|Blue|Yellow|Magenta|Cyan|Color\\s*\\d+)]", RegexOption.IGNORE_CASE)
-        colorRe.find(sec)?.let { m ->
-            color = when (m.groupValues[1].lowercase()) { "red" -> 0xFF0000; "blue" -> 0x0000FF; "green" -> 0x00B050; "yellow" -> 0xFFFF00; "magenta" -> 0xFF00FF; "cyan" -> 0x00FFFF; "white" -> 0xFFFFFF; else -> 0 }
-        }
-        sec = colorRe.replace(sec, "")
-        sec = Regex("\\[[<>=][^]]*]").replace(sec, "")
-        // mata uang [$Rp-421] → Rp
-        sec = Regex("\\[\\$([^-\\]]*)(-[^]]*)?]").replace(sec) { it.groupValues[1] }
+        // kondisi [>=100] diabaikan; warna & mata uang dibersihkan sekali per bagian format
+        val p = prepare(sec)
+        val color = p.color
+        sec = p.sec
         val neg = v < 0 && sections.size < 2
-        if (isDate(sec)) return formatDate(v, sec, date1904) to color
+        if (p.date) return formatDate(v, sec, date1904) to color
         val s = formatNumber(if (neg) -value else value, sec)
         return (if (neg && s.any { it.isDigit() && it != '0' }) "-$s" else if (neg) "-$s" else s) to color
     }
@@ -524,7 +634,7 @@ object NumFmt {
         if (v == 0.0) return "0"
         if (v == floor(v) && abs(v) < 1e11) return v.toLong().toString()
         val a = abs(v)
-        if (a >= 1e11 || a < 1e-9) return String.format(java.util.Locale.US, "%.5E", v).replace(Regex("0+E"), "E").replace(".E", "E")
+        if (a >= 1e11 || a < 1e-9) return String.format(java.util.Locale.US, "%.5E", v).replace(EXP_ZEROS, "E").replace(".E", "E")
         // maksimal 11 digit signifikan
         val digitsBefore = if (a >= 1) floor(kotlin.math.log10(a)).toInt() + 1 else 0
         val dec = (10 - digitsBefore).coerceIn(0, 10)
@@ -585,7 +695,7 @@ object NumFmt {
         while (p.endsWith(",")) { value /= 1000; p = p.dropLast(1) }
         val num = if (p.contains("E+") || p.contains("E-")) sci(value, p) else plain(value, p)
         val sb = StringBuilder()
-        for ((k, t) in tokens.withIndex()) sb.append(if (k == pIdx) num else if (t.first) t.second.replace(Regex("[0#?]"), "") else t.second)
+        for ((k, t) in tokens.withIndex()) sb.append(if (k == pIdx) num else if (t.first) t.second.replace(DIGIT_SLOTS, "") else t.second)
         if (pctCount > 0 && !sb.contains('%')) sb.append('%')
         return sb.toString()
     }
@@ -633,12 +743,12 @@ object NumFmt {
         if (date1904) epoch = java.time.LocalDate.of(1904, 1, 1)
         else { epoch = java.time.LocalDate.of(1899, 12, 31); if (days >= 60) days -= 1 }
         val date = epoch.plusDays(if (date1904) days else days)
-        val hasFrac = Regex("s+\\.0").containsMatchIn(sec.lowercase())
+        val hasFrac = FRACTION_SECONDS.containsMatchIn(sec.lowercase())
         val totalMs = Math.round(frac * 86400000.0)
         var secs = if (hasFrac) totalMs / 1000 else (frac * 86400 + 0.5).toLong()
         val totalH = floor(v * 24).toLong()
         val hh = (secs / 3600).toInt(); val mi = ((secs % 3600) / 60).toInt(); val ss = (secs % 60).toInt()
-        val ampm = Regex("AM/PM|A/P", RegexOption.IGNORE_CASE).containsMatchIn(sec)
+        val ampm = AM_PM.containsMatchIn(sec)
         val out = StringBuilder()
         var i = 0; var lastWasHour = false
         val s = sec

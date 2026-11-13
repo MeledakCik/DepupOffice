@@ -15,6 +15,17 @@
         <item name="android:textColorHint">@color/muted</item>
         <item name="alertDialogTheme">@style/DlgTheme</item>
         <item name="android:popupMenuStyle">@style/PopupMenu</item>
+        <item name="android:fontFamily">@font/funnel_display_regular</item>
+        <item name="fontFamily">@font/funnel_display_regular</item>
+        <item name="android:windowAnimationStyle">@style/ScreenMotion</item>
+    </style>
+
+    <!-- Perpindahan layar seragam di seluruh aplikasi (otomatis mati bila animasi HP dimatikan). -->
+    <style name="ScreenMotion" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/act_open_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/act_open_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/act_close_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/act_close_exit</item>
     </style>
 
     <style name="PopupMenu" parent="Widget.AppCompat.PopupMenu">
@@ -29,6 +40,8 @@
         <item name="buttonBarPositiveButtonStyle">@style/DlgButton</item>
         <item name="buttonBarNegativeButtonStyle">@style/DlgButton</item>
         <item name="buttonBarNeutralButtonStyle">@style/DlgButton</item>
+        <item name="android:fontFamily">@font/funnel_display_regular</item>
+        <item name="fontFamily">@font/funnel_display_regular</item>
     </style>
 
     <!-- Tombol dialog: huruf biasa (bukan KAPITAL semua) agar lebih mudah dibaca, tinggi 48dp. -->
@@ -37,6 +50,8 @@
         <item name="android:textColor">@color/accent</item>
         <item name="android:textSize">15sp</item>
         <item name="android:minHeight">48dp</item>
+        <item name="android:fontFamily">@font/funnel_display_medium</item>
+        <item name="fontFamily">@font/funnel_display_medium</item>
     </style>
 
     <style name="SplashTheme" parent="AppTheme">

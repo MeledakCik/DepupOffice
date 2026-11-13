@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Layar baru masuk: bergeser sedikit dari kanan sambil menebal cepat, mendarat lembut.
+     Seirama dengan layar lama (durasi & kurva gerak sama) — tanpa skala, tanpa jeda gelap. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android" android:shareInterpolator="false" android:zAdjustment="top">
+    <translate android:fromXDelta="6%" android:toXDelta="0" android:duration="350"
+        android:interpolator="@interpolator/emphasized_decelerate" />
+    <alpha android:fromAlpha="0" android:toAlpha="1" android:duration="150"
+        android:interpolator="@interpolator/standard" />
+</set>

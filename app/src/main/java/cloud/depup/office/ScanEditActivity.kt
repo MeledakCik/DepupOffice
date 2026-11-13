@@ -90,6 +90,22 @@ class CropView(ctx: Context) : View(ctx) {
     private val bad = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = C.RED; style = Paint.Style.STROKE; strokeWidth = ctx.dp(3).toFloat()
     }
+    // Objek gambar dipakai ulang: kanvas ini digambar ulang tiap frame selama sudut digeser (60 fps) — membuat
+    // Path/RectF/Paint baru di setiap frame memicu GC dan menyendat gerakan.
+    private val qPath = android.graphics.Path()
+    private val outPath = android.graphics.Path().apply { fillType = android.graphics.Path.FillType.EVEN_ODD }
+    private val loupePath = android.graphics.Path()
+    private val tmpRF = RectF()
+    private val srcR = android.graphics.Rect()
+    private val dstR = RectF()
+    private val redFill = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
+    private val redLive = Paint().apply { color = 0xAA000000.toInt(); style = Paint.Style.FILL }
+    private val redStroke = Paint().apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = ctx.dp(2).toFloat() }
+    private val wmPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x66B2402F.toInt()
+        isFakeBoldText = true
+        textAlign = Paint.Align.CENTER
+    }
 
     // drag: 0 = tidak ada, 1..4 = sudut ke-(n-1), 11..14 = sisi ke-(n-11), 20 = geser semua
     private var drag = 0
@@ -178,7 +194,9 @@ class CropView(ctx: Context) : View(ctx) {
     private fun px(i: Int) = img.left + quad[2 * i] * img.width()
     private fun py(i: Int) = img.top + quad[2 * i + 1] * img.height()
 
-    private fun quadPath(): android.graphics.Path = android.graphics.Path().apply {
+    /** Jalur segi-empat potong (objek yang sama dipakai ulang — jangan disimpan pemanggil). */
+    private fun quadPath(): android.graphics.Path = qPath.apply {
+        reset()
         moveTo(px(0), py(0)); lineTo(px(1), py(1)); lineTo(px(2), py(2)); lineTo(px(3), py(3)); close()
     }
 
@@ -187,7 +205,8 @@ class CropView(ctx: Context) : View(ctx) {
         c.drawBitmap(if (fMode == 3) (magicBmp ?: b) else b, null, img, imgPaint)
 
         // Redupkan area di luar segi-empat
-        val outside = android.graphics.Path().apply {
+        val outside = outPath.apply {
+            reset()
             fillType = android.graphics.Path.FillType.EVEN_ODD
             addRect(img, android.graphics.Path.Direction.CW)
             addPath(quadPath())
@@ -210,7 +229,7 @@ class CropView(ctx: Context) : View(ctx) {
             val mx = (px(k) + px(j)) / 2f; val my = (py(k) + py(j)) / 2f
             val ang = Math.toDegrees(kotlin.math.atan2((py(j) - py(k)).toDouble(), (px(j) - px(k)).toDouble())).toFloat()
             c.save(); c.rotate(ang, mx, my)
-            val rr = RectF(mx - r * 3, my - r, mx + r * 3, my + r)
+            val rr = tmpRF.apply { set(mx - r * 3, my - r, mx + r * 3, my + r) }
             c.drawRoundRect(rr, r, r, if (drag == 11 + k) hActive else hFill)
             c.drawRoundRect(rr, r, r, hRing)
             c.restore()
@@ -223,8 +242,8 @@ class CropView(ctx: Context) : View(ctx) {
 
         // Lukis sensur hitam (blackout/redaksi)
         if (activeRedactions.isNotEmpty()) {
-            val rFill = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL }
-            val rStroke = Paint().apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = context.dp(2).toFloat() }
+            val rFill = redFill
+            val rStroke = redStroke
             for (red in activeRedactions) {
                 val rx1 = img.left + red.left * img.width()
                 val ry1 = img.top + red.top * img.height()
@@ -237,22 +256,15 @@ class CropView(ctx: Context) : View(ctx) {
 
         val curR = currentRedactRect
         if (isRedactMode && curR != null) {
-            val rFill = Paint().apply { color = 0xAA000000.toInt(); style = Paint.Style.FILL }
-            val rStroke = Paint().apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = context.dp(2).toFloat() }
-            c.drawRect(curR, rFill)
-            c.drawRect(curR, rStroke)
+            c.drawRect(curR, redLive)
+            c.drawRect(curR, redStroke)
         }
 
         // Lukis pratinjau watermark
         if (!activeWatermark.isNullOrBlank()) {
             c.save()
             c.rotate(-32f, img.centerX(), img.centerY())
-            val wmPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0x66B2402F.toInt()
-                textSize = minOf(img.width(), img.height()) * 0.08f
-                isFakeBoldText = true
-                textAlign = Paint.Align.CENTER
-            }
+            wmPaint.textSize = minOf(img.width(), img.height()) * 0.08f
             c.drawText(activeWatermark!!, img.centerX(), img.centerY(), wmPaint)
             c.restore()
         }
@@ -273,15 +285,15 @@ class CropView(ctx: Context) : View(ctx) {
             val lCy = size + context.dp(16)
 
             c.save()
-            val path = android.graphics.Path().apply { addCircle(lCx, lCy, size, android.graphics.Path.Direction.CW) }
+            val path = loupePath.apply { reset(); addCircle(lCx, lCy, size, android.graphics.Path.Direction.CW) }
             c.clipPath(path)
             c.drawColor(Color.WHITE)
             val half = (size / 2.5f) * (b.width / img.width()).coerceAtLeast(0.6f)
-            val srcR = android.graphics.Rect(
+            srcR.set(
                 (bx - half).toInt().coerceAtLeast(0), (by - half).toInt().coerceAtLeast(0),
                 (bx + half).toInt().coerceAtMost(b.width), (by + half).toInt().coerceAtMost(b.height)
             )
-            val dstR = RectF(
+            dstR.set(
                 lCx - size * (bx - srcR.left) / half, lCy - size * (by - srcR.top) / half,
                 lCx + size * (srcR.right - bx) / half, lCy + size * (srcR.bottom - by) / half
             )
@@ -525,7 +537,7 @@ class ScanEditActivity : AppCompatActivity() {
         fun overlay(res: Int, label: String, f: () -> Unit) = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(0x99001156.toInt(), 100)
+            background = shape(0x99111111.toInt(), 100)
             setPadding(dp(12), dp(7), dp(14), dp(7))
             add(icon(res, Color.WHITE, 16), w = dp(16), h = dp(16))
             add(tv(label, 12f, Color.WHITE, true), w = WRAP, side = 6)
@@ -628,7 +640,7 @@ class ScanEditActivity : AppCompatActivity() {
                 tag = m
             }
             val bg = when (m) { 2 -> Color.BLACK; 1 -> C.LINE_STRONG; 3 -> C.BLUE_BG; else -> C.SURFACE2 }
-            val bc = when (m) { 2 -> Color.WHITE; 1 -> 0xFF4B5468.toInt(); else -> C.ACCENT }
+            val bc = when (m) { 2 -> Color.WHITE; 1 -> 0xFF5A5853.toInt(); else -> C.ACCENT }
             val swatch = FrameLayout(this)
             val inner = vbox(8).apply { background = shape(bg, 10) }
             inner.add(View(this).apply { background = shape(bc, 3) }, h = dp(5))
@@ -677,7 +689,7 @@ class ScanEditActivity : AppCompatActivity() {
             .also { (foot.getChildAt(foot.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(8) }
         root.add(foot)
 
-        setContentView(root)
+        setContentView(Glass.scaffold(root))
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { askDiscard() }
         })
@@ -745,10 +757,17 @@ class ScanEditActivity : AppCompatActivity() {
         } catch (t: Throwable) { fail(t); null }
     }
 
+    private var lastShown = -1
+
     private fun show() {
         cur = cur.coerceIn(0, pages.size - 1)
         val pg = pages[cur]
         val b = preview(pg) ?: return
+        val prevShown = lastShown
+        val pageChanged = prevShown != cur
+        lastShown = cur
+        // halaman berganti: gambar bergeser masuk sedikit dari arah halaman berikutnya/sebelumnya
+        if (pageChanged && prevShown >= 0) cv.glide(0, 0, if (cur > prevShown) Motion.SHIFT_DP + 2 else -(Motion.SHIFT_DP + 2))
         cv.onChange = { pg.setQuad(cv.quad) }
         cv.onRelease = { updateCropHint() }
         cv.setBitmap(b, pg.rot, pg.flip, pg.quad, pg.skew)
@@ -781,9 +800,15 @@ class ScanEditActivity : AppCompatActivity() {
             }, w = dp(36), h = dp(36), side = 0).also {
                 (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
             }
-            dots.add(View(this).apply { background = shape(if (on) C.ACCENT else C.LINE_STRONG, 100) },
-                w = dp(if (on) 18 else 8), h = dp(8), side = 0).also {
+            val dot = View(this).apply { background = shape(if (on) C.ACCENT else C.LINE_STRONG, 100) }
+            dots.add(dot, w = dp(if (on && !(pageChanged && Motion.on())) 18 else 8), h = dp(8), side = 0).also {
                 (dots.getChildAt(dots.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(6)
+            }
+            // titik halaman aktif memanjang dari bulat ke pil (seperti indikator halaman iOS)
+            if (on && pageChanged && Motion.on()) android.animation.ValueAnimator.ofInt(dp(8), dp(18)).apply {
+                duration = Motion.MED; interpolator = Motion.STANDARD
+                addUpdateListener { a -> dot.layoutParams = dot.layoutParams.also { it.width = a.animatedValue as Int } }
+                start()
             }
         }
     }

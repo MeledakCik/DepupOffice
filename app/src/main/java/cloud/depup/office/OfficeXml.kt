@@ -42,7 +42,7 @@ object XmlDom {
         if (b.size >= 2 && b[0] == 0xFF.toByte() && b[1] == 0xFE.toByte()) return String(b, 2, b.size - 2, Charsets.UTF_16LE)
         if (b.size >= 2 && b[0] == 0xFE.toByte() && b[1] == 0xFF.toByte()) return String(b, 2, b.size - 2, Charsets.UTF_16BE)
         val s = String(b, Charsets.UTF_8)
-        return if (s.isNotEmpty() && s[0] == '﻿') s.substring(1) else s
+        return if (s.isNotEmpty() && s[0] == '\uFEFF') s.substring(1) else s
     }
 
     fun parse(s: String): XNode {
@@ -113,13 +113,20 @@ object XmlDom {
         return resolveAlternate(root)
     }
 
-    /** mc:AlternateContent → pakai mc:Choice (format modern); Fallback dibuang. */
+    /**
+     * mc:AlternateContent → pakai mc:Choice (format modern), KECUALI pilihan yang butuh VML ("v"): objek OLE di PPTX
+     * menaruh gambar pratinjaunya hanya di Fallback — dulu objek seperti itu tampil kosong.
+     */
     private fun resolveAlternate(n: XNode): XNode {
         var idx = 0
         while (idx < n.kids.size) {
             val k = n.kids[idx]
             if (k.name == "AlternateContent") {
-                val pick = k.child("Choice") ?: k.child("Fallback")
+                // Pilihan pertama yang semua namespace "Requires"-nya kita pahami; selain itu cadangan (Fallback) — seperti
+                // Word di Windows. Mis. gambar Mac Word 2008 (Requires="ma") berupa PDF: cadangannya PNG.
+                val choices = k.children("Choice"); val fb = k.child("Fallback")
+                val ok = choices.firstOrNull { c -> c.attr("Requires")?.split(' ')?.none { unsupportedNs(it) } != false }
+                val pick = ok ?: fb ?: choices.firstOrNull()
                 n.kids.removeAt(idx)
                 if (pick != null) { n.kids.addAll(idx, pick.kids); continue }
                 continue
@@ -128,6 +135,13 @@ object XmlDom {
         }
         return n
     }
+
+    /**
+     * Namespace kompatibilitas yang TIDAK dirender sendiri: VML (cadangannya DrawingML lebih lengkap), DrawingML Mac 2008
+     * (gambar PDF), grafik baru "chartex", model 3D, tinta, simbol diperluas — cadangannya gambar/teks biasa.
+     */
+    private fun unsupportedNs(p: String): Boolean =
+        p == "v" || p == "ma" || p.startsWith("cx") || p == "am3d" || p == "aink" || p == "wpi" || p == "w16se"
 
     fun unescape(t: String): String {
         if (t.indexOf('&') < 0) return t
@@ -171,17 +185,60 @@ class OPackage private constructor(private val zip: ZipFile?, private val eager:
         m
     } ?: emptyMap()
 
-    /** Akses isi bagian: `files["word/media/image1.png"]`. Didekompresi saat diminta (mode berkas). */
+    /**
+     * Nama bagian huruf kecil → nama asli (nama bagian OPC tidak peka huruf besar/kecil). Beberapa pembuat berkas
+     * menulis nama entri zip dengan garis miring terbalik ("xl\\workbook.xml") — dinormalkan ke "/" di sini.
+     */
+    private val lower: Map<String, String> by lazy {
+        val m = HashMap<String, String>()
+        for (k in (if (zip == null) eager.keys else entries.keys)) m.putIfAbsent(k.replace('\\', '/').trimStart('/').lowercase(), k)
+        m
+    }
+
+    /**
+     * Nama sebenarnya di zip untuk [p]: persis, lalu versi ter-dekode URI ("image%201.png" ↔ "image 1.png"), lalu tanpa
+     * membedakan huruf besar/kecil. Dokumen dari pembuat selain Office kerap berbeda di sini — dulu gambarnya hilang.
+     */
+    fun realName(p: String): String? {
+        val has: (String) -> Boolean = if (zip == null) eager::containsKey else entries::containsKey
+        if (has(p)) return p
+        val dec = if (p.indexOf('%') >= 0) try { java.net.URLDecoder.decode(p.replace("+", "%2B"), "UTF-8") } catch (_: Exception) { p } else p
+        if (dec != p && has(dec)) return dec
+        return lower[p.lowercase()] ?: lower[dec.lowercase()]
+    }
+
+    /** Akses isi bagian: `files["word/media/image1.png"]`. Didekompresi saat diminta (mode berkas). Aman antar-thread. */
     val files = Parts()
 
     inner class Parts {
         operator fun get(p: String): ByteArray? {
-            if (zip == null) return eager[p]
-            val e = entries[p] ?: return null
+            val n = realName(p) ?: return null
+            if (zip == null) return eager[n]
+            val e = entries[n] ?: return null
             return try { zip.getInputStream(e).use { it.readBytes() } } catch (_: Exception) { null }
         }
-        fun containsKey(p: String) = if (zip == null) eager.containsKey(p) else entries.containsKey(p)
+        fun containsKey(p: String) = realName(p) != null
     }
+
+    /** [n] byte pertama bagian [p] (untuk mengenali jenis gambar tanpa mendekompresi seluruhnya). */
+    fun head(p: String, n: Int): ByteArray? {
+        val name = realName(p) ?: return null
+        if (zip == null) return eager[name]?.let { it.copyOf(minOf(n, it.size)) }
+        val e = entries[name] ?: return null
+        return try {
+            zip.getInputStream(e).use { ins ->
+                val out = ByteArray(n); var k = 0
+                while (k < n) { val r = ins.read(out, k, n - k); if (r <= 0) break; k += r }
+                out.copyOf(k)
+            }
+        } catch (_: Exception) { null }
+    }
+
+    /** Mode berkas = isi dibaca dari zip saat diminta (bukan semua di RAM). */
+    val lazyParts: Boolean get() = zip != null
+
+    /** Buang DOM hasil penguraian (sudah tidak dipakai sesudah HTML jadi) — paket tetap bisa dibaca untuk gambar. */
+    fun dropXml() { synchronized(domCache) { domCache.clear() } }
 
     override fun close() { try { zip?.close() } catch (_: Exception) {} }
 
@@ -201,7 +258,7 @@ class OPackage private constructor(private val zip: ZipFile?, private val eager:
 
     private val domCache = HashMap<String, XNode?>()
     fun has(p: String) = files.containsKey(p)
-    fun xml(p: String): XNode? = domCache.getOrPut(p) { files[p]?.let { try { XmlDom.parse(it) } catch (_: Throwable) { null } } }
+    fun xml(p: String): XNode? = synchronized(domCache) { domCache.getOrPut(p) { files[p]?.let { try { XmlDom.parse(it) } catch (_: Throwable) { null } } } }
 
     class Rel(val id: String, val type: String, val target: String, val external: Boolean)
 
@@ -220,7 +277,8 @@ class OPackage private constructor(private val zip: ZipFile?, private val eager:
         return out
     }
 
-    fun resolve(dir: String, target: String): String {
+    fun resolve(dir: String, target0: String): String {
+        val target = target0.replace('\\', '/').substringBefore('#')
         if (target.startsWith("/")) return target.trimStart('/')
         val parts = ArrayList<String>()
         if (dir.isNotEmpty()) parts.addAll(dir.split('/'))
@@ -232,11 +290,86 @@ class OPackage private constructor(private val zip: ZipFile?, private val eager:
     fun mainPart(): String? = rels("").values.firstOrNull { it.type.endsWith("/officeDocument") }?.target
 }
 
-/** Hasil render: HTML + berkas pendukung (gambar) yang dilayani WebView di https://doc.local/<kunci>. */
-class RenderedDoc(val html: String, val res: Map<String, ByteArray>, val title: String, val kind: String)
+/**
+ * Gambar dokumen, dilayani WebView di https://doc.local/r/<nomor>.
+ *
+ * Isi gambar TIDAK dimuat saat penguraian: hanya dicatat jalurnya, lalu dibaca dari zip ketika WebView memintanya
+ * (lihat OfficeView). Dulu semua foto didekompresi ke RAM sebelum dokumen tampil — dokumen penuh foto lambat dibuka
+ * dan bisa kehabisan memori. URL berupa nomor (bukan nama berkas) supaya nama berspasi/beraksara khusus tidak gagal.
+ */
+class DocRes(private var pkg: OPackage?) : Closeable {
+    class Item(val id: Int, val part: String) {
+        /** Ukuran tampil terbesar (px CSS) — foto besar diperkecil seperlunya saja. */
+        @Volatile var cssW = 0.0
+        @Volatile var cssH = 0.0
+        /** Isi (hanya bila paketnya bukan berkas, lihat [finish]). */
+        @Volatile var bytes: ByteArray? = null
+    }
+
+    private val items = ArrayList<Item>()
+    private val byPart = HashMap<String, Item>()
+
+    /**
+     * URL untuk gambar di bagian [part] yang tampil [cssW]×[cssH] px CSS. null bila bagian tidak ada atau formatnya tidak
+     * dikenali sama sekali (pemanggil menampilkan kotak pengganti).
+     */
+    @Synchronized fun url(part: String, cssW: Double, cssH: Double): String? {
+        var it = byPart[part]
+        if (it == null) {
+            val p = pkg ?: return null
+            val real = p.realName(part) ?: return null
+            it = byPart[real]
+            if (it == null) {
+                val head = p.head(real, 2048) ?: return null
+                if (!OfficeImage.supported(OfficeImage.kind(head))) return null
+                it = Item(items.size, real)
+                items.add(it); byPart[real] = it
+            }
+            byPart[part] = it
+        }
+        if (cssW.isFinite() && cssW > it.cssW) it.cssW = cssW
+        if (cssH.isFinite() && cssH > it.cssH) it.cssH = cssH
+        return "https://doc.local/r/" + it.id
+    }
+
+    @Synchronized fun item(id: Int): Item? = items.getOrNull(id)
+    @Synchronized fun count(): Int = items.size
+
+    /** Isi mentah gambar (dibaca dari zip saat ini). */
+    fun read(it: Item): ByteArray? = it.bytes ?: pkg?.files?.get(it.part)
+
+    /**
+     * Sesudah penguraian: paket berkas tetap dibuka untuk gambar (DOM dibuang); paket di RAM cukup disimpan bagian
+     * gambarnya saja, sisanya dilepas.
+     */
+    @Synchronized fun finish() {
+        val p = pkg ?: return
+        if (p.lazyParts) { p.dropXml(); return }
+        for (it in items) it.bytes = p.files[it.part]
+        pkg = null
+    }
+
+    @Synchronized override fun close() { try { pkg?.close() } catch (_: Exception) {}; pkg = null }
+
+    companion object { fun none() = DocRes(null) }
+}
+
+/** Hasil render: HTML + gambar ([res]) yang dilayani WebView. [html] dilepas sesudah dimuat (hemat RAM). */
+class RenderedDoc(html: String, val res: DocRes, val title: String, val kind: String) : Closeable {
+    @Volatile var html: String = html
+        private set
+    fun dropHtml() { html = "" }
+    override fun close() = res.close()
+}
 
 /** Utilitas warna & teks yang dipakai ketiga renderer. */
 object OxUtil {
+    /**
+     * CSS tambahan dari aplikasi per jenis dokumen ("docx"/"pptx"/"xlsx"): warna kanvas & kontrol pembaca mengikuti
+     * tema aplikasi (terang/gelap), sama dengan pembaca PDF & editor. Disisipkan SESUDAH CSS bawaan renderer, hanya
+     * untuk layar (@media screen) — cetak tetap putih bersih. Kosong di luar aplikasi (uji JVM).
+     */
+    @Volatile var viewerCss: (String) -> String = { "" }
     fun esc(s: String): String {
         val sb = StringBuilder(s.length + 8)
         for (c in s) when (c) { '<' -> sb.append("&lt;"); '>' -> sb.append("&gt;"); '&' -> sb.append("&amp;"); '"' -> sb.append("&quot;"); else -> sb.append(c) }
@@ -287,7 +420,9 @@ object OxUtil {
 
     /** Nama font Office → keluarga CSS (font pengganti metrik-sama dibundel di aset). */
     fun fontStack(name: String?, serifHint: Boolean = false): String {
-        val n = (name ?: "").trim()
+        // nama font berasal dari berkas: hanya huruf/angka & tanda aman — tanda kutip / < > { } ; dulu bisa "keluar" dari
+        // atribut style atau blok <style> (HTML/skrip sisipan dari dokumen jahat)
+        val n = (name ?: "").filter { it.isLetterOrDigit() || it in " -_.+()@\u3000" }.trim()
         val low = n.lowercase()
         val fallback = when {
             low.isEmpty() -> if (serifHint) "'Times New Roman',serif" else "Calibri,sans-serif"

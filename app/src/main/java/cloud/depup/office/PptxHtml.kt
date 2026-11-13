@@ -14,11 +14,13 @@ import kotlin.math.sin
  */
 object PptxHtml {
     private const val EMU_PT = 12700.0
+    private val PADDING = Regex("padding:[^;]*;")
 
     private class Theme(val colors: Map<String, Int>, val major: String, val minor: String, val fills: List<XNode>, val bgFills: List<XNode>, val lines: List<XNode>)
 
     private class Ctx(val pkg: OPackage) {
-        val res = HashMap<String, ByteArray>()
+        val res = DocRes(pkg)
+        var slideW = 720.0; var slideH = 540.0
         var theme = Theme(emptyMap(), "Calibri Light", "Calibri", emptyList(), emptyList(), emptyList())
         var clrMap: Map<String, String> = DEFAULT_MAP
         var rels: Map<String, OPackage.Rel> = emptyMap()
@@ -38,6 +40,7 @@ object PptxHtml {
         val sz = pres.first("sldSz")
         val sw = (sz?.attr("cx")?.toLongOrNull() ?: 9144000L) / EMU_PT
         val sh = (sz?.attr("cy")?.toLongOrNull() ?: 6858000L) / EMU_PT
+        c.slideW = sw; c.slideH = sh
         c.defaultText = pres.first("defaultTextStyle")
         val presRels = pkg.rels(presPath)
         val slides = pres.first("sldIdLst")?.children("sldId")?.mapNotNull { s -> (s.attr("r:id") ?: s.attr("id"))?.let { presRels[it]?.target } } ?: emptyList()
@@ -51,9 +54,10 @@ object PptxHtml {
         if (slides.isEmpty()) body.append("<div class=\"err\">Presentasi ini tidak memiliki slide.</div>")
         val html = StringBuilder()
         html.append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>")
-            .append(OxUtil.esc(title)).append("</title><style>").append(OxUtil.fontFaces("https://doc.local/_fonts/")).append(CSS)
+            .append(OxUtil.esc(title)).append("</title><style>").append(OxUtil.fontFaces("https://doc.local/_fonts/")).append(CSS).append(OxUtil.viewerCss("pptx"))
             .append("@page{size:${sw}pt ${sh}pt;margin:0}")
             .append("</style></head><body>").append(body).append("<script>var SW=${sw * 4 / 3};").append(JS).append("</script></body></html>")
+        c.res.finish()
         return RenderedDoc(html.toString(), c.res, title, "pptx")
     }
 
@@ -164,7 +168,7 @@ object PptxHtml {
         val prst = spPr?.child("prstGeom")?.attr("prst") ?: if (spPr?.child("custGeom") != null) "cust" else if (sp.name == "cxnSp") "line" else "rect"
         // isian & garis
         val styleNode = sp.child("style")
-        val fill = fillOf(c, spPr, styleNode?.child("fillRef"), lPh?.child("spPr") ?: mPh?.child("spPr"))
+        val fill = fillOf(c, spPr, styleNode?.child("fillRef"), lPh?.child("spPr") ?: mPh?.child("spPr"), box.w, box.h)
         val line = lineOf(c, spPr?.child("ln"), styleNode?.child("lnRef"), lPh?.path("spPr", "ln") ?: mPh?.path("spPr", "ln"), prst)
         out.append("<div class=\"sp\" style=\"left:${box.x}pt;top:${box.y}pt;width:${box.w}pt;height:${box.h}pt;").append(transform(box)).append("\">")
         drawGeom(c, prst, box, fill, line, spPr, out)
@@ -197,7 +201,7 @@ object PptxHtml {
     private class Fill(val css: String?, val svg: String?, val img: String? = null)
     private class Line(val w: Double, val color: String?, val dash: String?, val headEnd: Boolean = false, val tailEnd: Boolean = false)
 
-    private fun fillOf(c: Ctx, spPr: XNode?, fillRef: XNode?, inherit: XNode?): Fill {
+    private fun fillOf(c: Ctx, spPr: XNode?, fillRef: XNode?, inherit: XNode?, wPt: Double = 0.0, hPt: Double = 0.0): Fill {
         fun from(n: XNode?): Fill? {
             if (n == null) return null
             n.child("noFill")?.let { return Fill(null, "none") }
@@ -210,7 +214,7 @@ object PptxHtml {
                     return Fill(css, stops.first().second)
                 }
             }
-            n.child("blipFill")?.let { b -> imgSrc(c, b.first("blip")?.attr("embed"))?.let { return Fill(null, null, it) } }
+            n.child("blipFill")?.let { b -> imgSrc(c, b.first("blip")?.attr("embed"), wPt, hPt)?.let { return Fill(null, null, it) } }
             n.child("pattFill")?.let { p -> color(c, p.child("fgClr"))?.let { return Fill(it, it) } }
             return null
         }
@@ -493,28 +497,35 @@ object PptxHtml {
     }
 
     // ------------------------------------------------------------------ gambar, tabel, grafik
-    private fun imgSrc(c: Ctx, rid: String?): String? {
+    private fun imgSrc(c: Ctx, rid: String?, wPt: Double, hPt: Double): String? {
         val rel = rid?.let { c.rels[it] } ?: return null
-        if (rel.external || !OxUtil.isImage(rel.target)) return null
-        val bytes = c.pkg.files[rel.target] ?: return null
-        c.res[rel.target] = bytes
-        return "https://doc.local/" + rel.target
+        if (rel.external) return null
+        return c.res.url(rel.target, wPt * 4 / 3, hPt * 4 / 3)
     }
 
-    private fun picture(c: Ctx, pic: XNode, out: StringBuilder, layer: Int, xf: Xf, ph: PhIndex) {
+    private fun picture(c: Ctx, pic: XNode, out: StringBuilder, layer: Int, xf: Xf, ph: PhIndex, boxOverride: Box? = null) {
         if (layer > 0 && isPh(pic)) return
-        val box = boxOf(pic.path("spPr", "xfrm"), xf) ?: return
+        // gambar di placeholder ("klik ikon untuk menambah gambar") sering tanpa xfrm: posisinya dari placeholder layout/master
+        val phNode = pic.first("nvPr")?.child("ph")
+        val box = boxOverride ?: boxOf(pic.path("spPr", "xfrm"), xf) ?: phNode?.let { p ->
+            val lPh = ph.find(ph.layout, p.attr("type") ?: "pic", p.attr("idx"))
+            val mPh = ph.find(ph.master, p.attr("type") ?: lPh?.first("nvPr")?.child("ph")?.attr("type"), null)
+            boxOf(lPh?.path("spPr", "xfrm"), Xf.ID) ?: boxOf(mPh?.path("spPr", "xfrm"), Xf.ID)
+        } ?: return
         val blip = pic.first("blip")
-        val src = imgSrc(c, blip?.attr("embed"))
+        val crop = pic.first("srcRect")
+        var l = 0.0; var t = 0.0; var r = 0.0; var b = 0.0
+        if (crop != null && crop.attrs.isNotEmpty()) {
+            l = (crop.attr("l")?.toDoubleOrNull() ?: 0.0) / 100000; t = (crop.attr("t")?.toDoubleOrNull() ?: 0.0) / 100000
+            r = (crop.attr("r")?.toDoubleOrNull() ?: 0.0) / 100000; b = (crop.attr("b")?.toDoubleOrNull() ?: 0.0) / 100000
+        }
+        val fw = box.w / max(0.01, 1 - l - r); val fh = box.h / max(0.01, 1 - t - b)
+        val src = imgSrc(c, blip?.attr("embed") ?: blip?.attr("link"), fw, fh)
         out.append("<div class=\"sp\" style=\"left:${box.x}pt;top:${box.y}pt;width:${box.w}pt;height:${box.h}pt;overflow:hidden;").append(transform(box))
         when (pic.path("spPr", "prstGeom")?.attr("prst")) { "ellipse" -> out.append("border-radius:50%;"); "roundRect" -> out.append("border-radius:8%;") }
         out.append("\">")
         if (src == null) { out.append("<div class=\"ph\">Gambar</div></div>"); return }
-        val crop = pic.first("srcRect")
-        if (crop != null && crop.attrs.isNotEmpty()) {
-            val l = (crop.attr("l")?.toDoubleOrNull() ?: 0.0) / 100000; val t = (crop.attr("t")?.toDoubleOrNull() ?: 0.0) / 100000
-            val r = (crop.attr("r")?.toDoubleOrNull() ?: 0.0) / 100000; val b = (crop.attr("b")?.toDoubleOrNull() ?: 0.0) / 100000
-            val fw = box.w / max(0.01, 1 - l - r); val fh = box.h / max(0.01, 1 - t - b)
+        if (l != 0.0 || t != 0.0 || r != 0.0 || b != 0.0) {
             out.append("<img src=\"$src\" style=\"position:absolute;left:${-fw * l}pt;top:${-fh * t}pt;width:${fw}pt;height:${fh}pt\">")
         } else out.append("<img src=\"$src\" style=\"width:100%;height:100%\">")
         lineOf(c, pic.path("spPr", "ln"), pic.path("style", "lnRef"), null, "rect")?.let { out.append("<div class=\"fl\" style=\"box-shadow:inset 0 0 0 ${it.w}pt ${it.color}\"></div>") }
@@ -526,6 +537,11 @@ object PptxHtml {
         val gd = gf.path("graphic", "graphicData") ?: return
         val tbl = gd.child("tbl")
         if (tbl != null) { table(c, tbl, box, out); return }
+        // objek OLE (tabel Excel / dokumen tertanam): tampilkan gambar pratinjaunya (EMF/WMF/PNG)
+        gd.first("oleObj")?.let { ole ->
+            val pic = ole.first("pic")
+            if (pic != null) { picture(c, pic, out, layer, xf, ph, boxOverride = box); return }
+        }
         // SmartArt: pakai gambar siap pakai (diagramDrawing) bila ada
         val relIds = gd.first("relIds")
         if (relIds != null) {
@@ -586,7 +602,7 @@ object PptxHtml {
                 tc.child("txBody")?.let { txb ->
                     val sb = StringBuilder()
                     text(c, txb, listOf(c.defaultText, txb.child("lstStyle")), listOf(txb.child("bodyPr")), box, null, sb)
-                    out.append(sb.toString().replace("class=\"tx\"", "class=\"tx tc\"").replace(Regex("padding:[^;]*;"), "padding:0;"))
+                    out.append(sb.toString().replace("class=\"tx\"", "class=\"tx tc\"").replace(PADDING, "padding:0;"))
                 }
                 out.append("</td>")
             }
@@ -629,8 +645,9 @@ object PptxHtml {
     private fun bgCss(c: Ctx, bg: XNode?): String {
         if (bg == null) return "background:#fff"
         bg.child("bgPr")?.let { p ->
-            val f = fillOf(c, p, null, null)
-            if (f.img != null) return "background:url('${f.img}') center/cover no-repeat"
+            val f = fillOf(c, p, null, null, c.slideW, c.slideH)
+            // gambar latar direntang ke seluruh slide (seperti PowerPoint), ubin bila a:tile
+            if (f.img != null) return if (p.first("tile") != null) "background:url('${f.img}') repeat" else "background:url('${f.img}') center/100% 100% no-repeat"
             if (f.css != null) return "background:${f.css}"
         }
         bg.child("bgRef")?.let { r ->

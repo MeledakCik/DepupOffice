@@ -77,6 +77,15 @@ data class PageSetup(val w: Int, val h: Int, val landscape: Boolean, val top: In
 
 sealed class EBlock {
     abstract fun deepCopy(): EBlock
+    /**
+     * Salinan BEKU untuk riwayat urungkan. Teks & larik format DIBAGI (keduanya tidak pernah diubah di tempat — selalu
+     * diganti utuh), dan blok yang tidak berubah sejak titik urungkan sebelumnya memakai salinan beku yang SAMA.
+     * Dulu tiap titik urungkan menyalin seluruh dokumen (larik format per huruf ikut disalin): dokumen 3 MB terasa
+     * tersendat tiap mulai mengetik, dan 60 titik urungkan = 60 salinan dokumen di memori.
+     */
+    abstract fun freeze(): EBlock
+    /** Pada salinan beku: blok hidup asalnya (untuk mengurungkan di tempat tanpa membangun ulang tampilan). */
+    @JvmField var src: EBlock? = null
 }
 
 class ImgRef(val rId: String, val runStart: Int, val runEnd: Int, val cx: Long, val cy: Long)
@@ -100,6 +109,26 @@ class EPara(
         it.images = ArrayList(images); it.hasObject = hasObject; it.pageBreak = pageBreak; it.locked = locked
     }
 
+    /** Salinan beku terakhir paragraf hidup ini (dipakai ulang selama isinya belum berubah). */
+    @JvmField var frozen: EPara? = null
+
+    /** Isi sama persis dengan [o] (perbandingan identitas — murah). */
+    fun sameAs(o: EPara): Boolean {
+        if (o.text !== text || o.fmts !== fmts || o.pf !== pf || o.tpl != tpl || o.pageBreak != pageBreak || o.hasObject != hasObject || o.locked != locked) return false
+        val a = o.images; val b = images
+        if (a.size != b.size) return false
+        for (i in a.indices) if (a[i] !== b[i]) return false
+        return true
+    }
+
+    override fun freeze(): EPara {
+        frozen?.let { if (it.sameAs(this)) return it }
+        return EPara(origin, text, fmts, pf, tpl).also {
+            it.images = if (images.isEmpty()) ArrayList(0) else ArrayList(images); it.hasObject = hasObject; it.pageBreak = pageBreak; it.locked = locked
+            it.src = this; frozen = it
+        }
+    }
+
     companion object {
         fun blank(tpl: Int, pf: ParaFmt, fmt: CharFmt = CharFmt.EMPTY, text: String = "") =
             EPara(-1, text, Array(text.length) { fmt }, pf, tpl)
@@ -118,10 +147,22 @@ class ECell(
     val locked: Boolean = false
 ) {
     fun deepCopy() = ECell(origin, paras.mapTo(ArrayList()) { it.deepCopy() }, span, vCont, fill, tplCell, locked)
+    @JvmField var frozen: ECell? = null
+    fun freeze(): ECell {
+        val f = frozen
+        if (f != null && f.paras.size == paras.size) { var same = true; for (i in paras.indices) if (paras[i].freeze() !== f.paras[i]) { same = false; break }; if (same) return f }
+        return ECell(origin, paras.mapTo(ArrayList(paras.size)) { it.freeze() }, span, vCont, fill, tplCell, locked).also { frozen = it }
+    }
 }
 
 class ERow(val origin: Int, val cells: MutableList<ECell>, val tplRow: Int = origin) {
     fun deepCopy() = ERow(origin, cells.mapTo(ArrayList()) { it.deepCopy() }, tplRow)
+    @JvmField var frozen: ERow? = null
+    fun freeze(): ERow {
+        val f = frozen
+        if (f != null && f.cells.size == cells.size) { var same = true; for (i in cells.indices) if (cells[i].freeze() !== f.cells[i]) { same = false; break }; if (same) return f }
+        return ERow(origin, cells.mapTo(ArrayList(cells.size)) { it.freeze() }, tplRow).also { frozen = it }
+    }
 }
 
 class ETable(
@@ -133,16 +174,24 @@ class ETable(
     val bordered: Boolean = true
 ) : EBlock() {
     override fun deepCopy() = ETable(origin, rows.mapTo(ArrayList()) { it.deepCopy() }, ArrayList(grid), simple, bordered)
+    @JvmField var frozen: ETable? = null
+    override fun freeze(): ETable {
+        val f = frozen
+        if (f != null && f.grid == grid && f.rows.size == rows.size) { var same = true; for (i in rows.indices) if (rows[i].freeze() !== f.rows[i]) { same = false; break }; if (same) return f }
+        return ETable(origin, rows.mapTo(ArrayList(rows.size)) { it.freeze() }, ArrayList(grid), simple, bordered).also { it.src = this; frozen = it }
+    }
 }
 
 /** Gambar baru yang disisipkan pengguna (satu paragraf rata tengah). */
 class EImage(val bytes: ByteArray, val ext: String, val wPx: Int, val hPx: Int, var widthFrac: Float = 0.6f) : EBlock() {
     override fun deepCopy() = EImage(bytes, ext, wPx, hPx, widthFrac)
+    override fun freeze() = EImage(bytes, ext, wPx, hPx, widthFrac).also { it.src = this }
 }
 
 /** Pemisah halaman baru. */
 class EBreak : EBlock() {
     override fun deepCopy() = EBreak()
+    override fun freeze() = EBreak().also { it.src = this }
 }
 
 /** Gaya bawaan yang bisa dipilih di galeri gaya. */
@@ -498,6 +547,10 @@ internal class XTok(val kind: Int, var raw: String, val name: String) {
 }
 
 internal object XmlLite {
+    /** Pola atribut dikompilasi sekali (dulu per pemanggilan — per sel tabel / paragraf). */
+    private val ATTR = Regex("([A-Za-z_][\\w:.-]*)\\s*=\\s*(\"([^\"]*)\"|'([^']*)')")
+    private val localAttr = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
     fun tokenize(s: String): ArrayList<XTok> {
         val out = ArrayList<XTok>(s.length / 12 + 16)
         var i = 0
@@ -545,7 +598,7 @@ internal object XmlLite {
     /** Atribut tag sebagai peta berurutan (nilai masih ter-escape). */
     fun attrs(raw: String): LinkedHashMap<String, String> {
         val m = LinkedHashMap<String, String>()
-        val re = Regex("([A-Za-z_][\\w:.-]*)\\s*=\\s*(\"([^\"]*)\"|'([^']*)')")
+        val re = ATTR
         val body = raw.removePrefix("<").removeSuffix(">").removeSuffix("/")
         val sp = body.indexOfFirst { it.isWhitespace() }
         if (sp < 0) return m
@@ -582,7 +635,8 @@ internal object XmlLite {
 
     /** Atribut dengan nama lokal tertentu, apa pun prefiksnya (mis. r:embed). */
     fun attrLocal(raw: String, local: String): String? {
-        val m = Regex("\\s([\\w.-]+:)?" + Regex.escape(local) + "\\s*=\\s*(\"([^\"]*)\"|'([^']*)')").find(raw) ?: return null
+        val re = localAttr.getOrPut(local) { Regex("\\s([\\w.-]+:)?" + Regex.escape(local) + "\\s*=\\s*(\"([^\"]*)\"|'([^']*)')") }
+        val m = re.find(raw) ?: return null
         return decode(m.groups[3]?.value ?: m.groups[4]?.value ?: "")
     }
 

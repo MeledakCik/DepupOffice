@@ -148,7 +148,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                 text = "🔊 Voice Reader — $title"
                 textSize = 16f
                 setTextColor(C.TEXT)
-                setTypeface(null, android.graphics.Typeface.BOLD)
+                typeface = Fonts.head(activity)
             }
             headerBox.addView(titleTv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             rootLayout.addView(headerBox)
@@ -292,7 +292,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                 text = "▶️ Putar Suara"
                 textSize = 14f
                 setTextColor(C.ON_PRIMARY)
-                setTypeface(null, android.graphics.Typeface.BOLD)
+                typeface = Fonts.label(activity)
                 setPadding(dp(activity, 20), dp(activity, 10), dp(activity, 20), dp(activity, 10))
                 background = GradientDrawable().apply {
                     setColor(C.PRIMARY)
