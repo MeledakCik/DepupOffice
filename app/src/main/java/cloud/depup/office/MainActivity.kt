@@ -1396,7 +1396,10 @@ class MainActivity : AppCompatActivity() {
                     "application/msword", "application/vnd.ms-excel"
                 )) { officeToPdfFlow(it) }
             },
-            tile(R.drawable.ic_image, C.DOC_FG, C.DOC_BG, "Gambar ke PDF", "Gabung foto jadi satu PDF") { jpgToPdfFlow() }
+            tile(R.drawable.ic_image, C.DOC_FG, C.DOC_BG, "Gambar ke PDF", "Gabung foto jadi satu PDF") { jpgToPdfFlow() },
+            tile(R.drawable.ic_pdf, C.DOC_FG, C.DOC_BG, "EXE ke PDF", "Ambil PDF dari berkas .exe (PDF to EXE)", "Baru", C.DOC_FG, C.DOC_BG) {
+                pickFile(arrayOf("application/x-msdownload", "application/vnd.microsoft.portable-executable", "application/x-dosexec", "application/octet-stream", "*/*")) { exeToPdfFlow(it) }
+            }
         )
         section("Gambar & foto",
             tile(R.drawable.ic_pdf, C.IMG_FG, C.IMG_BG, "Foto ke PDF", "Gabung foto jadi satu PDF") { jpgToPdfFlow() },
@@ -2145,6 +2148,23 @@ class MainActivity : AppCompatActivity() {
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
+        }
+    }
+
+    /** Berkas .exe hasil pengubah "PDF to EXE" (tidak bisa dibuka di HP) → PDF aslinya. Lihat [ExeToPdf]. */
+    private fun exeToPdfFlow(uri: Uri) {
+        val name = Files.nameOf(this, uri)
+        val base = Files.baseName(name).ifBlank { "dokumen" }
+        val out = Files.namedOut(this, base, "pdf")
+        work("Mengambil PDF dari $name…", {
+            val size = Files.sizeOf(this, uri)
+            if (size > 400L shl 20) throw IllegalStateException("Berkas terlalu besar (maks. 400 MB)")
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+            val r = ExeToPdf.extract(bytes)
+            out.writeBytes(r.pdf)
+            r
+        }) { res ->
+            res.onSuccess { showResult("PDF berhasil diambil", out, PDF) }.onFailure { out.delete(); fail(it) }
         }
     }
 

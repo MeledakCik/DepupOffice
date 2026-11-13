@@ -13,9 +13,9 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 36
-        // versionCode = mayor*10000 + minor*100 + patch (2.9.1 -> 20901): selalu naik, mudah dibaca.
-        versionCode = 20901
-        versionName = "2.9.1"
+        // versionCode = mayor*10000 + minor*100 + patch (3.0.1 -> 30001): selalu naik, mudah dibaca.
+        versionCode = 30001
+        versionName = "3.0.1"
         // App hanya berbahasa Indonesia (values/ tunggal, tanpa values-xx). Tanpa baris ini, string
         // terjemahan dari AndroidX/Play Services/CameraX untuk puluhan bahasa lain tetap ikut terbundel.
         // (Sengaja TIDAK membatasi density: mipmap launcher sudah kecil, dan membatasi density

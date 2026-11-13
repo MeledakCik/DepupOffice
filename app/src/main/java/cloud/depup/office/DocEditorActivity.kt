@@ -138,7 +138,7 @@ class DocEditorActivity : AppCompatActivity() {
     private var current: ParaEdit? = null
     private var tab = 0
     private var tableTabShown = false
-    private var zoom = 1f
+    private lateinit var zoomFrame: ZoomFrame
 
     var pending: Pending? = null
     var softBreak = false
@@ -237,7 +237,14 @@ class DocEditorActivity : AppCompatActivity() {
         }
         pageCard.add(pageBox)
         pad.addView(pageCard, LinearLayout.LayoutParams(WRAP, WRAP))
-        hsv.addView(pad)
+        // zoom visual (cubit): halaman tidak pernah ditata ulang saat diperbesar/diperkecil
+        zoomFrame = ZoomFrame(this).apply {
+            vScroll = scroll; hScroll = hsv
+            onZoom = { z -> if (::zoomTv.isInitialized) zoomTv.text = "${(z * 100).roundToInt()}%" }
+            addView(pad, FrameLayout.LayoutParams(WRAP, WRAP))
+        }
+        (scroll as EditorScroll).zoomFrame = zoomFrame
+        hsv.addView(zoomFrame)
         scroll.addView(hsv)
         // Ketuk area kosong di bawah halaman -> kursor ke akhir dokumen
         pad.setOnClickListener { focusEnd() }
@@ -277,7 +284,7 @@ class DocEditorActivity : AppCompatActivity() {
             setPadding(dp(10), dp(8), dp(10), dp(8))
             elevation = dp(6).toFloat()
         }
-        val txt = TextView(this).apply { setTextColor(Color.WHITE); textSize = 11f; typeface = Typeface.MONOSPACE }
+        val txt = TextView(this).apply { setTextColor(Color.WHITE); textSize = 10.5f; typeface = Typeface.MONOSPACE }
         box.addView(txt)
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun chip(label: () -> String, act: () -> Unit) = TextView(this).apply {
@@ -285,16 +292,51 @@ class DocEditorActivity : AppCompatActivity() {
             background = shape(0xFF3A3A3A.toInt(), 100); setPadding(dp(10), dp(6), dp(10), dp(6))
             text = label(); setOnClickListener { act(); text = label(); EdPerf.reset() }
         }
-        row.addView(chip({ "Kaca: " + if (glass?.forceDirect == true) "MATI" else "nyala" }) { glass?.let { it.forceDirect = !it.forceDirect } })
-        row.addView(chip({ "Lembar: " + if (pageBox.paged) "nyala" else "MATI" }) { pageBox.paged = !pageBox.paged }, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
-        row.addView(chip({ "Ejaan: " + if (ParaEdit.spellAll) "SEMUA" else "fokus" }) {
-            ParaEdit.spellAll = !ParaEdit.spellAll
-            val t = if (ParaEdit.spellAll) ParaEdit.BASE_TYPE else ParaEdit.BASE_TYPE or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            for (e in allEditors()) if (!e.isFocused) e.setRawInputType(t)
-        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
-        row.addView(chip({ "×" }) { box.visibility = View.GONE }, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
-        box.addView(row, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(6) })
+        val lp = { LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) } }
+        row.addView(chip({ "Uji otomatis" }) { autoBench(txt) })
+        row.addView(chip({ "Kaca: " + if (glass?.forceDirect == true) "MATI" else "nyala" }) { glass?.let { it.forceDirect = !it.forceDirect } }, lp())
+        row.addView(chip({ "Cull: " + if (Cull.on) "nyala" else "MATI" }) { Cull.on = !Cull.on; Cull.invalidateAll() }, lp())
+        row.addView(chip({ "Lembar: " + if (pageBox.paged) "nyala" else "MATI" }) { pageBox.paged = !pageBox.paged }, lp())
+        row.addView(chip({ "Perbaikan: " + if (ParaEdit.trackGuard) "nyala" else "MATI" }) { setGuard(!ParaEdit.trackGuard) }, lp())
+        row.addView(chip({ "×" }) { box.visibility = View.GONE }, lp())
+        box.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) },
+            LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(6) })
         host.addView(box, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(8), 0, dp(8), dp(64)) })
+
+        // fase tiap frame dari sistem (termasuk kerja RenderThread/GPU yang tak terlihat di thread UI)
+        if (android.os.Build.VERSION.SDK_INT >= 24) {
+            window.addOnFrameMetricsAvailableListener({ _, fm, _ ->
+                fun g(id: Int) = fm.getMetric(id)
+                EdPerf.addFrame(
+                    g(android.view.FrameMetrics.UNKNOWN_DELAY_DURATION), g(android.view.FrameMetrics.INPUT_HANDLING_DURATION),
+                    g(android.view.FrameMetrics.ANIMATION_DURATION), g(android.view.FrameMetrics.LAYOUT_MEASURE_DURATION),
+                    g(android.view.FrameMetrics.DRAW_DURATION), g(android.view.FrameMetrics.SYNC_DURATION),
+                    g(android.view.FrameMetrics.COMMAND_ISSUE_DURATION), g(android.view.FrameMetrics.SWAP_BUFFERS_DURATION),
+                    g(android.view.FrameMetrics.TOTAL_DURATION))
+            }, android.os.Handler(android.os.Looper.getMainLooper()))
+        }
+        // pesan thread UI yang paling lama (di luar penggambaran frame): pemeriksa ejaan, aksesibilitas, dsb.
+        var msgStart = 0L; var msgName = ""
+        android.os.Looper.getMainLooper().setMessageLogging { line ->
+            if (line.startsWith(">>>")) {
+                msgStart = System.nanoTime(); msgName = line
+                if (line.contains("FrameDisplayEventReceiver")) EdPerf.frameMsgStart = msgStart
+            }
+            else if (line.startsWith("<<<") && msgStart != 0L) {
+                val endNs = System.nanoTime()
+                if (msgName.contains("FrameDisplayEventReceiver")) EdPerf.frameDone(endNs)
+                val d = (endNs - msgStart) / 1_000_000
+                val nm = EdPerf.msgKey(msgName)
+                EdPerf.addMsg(nm, d)
+                if (!msgName.contains("Choreographer") && d > EdPerf.slowMsgMs) { EdPerf.slowMsgMs = d; EdPerf.slowMsg = nm }
+                msgStart = 0L
+            }
+        }
+        // cap waktu fase frame di thread UI: sesudah ukur/tata (preDraw) & awal penggambaran (onDraw)
+        window.decorView.viewTreeObserver.addOnPreDrawListener {
+            if (EdPerf.stampPre < EdPerf.frameMsgStart) EdPerf.stampPre = System.nanoTime(); true
+        }
+        window.decorView.viewTreeObserver.addOnDrawListener { EdPerf.stampDraw = System.nanoTime() }
         var frames = 0; var worst = 0L; var lastNs = 0L
         val cb = object : android.view.Choreographer.FrameCallback {
             override fun doFrame(now: Long) {
@@ -307,17 +349,158 @@ class DocEditorActivity : AppCompatActivity() {
         val tick = object : Runnable {
             override fun run() {
                 if (isFinishing) return
-                val P = EdPerf
-                fun ms(ns: Long) = ns / 1_000_000
-                txt.text = "FPS ${frames}  terlama ${ms(worst)} ms  paragraf ${rows.size}\n" +
-                    "ukur ${P.measures}x ${ms(P.measureNs)}ms | tata ${P.layouts}x ${ms(P.layoutNs)}ms\n" +
-                    "gambar ${P.draws}x ${ms(P.drawNs)}ms | para-ukur ${P.paraMeasures}x ${ms(P.paraMeasureNs)}ms\n" +
-                    "para-gambar ${P.paraDraws}x ${ms(P.paraDrawNs)}ms | minta-ukur ${P.paraRequests}x"
-                frames = 0; worst = 0; P.reset()
+                // selama uji otomatis penghitung TIDAK boleh di-reset (dulu terjadi → hasil hanya ±1 detik terakhir)
+                if (!benching) {
+                    txt.text = "FPS ${frames}  terlama ${worst / 1_000_000}ms  paragraf ${rows.size}\n" + EdPerf.summary()
+                    EdPerf.reset()
+                }
+                frames = 0; worst = 0
                 host.postDelayed(this, 1000)
             }
         }
         host.postDelayed(tick, 1000)
+    }
+
+    private var benching = false
+
+    /** Gulir otomatis 2,5 dtk di tiap kombinasi kaca/lembar, ukur FPS & fase frame, lalu tampilkan hasilnya. */
+    /** A/B perbaikan pelacakan editor: susun ulang semua paragraf agar aturan baru berlaku sejak awal. */
+    private fun setGuard(on: Boolean) {
+        if (ParaEdit.trackGuard == on) return
+        syncAll()
+        val f = cur()?.para
+        ParaEdit.trackGuard = on
+        renderAll(f)
+        ensureRendered()
+    }
+
+    private fun gcStat(k: String) = try { android.os.Debug.getRuntimeStat(k)?.toLongOrNull() ?: 0L } catch (_: Exception) { 0L }
+
+    /** Isi daftar pendengar ViewTreeObserver (refleksi; bisa diblokir Android) — siapa yang jalan tiap frame. */
+    private fun listenerCensus(): String {
+        val vto = window.decorView.viewTreeObserver
+        val sb = StringBuilder()
+        for ((label, field) in listOf("preDraw" to "mOnPreDrawListeners", "gulir" to "mOnScrollChangedListeners",
+                "onDraw" to "mOnDrawListeners", "tataGlobal" to "mOnGlobalLayoutListeners")) {
+            try {
+                val f = android.view.ViewTreeObserver::class.java.getDeclaredField(field).apply { isAccessible = true }
+                val arr = f.get(vto)
+                if (arr == null) { sb.append("$label: 0\n"); continue }
+                val items: List<Any?> = when (arr) {
+                    is Collection<*> -> arr.toList()
+                    else -> {
+                        val size = arr.javaClass.getDeclaredMethod("size").apply { isAccessible = true }.invoke(arr) as Int
+                        val get = arr.javaClass.getDeclaredMethod("get", Int::class.javaPrimitiveType).apply { isAccessible = true }
+                        (0 until size).map { get.invoke(arr, it) }
+                    }
+                }
+                val hist = items.groupingBy { it?.javaClass?.name?.substringAfterLast('.') ?: "null" }.eachCount()
+                sb.append("$label: ${items.size} → ").append(hist.entries.sortedByDescending { it.value }.take(5).joinToString(", ") { "${it.key}×${it.value}" }).append('\n')
+            } catch (e: Throwable) { sb.append("$label: tak terbaca (${e.javaClass.simpleName})\n") }
+        }
+        return sb.toString()
+    }
+
+    /** Info HP & pohon view — konteks teknis untuk hasil uji. */
+    private fun benchHeader(): String {
+        var views = 0; var edits = 0; var depth = 0
+        fun walk(v: View, d: Int) {
+            views++; if (v is android.widget.EditText) edits++; if (d > depth) depth = d
+            if (v is android.view.ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i), d + 1)
+        }
+        walk(window.decorView, 0)
+        val hz = try { (if (android.os.Build.VERSION.SDK_INT >= 30) display else @Suppress("DEPRECATION") windowManager.defaultDisplay)?.refreshRate ?: 0f } catch (_: Exception) { 0f }
+        val b = android.os.Build.VERSION.SDK_INT
+        val hw = if (b >= 26) window.decorView.isHardwareAccelerated else true
+        return "HP ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} (API $b) · %.0f Hz · HW $hw\n".format(hz) +
+            "dokumen: ${doc.body.size} blok · ${rows.size} paragraf · view $views · EditText $edits (terpasang ${rows.values.count { it.editor.isAttachedToWindow }}) · kedalaman $depth\n" +
+            "tinggi isi ${pageBox.height}px · layar ${scroll.height}px · densitas ${resources.displayMetrics.density}\n"
+    }
+
+    /**
+     * Uji otomatis: tiap kombinasi (perbaikan × lembar) digulir 3 dtk dengan KECEPATAN TETAP (px per detik, jadi frame
+     * lambat menggulir lebih jauh — mirip jari), sesudah dokumen selesai dibangun & tenang. Hasil bisa disalin.
+     */
+    private fun autoBench(out: TextView) {
+        if (benching) return
+        benching = true
+        out.text = "Menyiapkan dokumen…"
+        syncAll(); ensureRendered()
+        val oldPaged = pageBox.paged; val oldGuard = ParaEdit.trackGuard; val oldCull = Cull.on
+        val g = glass; val oldDirect = g?.forceDirect ?: false
+        setGuard(true)
+        // (kaca mati?, cull, lembar) — perbaikan pelacakan editor sudah terbukti, selalu nyala
+        val combos = listOf(Triple(false, false, true), Triple(false, true, true), Triple(true, true, true),
+            Triple(true, false, true), Triple(false, true, false))
+        val res = StringBuilder(benchHeader()).append(listenerCensus()).append('\n')
+        // penanda fase TAMBAHAN, didaftarkan PALING AKHIR: preDraw terakhir & sesudah pendengar gulir
+        val vto = window.decorView.viewTreeObserver
+        val preLast = android.view.ViewTreeObserver.OnPreDrawListener { EdPerf.stampPreLast = System.nanoTime(); true }
+        val scrLast = android.view.ViewTreeObserver.OnScrollChangedListener { EdPerf.stampScroll = System.nanoTime() }
+        vto.addOnPreDrawListener(preLast); vto.addOnScrollChangedListener(scrLast)
+        val sampler = arrayOfNulls<StackSampler>(1)
+        var ci = 0
+        val speed = dp(700)   // px per detik
+        fun finish() {
+            try { if (vto.isAlive) { vto.removeOnPreDrawListener(preLast); vto.removeOnScrollChangedListener(scrLast) } } catch (_: Exception) {}
+            setGuard(oldGuard); pageBox.paged = oldPaged; g?.forceDirect = oldDirect
+            Cull.on = oldCull; Cull.invalidateAll(); benching = false
+            EdPerf.reset()
+            val text = res.toString().trimEnd()
+            out.text = text
+            AlertDialog.Builder(this).setTitle("Hasil uji").setMessage(text)
+                .setPositiveButton("OK", null)
+                .setNeutralButton("Salin teks") { _, _ ->
+                    (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                        .setPrimaryClip(android.content.ClipData.newPlainText("Hasil uji Depup", text))
+                    toast("Hasil uji disalin — tempel di chat")
+                }.show()
+        }
+        fun next() {
+            if (ci >= combos.size) { finish(); return }
+            val (glassOff, cull, paged) = combos[ci++]
+            out.text = "Menguji ${ci}/${combos.size}… jangan sentuh layar"
+            g?.forceDirect = glassOff
+            Cull.on = cull; Cull.invalidateAll()
+            pageBox.paged = paged
+            scroll.scrollTo(0, 0)
+            // beri waktu tata letak & pembangunan selesai sebelum mengukur
+            scroll.postDelayed({
+                EdPerf.reset()
+                sampler[0] = StackSampler().also { it.start() }
+                val gc0 = gcStat("art.gc.gc-count"); val gt0 = gcStat("art.gc.gc-time")
+                var callbacks = 0; var dir = 1; var moved = 0
+                val t0 = System.nanoTime(); var last = t0
+                var carry = 0f
+                val step = object : android.view.Choreographer.FrameCallback {
+                    override fun doFrame(now: Long) {
+                        callbacks++
+                        val t = System.nanoTime()
+                        carry += speed * ((t - last) / 1e9f); last = t
+                        val px = carry.toInt(); carry -= px
+                        if (!scroll.canScrollVertically(dir)) dir = -dir
+                        val y0 = scroll.scrollY
+                        scroll.scrollBy(0, dir * px)
+                        moved += kotlin.math.abs(scroll.scrollY - y0)
+                        EdPerf.stampAnim = System.nanoTime()
+                        if (t - t0 < 3_000_000_000L) android.view.Choreographer.getInstance().postFrameCallback(this)
+                        else {
+                            sampler[0]?.stop()
+                            // tunggu sebentar agar FrameMetrics frame terakhir ikut tercatat
+                            scroll.postDelayed({
+                                res.append("■ kaca ${if (glassOff) "MATI" else "nyala"} · cull ${if (cull) "NYALA" else "mati"} · lembar ${if (paged) "nyala" else "MATI"}\n")
+                                    .append(EdPerf.report(t - t0, callbacks, moved, gcStat("art.gc.gc-count") - gc0, gcStat("art.gc.gc-time") - gt0))
+                                    .append(sampler[0]?.report() ?: "")
+                                    .append('\n')
+                                next()
+                            }, 300)
+                        }
+                    }
+                }
+                android.view.Choreographer.getInstance().postFrameCallback(step)
+            }, 1500)
+        }
+        scroll.post { next() }
     }
 
     private fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -357,8 +540,10 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        Cull.releaseAll()
         handler.removeCallbacksAndMessages(null)
         if (::topBarV.isInitialized) try { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(imeWatch) } catch (_: Exception) {}
+        android.os.Looper.getMainLooper().setMessageLogging(null)
         super.onDestroy()
     }
 
@@ -555,14 +740,13 @@ class DocEditorActivity : AppCompatActivity() {
         bar.add(statusTv, w = 0, weight = 1f)
         // zoom = kapsul kecil berikon, senada dengan bilah atas
         val z = navCapsule()
-        z.add(capsuleBtn(R.drawable.ic_zoom_out, "Perkecil tampilan", padDp = 8) { setZoom(zoom - 0.15f) }, w = dp(36), h = dp(34))
+        // zoom cukup dicubit di halaman; kapsul ini hanya penunjuk — ketuk untuk kembali ke 100%
         zoomTv = tv("100%", 12f, C.TEXT, true).apply {
             gravity = Gravity.CENTER
-            contentDescription = "Zoom. Ketuk untuk kembali ke 100%"
+            contentDescription = "Zoom. Cubit halaman untuk memperbesar; ketuk untuk kembali ke 100%"
             setOnClickListener { setZoom(1f) }
         }
-        z.add(zoomTv, w = dp(46), h = dp(34))
-        z.add(capsuleBtn(R.drawable.ic_zoom_in, "Perbesar tampilan", padDp = 8) { setZoom(zoom + 0.15f) }, w = dp(36), h = dp(34))
+        z.add(zoomTv, w = dp(54), h = dp(34))
         bar.addView(z, LinearLayout.LayoutParams(WRAP, dp(36)))
         return bar
     }
@@ -793,8 +977,8 @@ class DocEditorActivity : AppCompatActivity() {
     // Render dokumen
     // =========================================================================================
 
-    /** Lebar lembar di layar: pada 100% kertas pas selebar layar (seperti tata letak cetak Word), zoom memperbesar. */
-    private fun pageWpx(): Int = ((resources.displayMetrics.widthPixels - dp(16)) * zoom).roundToInt()
+    /** Lebar lembar saat ditata: kertas pas selebar layar (seperti tata letak cetak Word). Zoom hanya visual ([ZoomFrame]). */
+    private fun pageWpx(): Int = resources.displayMetrics.widthPixels - dp(16)
     /** 1 pt kertas dalam px — skala ASLI kertas, jadi baris & lembar terpotong mirip Word. */
     private fun ptPx(): Float = pageWpx() / ((doc.page?.w ?: 11906) / 20f)
     private fun twPx(tw: Int?): Int = (((tw ?: 0) / 20f) * ptPx()).roundToInt()
@@ -850,7 +1034,7 @@ class DocEditorActivity : AppCompatActivity() {
             refreshLists()
             updateStatus()
             updateTableTab()
-            if (focus != null) rows[focus]?.editor?.let { e -> e.post { focusEditor(e, if (focusPos < 0) e.length() else focusPos) } }
+            if (focus != null) rows[focus]?.editor?.let { e -> pageBox.post { focusEditor(e, if (focusPos < 0) e.length() else focusPos) } }
         }
         // potongan pertama: sampai blok fokus, lalu isi layar pertama (±24 ms)
         while (tasks.isNotEmpty() && doneCount <= focusTask) runOne()
@@ -1099,7 +1283,7 @@ class DocEditorActivity : AppCompatActivity() {
         val scale = avail.toFloat() / total
         val minCol = dp(56)
         tb.colPx = t.grid.map { max((it * scale).toInt(), minCol) }
-        tb.table = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        tb.table = CullLinear(this).apply { orientation = LinearLayout.VERTICAL }
         tb.root = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = true
             setPadding(0, dp(4), 0, dp(4))
@@ -1322,7 +1506,7 @@ class DocEditorActivity : AppCompatActivity() {
         }
         if (listsChanged) refreshLists()
         val focus = doc.allParas().getOrNull(s.focusIdx)
-        focus?.let { p -> rows[p]?.editor?.let { e -> e.post { focusEditor(e, s.focusPos.coerceIn(0, e.length())) } } }
+        focus?.let { p -> rows[p]?.editor?.let { e -> pageBox.post { focusEditor(e, s.focusPos.coerceIn(0, e.length())) } } }
         refreshTools(); scheduleStatus()
         return true
     }
@@ -2249,15 +2433,9 @@ class DocEditorActivity : AppCompatActivity() {
         body.add(list)
     }
 
+    /** Zoom visual ke [z], berpusat di tengah layar (tanpa menata ulang dokumen). */
     private fun setZoom(z: Float) {
-        val nz = z.coerceIn(0.7f, 3f)   // 100% = lembar pas selebar layar; perbesar untuk mengetik nyaman
-        if (kotlin.math.abs(nz - zoom) < 0.01f) return
-        syncAll()
-        val focus = cur()?.para; val pos = cur()?.selectionStart ?: -1
-        zoom = nz
-        zoomTv.text = "${(zoom * 100).roundToInt()}%"
-        applyPageLook()
-        renderAll(focus, pos)
+        zoomFrame.zoomTo(z, scroll.width / 2f, scroll.height / 2f)
     }
 
     // =========================================================================================

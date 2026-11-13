@@ -69,9 +69,11 @@ class GlassContent(ctx: Context) : FrameLayout(ctx) {
         val n = node
         if (n != null && Glass.BLUR && !direct && canvas.isHardwareAccelerated && width > 0 && height > 0) {
             n.setPosition(0, 0, width, height)
+            val t = System.nanoTime()
             val rc = n.beginRecording(width, height)
             try { super.dispatchDraw(rc) } finally { n.endRecording() }
             canvas.drawRenderNode(n)
+            EdPerf.glassRecNs += System.nanoTime() - t; EdPerf.glassRecs++
         } else super.dispatchDraw(canvas)
     }
 
@@ -386,7 +388,7 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
             canvas.drawRect(0f, top, w, h, tint)
         }
         val blurOn = Glass.BLUR && c != null && !blocked && width > 0 && height > 0 &&
-            (try { if (gpu) drawGpu(canvas, c) else drawSoft(canvas) } catch (_: Throwable) { blocked = true; false })
+            (try { val t0 = System.nanoTime(); (if (gpu) drawGpu(canvas, c) else drawSoft(canvas)).also { EdPerf.glassBarNs += System.nanoTime() - t0; EdPerf.glassBars++ } } catch (_: Throwable) { blocked = true; false })
         if (!liquidNow) {
             // jalur biasa: tint + tepi kaca, cahaya dalam & cahaya sentuh digambar kanvas (arah cahaya tetap dari [GlassLight])
             base?.let { b ->
@@ -606,6 +608,14 @@ open class GlassScrollView(ctx: Context) : ScrollView(ctx) {
  */
 @SuppressLint("ViewConstructor")
 class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Boolean = false) : FrameLayout(ctx) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val t = System.nanoTime(); super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        EdPerf.rootMeasureNs += System.nanoTime() - t; EdPerf.rootMeasures++
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val t = System.nanoTime(); super.onLayout(changed, left, top, right, bottom)
+        EdPerf.rootLayoutNs += System.nanoTime() - t; EdPerf.rootLayouts++
+    }
     val topBar = GlassBar(ctx, true)
     val bottomBar = GlassBar(ctx, false)
     val top: LinearLayout get() = topBar.box

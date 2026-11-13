@@ -103,7 +103,14 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         EdPerf.paraMeasureNs += System.nanoTime() - t; EdPerf.paraMeasures++
     }
 
-    override fun requestLayout() { EdPerf.paraRequests++; super.requestLayout() }
+    override fun requestLayout() {
+        EdPerf.paraRequests++
+        // contoh siapa yang meminta ukur ulang (diagnosis): ambil sesekali, buang bingkai framework yang tak berguna
+        if (EdPerf.paraRequests % 40 == 1) EdPerf.reqWho = Throwable().stackTrace.drop(1)
+            .filter { !it.className.startsWith("android.widget.TextView") && !it.className.startsWith("android.view.View") }
+            .take(4).joinToString(" < ") { it.className.substringAfterLast('.') + "." + it.methodName }
+        super.requestLayout()
+    }
 
     override fun onDraw(canvas: Canvas) {
         val t = System.nanoTime()
@@ -117,6 +124,30 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         @JvmStatic var lastChange = 0L
         /** Uji performa: ejaan aktif di semua paragraf (perilaku lama). */
         @JvmStatic var spellAll = false
+        /**
+         * Perbaikan lag gulir (lihat [onCheckIsTextEditor]). false = perilaku lama, hanya untuk uji A/B.
+         */
+        @JvmStatic var trackGuard = true
+    }
+
+    /**
+     * PENYEBAB LAG: Android 15 melacak SETIAP kolom teks yang mengaku "editor" untuk tulisan-tangan stylus
+     * (TextView.shouldTrackHandwritingArea → onCheckIsTextEditor, tetap aktif walau tulisan-tangan dimatikan, demi
+     * pesan "tidak didukung"). Kolom yang dilacak dipasangi pendengar posisi RenderNode: tiap kali bergeser satu
+     * piksel, ia memposting pembaruan → ViewRootImpl memeriksa ulang SEMUA kolom terlacak (MSG 30 & 35, gesture
+     * exclusion + keep-clear). Ratusan paragraf/sel × ratusan pesan per frame = kuadratik → < 1 fps saat digulir.
+     *
+     * Paragraf yang tidak sedang diketik tidak perlu dianggap editor: keyboard (IMM) hanya bertanya pada kolom yang
+     * fokus, dan ketukan memakai isTextEditable(), bukan fungsi ini.
+     */
+    override fun requestFocus(direction: Int, previouslyFocusedRect: android.graphics.Rect?): Boolean {
+        if (!isAttachedToWindow) ensureAttached(this)
+        return super.requestFocus(direction, previouslyFocusedRect)
+    }
+
+    override fun onCheckIsTextEditor(): Boolean {
+        if (trackGuard && !isFocused) { EdPerf.editorChecks++; return false }
+        return super.onCheckIsTextEditor()
     }
 
     lateinit var para: EPara
@@ -180,6 +211,9 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         setRawInputType(if (spellAll) BASE_TYPE else BASE_TYPE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         if (android.os.Build.VERSION.SDK_INT >= 30) importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO
+        // Android 13+: tiap kolom teks didaftarkan ke pelacak tulisan-tangan stylus dan posisinya diperbarui setiap
+        // kali bergeser — ratusan paragraf/sel ⇒ kerja besar di thread UI pada SETIAP frame gulir. Tidak dipakai di sini.
+        if (android.os.Build.VERSION.SDK_INT >= 33) isAutoHandwritingEnabled = false
         minLines = 1
         setPadding(0, 0, 0, 0)
         highlightColor = 0x553B5BFF
@@ -296,6 +330,8 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         setRawInputType(if (focused || spellAll) BASE_TYPE else BASE_TYPE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         if (!focused && !spellAll) text?.let { t -> for (sp in t.getSpans(0, t.length, android.text.style.SuggestionSpan::class.java)) t.removeSpan(sp) }
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
+        // lepas fokus: hitung ulang pelacakan (menyetel ini memanggil updatePositionUpdateListener) → pendengar dibuang
+        if (!focused && trackGuard && android.os.Build.VERSION.SDK_INT >= 33) isAutoHandwritingEnabled = false
         if (focused && ::para.isInitialized) host.onSel(this)
     }
 
@@ -404,6 +440,39 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
     private var touching = false
     private var lastMove = 0L
 
+    /** Wadah zoom visual; bila dipasang, cubit dua jari memperbesar/memperkecil halaman. */
+    var zoomFrame: ZoomFrame? = null
+    private var pinching = false
+    private val scaleDet = android.view.ScaleGestureDetector(ctx, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(d: android.view.ScaleGestureDetector): Boolean {
+            zoomFrame?.zoomBy(d.scaleFactor, d.focusX, d.focusY); return true
+        }
+    }).apply { isQuickScaleEnabled = false }
+
+    /**
+     * Cubit ditangani DI SINI sebelum sampai ke paragraf / gulir: begitu jari kedua turun, isi menerima CANCEL
+     * (tidak ada kursor pindah / teks terpilih / gulir tak sengaja), dan semua gerakan sampai jari terakhir
+     * terangkat dipakai untuk zoom.
+     */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        val zf = zoomFrame ?: return super.dispatchTouchEvent(ev)
+        scaleDet.onTouchEvent(ev)
+        val m = ev.actionMasked
+        if (!pinching && m == android.view.MotionEvent.ACTION_POINTER_DOWN) {
+            pinching = true; touching = true
+            val c = android.view.MotionEvent.obtain(ev); c.action = android.view.MotionEvent.ACTION_CANCEL
+            super.dispatchTouchEvent(c); c.recycle()
+        }
+        if (pinching) {
+            if (m == android.view.MotionEvent.ACTION_UP || m == android.view.MotionEvent.ACTION_CANCEL) {
+                pinching = false; touching = false; lastMove = android.os.SystemClock.uptimeMillis()
+                zf.settle()
+            }
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean { track(ev); return super.onInterceptTouchEvent(ev) }
     override fun onTouchEvent(ev: android.view.MotionEvent): Boolean { track(ev); return super.onTouchEvent(ev) }
     private fun track(ev: android.view.MotionEvent) {
@@ -416,6 +485,7 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
         super.onScrollChanged(l, t, oldl, oldt)
         lastMove = android.os.SystemClock.uptimeMillis()   // termasuk luncuran (fling) setelah jari lepas
+        if (t != oldt) Cull.scrolled()
     }
 
     override fun draw(canvas: Canvas) {
@@ -451,7 +521,7 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
  * lebih tinggi dari satu lembar (tabel/paragraf sangat panjang) dibiarkan melintas. Lembar putih digambar sendiri.
  * Margin kiri/kanan = padding; margin atas/bawah = [mTop]/[mBottom].
  */
-class PagedBox(ctx: Context) : android.widget.LinearLayout(ctx) {
+class PagedBox(ctx: Context) : android.widget.LinearLayout(ctx), VirtHost {
     /** tinggi ÷ lebar kertas */
     var ratio = 16838f / 11906f
     var mTop = 0
@@ -472,6 +542,52 @@ class PagedBox(ctx: Context) : android.widget.LinearLayout(ctx) {
     private val shade = Paint().apply { color = 0x12000000 }
 
     init { orientation = VERTICAL; setWillNotDraw(false) }
+    private val cull = CullHelper(this)
+
+    override fun virtDetach(i: Int) {
+        val c = getChildAt(i); val lp = c.layoutParams
+        detachViewFromParent(i); removeDetachedView(c, false); attachViewToParent(c, i, lp)
+    }
+    override fun virtAttach(i: Int) {
+        val c = getChildAt(i); val lp = c.layoutParams
+        detachViewFromParent(i); addViewInLayout(c, i, lp, true)
+    }
+    override fun virtDrop(i: Int) { detachViewFromParent(i); requestLayout(); invalidate() }
+    // Anak yang sedang terlepas (virtualisasi) sudah menerima "lepas dari jendela": buang tanpa melepasnya dua kali.
+    override fun removeViewAt(index: Int) {
+        val c = getChildAt(index)
+        if (c != null && !c.isAttachedToWindow && isAttachedToWindow) virtDrop(index) else super.removeViewAt(index)
+    }
+    override fun removeView(view: View) {
+        val i = indexOfChild(view)
+        if (i >= 0 && !view.isAttachedToWindow && isAttachedToWindow) virtDrop(i) else super.removeView(view)
+    }
+    override fun removeViewInLayout(view: View) {
+        val i = indexOfChild(view)
+        if (i >= 0 && !view.isAttachedToWindow && isAttachedToWindow) { detachViewFromParent(i) } else super.removeViewInLayout(view)
+    }
+    override fun addFocusables(views: java.util.ArrayList<View>, direction: Int, focusableMode: Int) {
+        super.addFocusables(views, direction, focusableMode)
+        views.removeAll { !it.isAttachedToWindow && isAttachedToWindow }
+    }
+    override fun addChildrenForAccessibility(outChildren: java.util.ArrayList<View>) {
+        super.addChildrenForAccessibility(outChildren)
+        if (isAttachedToWindow) outChildren.removeAll { !it.isAttachedToWindow }
+    }
+    override fun removeAllViews() { cull.dropDetached(); super.removeAllViews() }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        val t = System.nanoTime()
+        cull.begin()
+        super.dispatchDraw(canvas)
+        EdPerf.boxDrawNs += System.nanoTime() - t; EdPerf.boxDraws++
+    }
+
+    override fun drawChild(canvas: Canvas, child: View, drawingTime: Long): Boolean {
+        if (cull.skip(child)) { EdPerf.culled++; return false }
+        EdPerf.drawnKids++
+        return super.drawChild(canvas, child, drawingTime)
+    }
 
     fun pageH(w: Int = width): Int = Math.round(w * ratio)
 
@@ -535,6 +651,306 @@ class PagedBox(ctx: Context) : android.widget.LinearLayout(ctx) {
 }
 
 
+/**
+ * Gambar hanya anak yang dekat layar. Dokumen ratusan paragraf = ribuan view; tanpa ini SETIAP frame gulir merekam
+ * dan menyinkronkan seluruh pohon RenderNode ke GPU (thread UI menunggu), padahal yang tampil ± sepersepuluhnya.
+ * Anak yang dilewati tetap ada & tetap ditata (kursor, fokus, ukuran lembar tidak berubah) — hanya tidak digambar.
+ * Jendela gambar = layar ± 1 layar; begitu gulir mendekati tepi jendela, wadah digambar ulang dengan jendela baru.
+ */
+object Cull {
+    @JvmStatic var on = true
+    private val hosts = java.util.WeakHashMap<CullHelper, Boolean>()
+    fun register(h: CullHelper) { hosts[h] = true }
+    fun scrolled() { if (on) for (h in hosts.keys.toList()) h.recheck() }
+    fun invalidateAll() { for (h in hosts.keys.toList()) { h.v.invalidate(); h.scheduleSync() } }
+    /** Activity selesai: buang anak terlepas dulu supaya pembongkaran jendela tidak "melepas" mereka dua kali. */
+    fun releaseAll() { for (h in hosts.keys.toList()) try { h.dropDetached() } catch (_: Throwable) {} }
+    /** Jumlah anak terlepas (diagnosis). */
+    fun detachedCount(): Int = hosts.keys.toList().sumOf { h -> (0 until h.v.childCount).count { !h.v.getChildAt(it).isAttachedToWindow } }
+}
+
+/** Wadah yang bisa melepas anak dari jendela tanpa mengeluarkannya dari daftar anak (lihat [CullHelper.syncAttach]). */
+interface VirtHost {
+    fun virtDetach(i: Int)
+    fun virtAttach(i: Int)
+    /** Keluarkan anak yang SUDAH terlepas dari daftar anak, tanpa pemberitahuan "lepas" kedua. */
+    fun virtDrop(i: Int)
+}
+
+/**
+ * Pasang ulang [v] (dan leluhurnya yang terlepas) ke jendela — sebelum fokus/kursor dipindah ke sana.
+ */
+fun ensureAttached(v: View) {
+    var c: View = v
+    var p = c.parent
+    while (p is View) {
+        if (p is VirtHost && p is android.view.ViewGroup && p.isAttachedToWindow && !c.isAttachedToWindow) {
+            val i = p.indexOfChild(c)
+            if (i >= 0) { p.virtAttach(i); c.requestLayout() }
+        }
+        c = p; p = c.parent
+    }
+}
+
+class CullHelper(val v: android.view.ViewGroup) {
+    private var lo = 0; private var hi = -1; private var active = false
+    private val loc = IntArray(2)
+    init { Cull.register(this) }
+
+    /** Skala total (zoom visual) dari [v] ke layar. */
+    private fun scale(): Float {
+        var s = 1f; var c: View = v
+        while (true) { s *= c.scaleY; c = c.parent as? View ?: break }
+        return if (s > 0.01f) s else 1f
+    }
+    private var marginLocal = 0
+
+    /** Rentang layar dalam koordinat [v]: [top, bottom]; false bila belum terpasang. */
+    private fun span(out: IntArray): Boolean {
+        if (!v.isAttachedToWindow) return false
+        v.getLocationInWindow(loc)
+        val h = v.rootView.height
+        if (h <= 0) return false
+        val s = scale()
+        out[0] = (-loc[1] / s).toInt(); out[1] = ((h - loc[1]) / s).toInt()
+        marginLocal = (h / s).toInt()
+        return true
+    }
+    private val tmp = IntArray(2)
+
+    /** Dipanggil di awal dispatchDraw: tetapkan jendela gambar untuk rekaman ini. */
+    fun begin() {
+        scheduleSync()
+        active = false
+        if (!Cull.on || !span(tmp)) return
+        val m = marginLocal
+        lo = tmp[0] - m; hi = tmp[1] + m
+        active = true
+    }
+
+    fun skip(c: View): Boolean {
+        if (!c.isAttachedToWindow && v.isAttachedToWindow) { scheduleSync(); return true }   // terlepas: tak ada isi untuk digambar
+        if (!active) return false
+        val t = c.top + c.translationY; val b = c.bottom + c.translationY
+        return b < lo || t > hi
+    }
+
+    // ---- virtualisasi: lepas dari jendela anak yang jauh dari layar ----
+    // Android memasang pendengar posisi (Editor.PositionListener) pada SETIAP kolom teks yang terpasang di jendela;
+    // tiap frame ia menghitung posisi kolom itu menelusuri ±20 tingkat view — 662 paragraf ⇒ ±20 ms/frame terbuang
+    // (hasilnya hanya dipakai untuk kolom yang sedang diketik). Anak yang terlepas tetap di daftar anak (indeks &
+    // tata letak tak berubah, kode penyuntingan tak terganggu), hanya tidak terdaftar di jendela.
+    private var pending = false
+    private val syncRun = Runnable { pending = false; syncAttach() }
+    fun scheduleSync() { if (!pending && v.isAttachedToWindow) { pending = true; v.postOnAnimation(syncRun) } }
+
+    fun syncAttach() {
+        val host = v as? VirtHost ?: return
+        if (!v.isAttachedToWindow) return
+        var attached = 0
+        if (!Cull.on) {
+            for (i in 0 until v.childCount) if (!v.getChildAt(i).isAttachedToWindow) { host.virtAttach(i); v.getChildAt(i).requestLayout(); attached++ }
+            if (attached > 0) v.invalidate()
+            return
+        }
+        if (!span(tmp)) return
+        val m = marginLocal + marginLocal / 2
+        val lo2 = tmp[0] - m; val hi2 = tmp[1] + m
+        for (i in 0 until v.childCount) {
+            val c = v.getChildAt(i)
+            if (c.visibility == View.GONE) continue
+            val near = c.bottom >= lo2 && c.top <= hi2
+            val on = c.isAttachedToWindow
+            if (near && !on) { host.virtAttach(i); c.requestLayout(); attached++; EdPerf.virtAttach++ }
+            else if (!near && on && !c.hasFocus() && c.isLaidOut) { host.virtDetach(i); EdPerf.virtDetach++ }
+        }
+        if (attached > 0) v.invalidate()
+    }
+
+    /** Sebelum seluruh anak dibuang: keluarkan dulu anak yang terlepas dengan aman (tanpa "lepas" dua kali). */
+    fun dropDetached() {
+        val host = v as? VirtHost
+        for (i in v.childCount - 1 downTo 0) {
+            val c = v.getChildAt(i)
+            if (!c.isAttachedToWindow) { if (host != null && v.isAttachedToWindow) host.virtDrop(i) else v.removeViewInLayout(c) }
+        }
+    }
+
+    /** Setelah gulir: bila layar tinggal setengah layar dari tepi jendela yang terekam, rekam ulang. */
+    fun recheck() {
+        if (!active || !v.isShown || !span(tmp)) return
+        val half = marginLocal / 2
+        val hgt = v.height
+        val needLo = (tmp[0] - half).coerceIn(0, hgt); val needHi = (tmp[1] + half).coerceIn(0, hgt)
+        if (needLo < lo.coerceIn(0, hgt) || needHi > hi.coerceIn(0, hgt)) { EdPerf.cullRedraws++; v.invalidate() }
+        scheduleSync()
+    }
+}
+
+/**
+ * Zoom VISUAL seperti tampilan cetak Word: halaman ditata SEKALI pada 100% lalu hanya diperbesar/diperkecil sebagai
+ * gambar (scale RenderNode). Dulu zoom menata & membangun ulang seluruh dokumen (ribuan view) setiap kali → macet.
+ * Ukuran wadah = isi × zoom, jadi gulir tegak & mendatar ([hScroll]) tetap pas. Titik di bawah jari tetap di bawah
+ * jari selama dicubit.
+ */
+class ZoomFrame(ctx: Context) : android.widget.FrameLayout(ctx) {
+    var zoom = 1f
+        private set
+    var minZoom = 0.5f
+    var maxZoom = 4f
+    var onZoom: ((Float) -> Unit)? = null
+    var vScroll: android.widget.ScrollView? = null
+    var hScroll: android.widget.HorizontalScrollView? = null
+    /** cx, cy (koordinat isi) dan fx, fy (posisi di layar gulir) yang harus tetap berimpit sesudah tata letak. */
+    private var anchor: FloatArray? = null
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val c = getChildAt(0)
+        if (c == null) { super.onMeasure(widthMeasureSpec, heightMeasureSpec); return }
+        val un = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+        c.measure(un, un)                 // spesifikasi selalu sama → hasil ukur di-cache, zoom tidak mengukur ulang isi
+        val cw = c.measuredWidth; val ch = c.measuredHeight
+        var w = Math.round(cw * zoom); var h = Math.round(ch * zoom)
+        w = maxOf(w, if (MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.EXACTLY) MeasureSpec.getSize(widthMeasureSpec) else cw)
+        if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.EXACTLY) h = maxOf(h, MeasureSpec.getSize(heightMeasureSpec))
+        setMeasuredDimension(w, h)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val c = getChildAt(0) ?: return
+        val cw = c.measuredWidth; val ch = c.measuredHeight
+        val sw = cw * zoom
+        val x = if (sw < width) ((width - sw) / 2f).toInt() else 0
+        c.pivotX = 0f; c.pivotY = 0f; c.scaleX = zoom; c.scaleY = zoom
+        c.layout(x, 0, x + cw, ch)
+        anchor?.let { a ->
+            anchor = null
+            hScroll?.scrollTo(Math.round(c.left + a[0] * zoom - a[2]), 0)
+            vScroll?.scrollTo(0, Math.round(c.top + a[1] * zoom - a[3]))
+        }
+        Cull.scrolled()
+    }
+
+    /** Ubah zoom dengan faktor [f]; (fx, fy) = titik fokus relatif terhadap layar gulir. */
+    fun zoomBy(f: Float, fx: Float, fy: Float) = zoomTo(zoom * f, fx, fy)
+
+    fun zoomTo(z: Float, fx: Float, fy: Float) {
+        val nz = z.coerceIn(minZoom, maxZoom)
+        if (Math.abs(nz - zoom) < 1e-4f) return
+        val c = getChildAt(0) ?: return
+        val fxAbs = (hScroll?.scrollX ?: 0) + fx; val fyAbs = (vScroll?.scrollY ?: 0) + fy
+        anchor = floatArrayOf((fxAbs - c.left) / zoom, (fyAbs - c.top) / zoom, fx, fy)
+        zoom = nz
+        requestLayout(); invalidate()
+        onZoom?.invoke(zoom)
+    }
+
+    /** Jari terangkat: dekat 100% → pas 100%. */
+    fun settle() {
+        if (zoom != 1f && Math.abs(zoom - 1f) < 0.06f) {
+            val vs = vScroll
+            zoomTo(1f, (vs?.width ?: 0) / 2f, (vs?.height ?: 0) / 2f)
+        }
+    }
+}
+
+/** Wadah baris tabel yang ikut di-cull (tabel panjang bisa setinggi beberapa layar). */
+class CullLinear(ctx: Context) : android.widget.LinearLayout(ctx), VirtHost {
+    private val cull = CullHelper(this)
+    override fun virtDetach(i: Int) {
+        val c = getChildAt(i); val lp = c.layoutParams
+        detachViewFromParent(i); removeDetachedView(c, false); attachViewToParent(c, i, lp)
+    }
+    override fun virtAttach(i: Int) {
+        val c = getChildAt(i); val lp = c.layoutParams
+        detachViewFromParent(i); addViewInLayout(c, i, lp, true)
+    }
+    override fun virtDrop(i: Int) { detachViewFromParent(i); requestLayout(); invalidate() }
+    // Anak yang sedang terlepas (virtualisasi) sudah menerima "lepas dari jendela": buang tanpa melepasnya dua kali.
+    override fun removeViewAt(index: Int) {
+        val c = getChildAt(index)
+        if (c != null && !c.isAttachedToWindow && isAttachedToWindow) virtDrop(index) else super.removeViewAt(index)
+    }
+    override fun removeView(view: View) {
+        val i = indexOfChild(view)
+        if (i >= 0 && !view.isAttachedToWindow && isAttachedToWindow) virtDrop(i) else super.removeView(view)
+    }
+    override fun removeViewInLayout(view: View) {
+        val i = indexOfChild(view)
+        if (i >= 0 && !view.isAttachedToWindow && isAttachedToWindow) { detachViewFromParent(i) } else super.removeViewInLayout(view)
+    }
+    override fun addFocusables(views: java.util.ArrayList<View>, direction: Int, focusableMode: Int) {
+        super.addFocusables(views, direction, focusableMode)
+        views.removeAll { !it.isAttachedToWindow && isAttachedToWindow }
+    }
+    override fun addChildrenForAccessibility(outChildren: java.util.ArrayList<View>) {
+        super.addChildrenForAccessibility(outChildren)
+        if (isAttachedToWindow) outChildren.removeAll { !it.isAttachedToWindow }
+    }
+    override fun removeAllViews() { cull.dropDetached(); super.removeAllViews() }
+
+    override fun dispatchDraw(canvas: Canvas) { cull.begin(); super.dispatchDraw(canvas) }
+    override fun drawChild(canvas: Canvas, child: View, drawingTime: Long): Boolean {
+        if (cull.skip(child)) { EdPerf.culled++; return false }
+        EdPerf.drawnKids++
+        return super.drawChild(canvas, child, drawingTime)
+    }
+}
+
+/**
+ * Profiler sampling (diagnosis): utas latar memotret tumpukan panggilan thread UI tiap [intervalMs] dan menghitung
+ * fungsi mana yang paling sering sedang berjalan (daun) / ada di tumpukan (inklusif). Menunjukkan PERSIS kode
+ * framework mana yang memakan waktu, tanpa perlu Android Studio.
+ */
+class StackSampler(private val intervalMs: Long = 2) {
+    private val leaf = HashMap<String, Int>()
+    private val incl = HashMap<String, Int>()
+    private val chains = HashMap<String, Int>()
+    private var n = 0
+    @Volatile private var running = false
+    private var th: Thread? = null
+
+    private fun fmt(f: StackTraceElement) = f.className.substringAfterLast('.') + "." + f.methodName
+
+    fun start() {
+        running = true
+        val main = android.os.Looper.getMainLooper().thread
+        th = Thread {
+            while (running) {
+                val st = try { main.stackTrace } catch (_: Throwable) { emptyArray<StackTraceElement>() }
+                if (st.isNotEmpty()) synchronized(this) {
+                    n++
+                    val l = fmt(st[0]); leaf[l] = (leaf[l] ?: 0) + 1
+                    val seen = HashSet<String>()
+                    for (f in st) { val k = fmt(f); if (seen.add(k)) incl[k] = (incl[k] ?: 0) + 1 }
+                    val c = st.take(9).joinToString(" < ") { fmt(it) }
+                    chains[c] = (chains[c] ?: 0) + 1
+                }
+                try { Thread.sleep(intervalMs) } catch (_: InterruptedException) { break }
+            }
+        }.apply { name = "depup-sampler"; priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
+    }
+
+    fun stop() { running = false; try { th?.join(300) } catch (_: Exception) {} }
+
+    private val ROOTS = setOf("ZygoteInit.main", "RuntimeInit\$MethodAndArgsCaller.run", "Method.invoke", "ActivityThread.main",
+        "Looper.loop", "Looper.loopOnce", "Handler.dispatchMessage", "Handler.handleCallback",
+        "Choreographer\$FrameDisplayEventReceiver.run", "Choreographer.doFrame", "Choreographer.doCallbacks",
+        "Choreographer\$CallbackRecord.run", "ViewRootImpl\$TraversalRunnable.run", "ViewRootImpl.doTraversal")
+
+    @Synchronized fun report(): String {
+        if (n == 0) return "sampel: 0 (gagal membaca tumpukan)\n"
+        fun pc(c: Int) = "%.0f%%".format(c * 100.0 / n)
+        val sb = StringBuilder("sampel tumpukan thread UI: $n\n daun teratas:\n")
+        leaf.entries.sortedByDescending { it.value }.take(8).forEach { sb.append("  ${pc(it.value)} ${it.key}\n") }
+        sb.append(" inklusif teratas:\n")
+        incl.entries.filter { it.key !in ROOTS }.sortedByDescending { it.value }.take(14).forEach { sb.append("  ${pc(it.value)} ${it.key}\n") }
+        sb.append(" jalur terpanas:\n")
+        chains.entries.sortedByDescending { it.value }.take(4).forEach { sb.append("  ${pc(it.value)} ${it.key}\n") }
+        return sb.toString()
+    }
+}
+
 /** Penghitung performa editor (sementara, untuk diagnosis di HP pengguna). Semua di thread UI. */
 object EdPerf {
     var measureNs = 0L; var measures = 0
@@ -543,5 +959,118 @@ object EdPerf {
     var paraMeasureNs = 0L; var paraMeasures = 0
     var paraDrawNs = 0L; var paraDraws = 0
     var paraRequests = 0
-    fun reset() { measureNs = 0; measures = 0; layoutNs = 0; layouts = 0; drawNs = 0; draws = 0; paraMeasureNs = 0; paraMeasures = 0; paraDrawNs = 0; paraDraws = 0; paraRequests = 0 }
+    var slowMsgMs = 0L; var slowMsg = ""
+    var reqWho = ""
+    var editorChecks = 0
+    var msgAllMs = 0L
+    var boxDrawNs = 0L; var boxDraws = 0; var culled = 0; var drawnKids = 0; var cullRedraws = 0
+    var virtAttach = 0; var virtDetach = 0
+    var glassRecNs = 0L; var glassRecs = 0; var glassBarNs = 0L; var glassBars = 0
+    var rootMeasureNs = 0L; var rootMeasures = 0; var rootLayoutNs = 0L; var rootLayouts = 0
+    // pemecahan waktu frame di thread UI (ns, dijumlah): mulai pesan → anim selesai → onDraw → pesan selesai
+    var frameMsgStart = 0L; var stampAnim = 0L; var stampPre = 0L; var stampDraw = 0L
+    var stampPreLast = 0L; var stampScroll = 0L
+    var phN = 0; var phAnim = 0L; var phLayout = 0L; var phPre = 0L; var phDraw = 0L
+    var phPreRest = 0L; var phPreN = 0; var phScroll = 0L; var phScrollN = 0; var phToDraw = 0L
+    /** Dipanggil saat pesan frame Choreographer selesai. */
+    fun frameDone(end: Long) {
+        val s0 = frameMsgStart
+        if (s0 != 0L && stampDraw > s0) {
+            val a = if (stampAnim > s0) stampAnim else s0
+            val p = if (stampPre > a) stampPre else stampDraw
+            phN++; phAnim += a - s0; phLayout += p - a; phPre += stampDraw - p; phDraw += end - stampDraw
+            // pecahan preDraw: [preDraw kita → preDraw terakhir] · [→ sesudah pendengar gulir] · [→ onDraw]
+            if (stampPreLast in p..stampDraw) {
+                phPreN++; phPreRest += stampPreLast - p
+                if (stampScroll in stampPreLast..stampDraw) { phScrollN++; phScroll += stampScroll - stampPreLast; phToDraw += stampDraw - stampScroll }
+            }
+        }
+        frameMsgStart = 0L
+    }
+    /** TOTAL_DURATION tiap frame (ns) — untuk persentil. */
+    val frameTotals = ArrayList<Long>()
+    /** Total waktu thread UI per jenis pesan (ms) & jumlahnya. */
+    val msgTotal = HashMap<String, LongArray>()
+    fun addMsg(name: String, ms: Long) { val a = msgTotal.getOrPut(name) { LongArray(2) }; a[0] += ms; a[1]++; msgAllMs += ms }
+
+    private val VRI = mapOf(1 to "INVALIDATE", 2 to "INVALIDATE_RECT", 4 to "RESIZED", 5 to "RESIZED_REPORT",
+        6 to "WINDOW_FOCUS_CHANGED", 7 to "DISPATCH_INPUT_EVENT", 13 to "CHECK_FOCUS", 19 to "PROCESS_INPUT_EVENTS",
+        21 to "CLEAR_A11Y_FOCUS", 24 to "SYNTHESIZE_INPUT", 29 to "INSETS_CONTROL_CHANGED",
+        30 to "SYSTEM_GESTURE_EXCLUSION_CHANGED", 35 to "KEEP_CLEAR_RECTS_CHANGED", 36 to "REPORT_KEEP_CLEAR_RECTS")
+
+    /** ">>>>> Dispatching to Handler (kelas) {hash} callback: what" → nama ringkas yang bisa dibaca. */
+    fun msgKey(line: String): String {
+        val h = line.substringAfter("Handler (", "").substringBefore(')')
+        val rest = line.substringAfter("} ", line)
+        val cb = rest.substringBeforeLast(": ").substringBefore('@')
+        val what = rest.substringAfterLast(": ").trim().toIntOrNull()
+        val hs = h.substringAfterLast('.')
+        return if (cb != "null" && cb.isNotEmpty()) "${cb.substringAfterLast('.')} [$hs]"
+        else if (h.endsWith("ViewRootImpl\$ViewRootHandler")) "ViewRoot#$what ${VRI[what] ?: ""}"
+        else "$hs#$what"
+    }
+    // FrameMetrics (ns): jumlah & maks per fase
+    private val sum = LongArray(9); private val mx = LongArray(9); private var fm = 0
+    fun addFrame(vararg v: Long) { fm++; frameTotals.add(v[8]); for (i in v.indices) { sum[i] += v[i]; if (v[i] > mx[i]) mx[i] = v[i] } }
+    val frames get() = fm
+    fun reset() {
+        measureNs = 0; measures = 0; layoutNs = 0; layouts = 0; drawNs = 0; draws = 0; paraMeasureNs = 0; paraMeasures = 0
+        paraDrawNs = 0; paraDraws = 0; paraRequests = 0; slowMsgMs = 0; slowMsg = ""; reqWho = ""; msgTotal.clear()
+        editorChecks = 0; msgAllMs = 0; frameTotals.clear()
+        boxDrawNs = 0; boxDraws = 0; culled = 0; drawnKids = 0; cullRedraws = 0; virtAttach = 0; virtDetach = 0
+        glassRecNs = 0; glassRecs = 0; glassBarNs = 0; glassBars = 0
+        rootMeasureNs = 0; rootMeasures = 0; rootLayoutNs = 0; rootLayouts = 0
+        phN = 0; phAnim = 0; phLayout = 0; phPre = 0; phDraw = 0
+        phPreRest = 0; phPreN = 0; phScroll = 0; phScrollN = 0; phToDraw = 0
+        java.util.Arrays.fill(sum, 0); java.util.Arrays.fill(mx, 0); fm = 0
+    }
+    fun summary(): String {
+        fun ms(ns: Long) = ns / 1_000_000
+        val names = arrayOf("tunda", "input", "anim", "ukur", "gambar", "sinkron", "GPU-cmd", "swap", "TOTAL")
+        val sb = StringBuilder()
+        sb.append("ukur ${measures}x ${ms(measureNs)}ms tata ${layouts}x ${ms(layoutNs)}ms gbr ${draws}x ${ms(drawNs)}ms\n")
+        sb.append("para-ukur ${paraMeasures}x ${ms(paraMeasureNs)}ms minta ${paraRequests}x\n")
+        if (fm > 0) {
+            sb.append("frame $fm, rata/maks ms:\n")
+            for (i in names.indices) sb.append(names[i]).append(' ').append(ms(sum[i] / fm)).append('/').append(ms(mx[i])).append(if (i % 3 == 2) "\n" else "  ")
+        }
+        if (slowMsgMs > 0) sb.append("pesan terlama ${slowMsgMs}ms: $slowMsg\n")
+        msgTotal.entries.sortedByDescending { it.value[0] }.take(3).forEach { (k, v) -> sb.append("Σ ${v[0]}ms ${v[1]}x: ${k.take(60)}\n") }
+        if (reqWho.isNotEmpty()) sb.append("peminta ukur: $reqWho")
+        return sb.toString()
+    }
+
+    /** Laporan lengkap satu putaran uji (wall = lama putaran, ns). */
+    fun report(wallNs: Long, callbacks: Int, scrolledPx: Int, gcN: Long, gcMs: Long): String {
+        fun ms(ns: Long) = ns / 1_000_000
+        val sec = wallNs / 1e9
+        val sb = StringBuilder()
+        sb.append("frame digambar $fm (%.1f fps) · callback $callbacks · gulir ${scrolledPx}px\n".format(fm / sec))
+        if (frameTotals.isNotEmpty()) {
+            val s = frameTotals.sorted()
+            fun pc(q: Double) = ms(s[((s.size - 1) * q).toInt()])
+            val jank = s.count { it > 16_700_000L }
+            sb.append("frame ms p50 ${pc(0.5)} · p90 ${pc(0.9)} · p99 ${pc(0.99)} · maks ${ms(s.last())} · >16ms ${jank}x\n")
+            val names = arrayOf("tunda", "input", "anim", "ukur", "gambar", "sinkron", "GPU", "swap")
+            sb.append("fase rata: ")
+            for (i in names.indices) sb.append(names[i]).append(' ').append("%.1f".format(sum[i] / fm / 1e6)).append(if (i == 3) "\n  " else " ")
+            sb.append('\n')
+        }
+        sb.append("thread UI sibuk ${msgAllMs}ms (%.0f%%) · GC ${gcN}x ${gcMs}ms\n".format(msgAllMs / 10.0 / sec))
+        sb.append("traversal: ukur ${measures}x ${ms(measureNs)}ms · tata ${layouts}x ${ms(layoutNs)}ms · gambar ${draws}x ${ms(drawNs)}ms\n")
+        if (phN > 0) sb.append("thread UI per frame ($phN): anim %.1f · ukur+tata %.1f · preDraw %.1f · rekam+sinkron %.1f ms\n"
+            .format(phAnim / phN / 1e6, phLayout / phN / 1e6, phPre / phN / 1e6, phDraw / phN / 1e6))
+        if (phPreN > 0) sb.append("  preDraw dipecah ($phPreN): pendengar-preDraw lain %.1f".format(phPreRest / phPreN / 1e6) +
+            (if (phScrollN > 0) " · scrollToFocus+pendengar-gulir %.1f · sisa→onDraw %.1f ms ($phScrollN)".format(phScroll / phScrollN / 1e6, phToDraw / phScrollN / 1e6) else " · (gulir tak terpicu)") + "\n")
+        sb.append("akar: ukur ${rootMeasures}x ${ms(rootMeasureNs)}ms · tata ${rootLayouts}x ${ms(rootLayoutNs)}ms\n")
+        sb.append("lembar: rekam ${boxDraws}x ${ms(boxDrawNs)}ms · anak digambar ${drawnKids} · dilewati ${culled} · rekam-ulang-cull ${cullRedraws} · pasang ${virtAttach} · lepas ${virtDetach} · terlepas kini ${Cull.detachedCount()}\n")
+        sb.append("kaca: rekam isi ${glassRecs}x ${ms(glassRecNs)}ms · gambar bilah ${glassBars}x ${ms(glassBarNs)}ms\n")
+        sb.append("ParaEdit: ukur ${paraMeasures}x ${ms(paraMeasureNs)}ms · gambar ${paraDraws}x ${ms(paraDrawNs)}ms · minta-ukur ${paraRequests}x · cek-editor ${editorChecks}x\n")
+        sb.append("pesan thread UI (total ms · jumlah · rata):\n")
+        msgTotal.entries.sortedByDescending { it.value[0] }.take(6).forEach { (k, v) ->
+            sb.append("  ${v[0]} · ${v[1]}x · %.2f  ".format(v[0].toDouble() / v[1])).append(k.take(56)).append('\n')
+        }
+        if (reqWho.isNotEmpty()) sb.append("peminta ukur: $reqWho\n")
+        return sb.toString()
+    }
 }
