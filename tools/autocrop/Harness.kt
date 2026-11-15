@@ -52,11 +52,16 @@ fun iou(a: FloatArray, b: FloatArray): Float {
 fun main(args: Array<String>) {
     val mode = args.getOrElse(0) { "old" }
     System.getenv("W")?.let { w -> w.split(",").forEachIndexed { i, v -> DocFind.W[i] = v.toFloat() } }
+    System.getenv("SEAM")?.let { w -> w.split(",").forEachIndexed { i, v -> DocFind.SEAM[i] = v.toFloat() } }
+    if (System.getenv("NOSEAM") != null) ScanCore.seamCut = false
     val set2 = args.getOrElse(1) { "" } == "2"
     if (args.getOrElse(1) { "" } == "3") { runMask(mode); return }
     if (args.getOrElse(1) { "" } == "6") { runBig(mode, "cases6.json", "imgs6", "6"); return }
     if (args.getOrElse(1) { "" } == "7") { runBig(mode, "cases7.json", "imgs7", "7"); return }
-    val dir = File("/home/claude/crop")
+    if (args.getOrElse(1) { "" } == "8") { runBig(mode, "cases8.json", "imgs8", "8"); return }
+    if (args.getOrElse(1) { "" } == "9") { runBig(mode, "cases9.json", "imgs9", "9"); return }
+    if (args.getOrElse(1) { "" } == "real") { runReal(); return }
+    val dir = File(System.getenv("CROP") ?: "/home/claude/crop")
     val cases = Regex("\\{\"file\": \"([^\"]+)\", \"quad\": \\[([^\\]]+)\\], \"w\": (\\d+), \"h\": (\\d+)\\}").findAll(File(dir, if (set2) "cases2.json" else "cases.json").readText()).toList()
     var ok = 0; var sum = 0f
     val outLines = StringBuilder()
@@ -83,7 +88,7 @@ fun main(args: Array<String>) {
 
 /** Set 3: ground truth = masker kertas 200x200. IoU + "bocor" (pecahan hasil yang berisi latar). */
 fun runMask(mode: String) {
-    val dir = File("/home/claude/crop")
+    val dir = File(System.getenv("CROP") ?: "/home/claude/crop")
     val cases = Regex("\\{\"file\": \"([^\"]+)\"").findAll(File(dir, "cases3.json").readText()).map { it.groupValues[1] }.toList()
     var ok = 0; var sumI = 0f; var sumL = 0f; var sumC = 0f
     val outLines = StringBuilder()
@@ -110,7 +115,7 @@ fun runMask(mode: String) {
 
 /** Benchmark besar (gen6): IoU vs masker + rincian per kondisi. */
 fun runBig(mode: String, cj: String, dirName: String, tag: String) {
-    val dir = File("/home/claude/crop")
+    val dir = File(System.getenv("CROP") ?: "/home/claude/crop")
     val re = Regex("\\{\"file\": \"([^\"]+)\", \"bg\": \"([^\"]+)\", \"kind\": \"([^\"]+)\", \"tags\": \\[([^\\]]*)\\]\\}")
     val cases = re.findAll(File(dir, cj).readText()).toList()
     var ok = 0; var sumI = 0f; var sumL = 0f
@@ -141,4 +146,25 @@ fun runBig(mode: String, cj: String, dirName: String, tag: String) {
     if (System.getenv("G") != null) for ((k, g) in groups.toSortedMap()) println("  %-22s %3d/%3d  IoU %.2f".format(k, g[1].toInt(), g[0].toInt(), g[2] / g[0]))
     val n = cases.size
     println("== $mode set$tag: berhasil $ok/$n (%.0f%%), IoU %.3f, bocor %.1f%%".format(ok * 100f / n, sumI / n, sumL / n * 100))
+}
+
+/**
+ * Foto ASLI dari pengguna (folder real/): real/cases.json = [{"file": "x.png", "quad": [x0,y0,...,x3,y3]}] dengan sudut
+ * dalam pecahan 0..1 (KA, KaA, KaB, KiB). Tiap kasus yang pernah gagal di HP disimpan di sini sebagai uji regresi.
+ */
+fun runReal() {
+    val dir = File(System.getenv("CROP") ?: "/home/claude/crop", "real")
+    val re = Regex("\\{\"file\": \"([^\"]+)\", \"quad\": \\[([^\\]]+)\\]")
+    val cases = re.findAll(File(dir, "cases.json").readText()).toList()
+    var ok = 0; var sum = 0f
+    for (m in cases) {
+        val name = m.groupValues[1]
+        val gt = Quad.order(m.groupValues[2].split(",").map { it.trim().toFloat() }.toFloatArray())
+        val (s, _, _) = loadSmall(File(dir, name))
+        val q = Quad.order(ScanCore.findDocument(s) ?: Quad.full())
+        val v = iou(q, gt)
+        sum += v; if (v >= 0.85f) ok++
+        println("%-30s IoU %.2f %s  hasil=%s".format(name, v, if (v >= 0.85f) "OK " else "GAGAL", q.joinToString(",") { "%.2f".format(it) }))
+    }
+    println("== asli: berhasil $ok/${cases.size}, rata-rata IoU %.3f".format(sum / maxOf(1, cases.size)))
 }

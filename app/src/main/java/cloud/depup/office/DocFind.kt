@@ -674,7 +674,7 @@ object DocFind {
      * [q] dalam piksel gambar kecil; mengembalikan [q] bila tak ada yang diubah.
      */
     fun trimToPaper(g: IntArray, argb: IntArray, w: Int, h: Int, q: FloatArray): FloatArray =
-        try { trimToPaper(prepare(g, argb, w, h), q) } catch (_: Throwable) { q }
+        try { trimToPaper(prepared(g, argb, w, h), q) } catch (_: Throwable) { q }
 
     private fun trimToPaper(img: Img, q: FloatArray): FloatArray {
         val w = img.w; val h = img.h
@@ -768,6 +768,166 @@ object DocFind {
             out[2 * k] = p.first.coerceIn(0f, w.toFloat()); out[2 * k + 1] = p.second.coerceIn(0f, h.toFloat())
         }
         return if (convex(out)) out else q
+    }
+
+    /**
+     * Kertas putih di atas kain / sprei / papan putih, foto terlalu terang: kertas dan permukaan di sebelahnya sama-sama
+     * putih jenuh, jadi wilayah yang tertangkap ikut membawa permukaan itu. Satu-satunya batas biasanya GARIS BAYANGAN
+     * TIPIS di tepi kertas (lebih gelap beberapa tingkat saja) — terhapus oleh penutupan abu-abu yang dipakai penilai.
+     * Untuk tiap sisi dicari garis lurus samar di dalamnya; sisi dipotong ke garis itu bila pita yang dibuang benar-benar
+     * polos (tanpa tinta, seterang kertas) dan sisanya masih memuat tulisan. Maks. 2 sisi. Kasus nyata: lihat
+     * tools/autocrop (real/user1.png, set gen8).
+     */
+    fun cutAtSeam(g: IntArray, argb: IntArray, w: Int, h: Int, q: FloatArray): FloatArray =
+        try { cutAtSeam(prepared(g, argb, w, h), q) } catch (_: Throwable) { q }
+
+    /** Persiapan foto terakhir dipakai ulang (trimToPaper lalu cutAtSeam memakai foto yang sama). */
+    private var prepKey: IntArray? = null
+    private var prepImg: Img? = null
+    @Synchronized private fun prepared(g: IntArray, argb: IntArray, w: Int, h: Int): Img {
+        prepImg?.let { if (prepKey === g && it.w == w && it.h == h) return it }
+        return prepare(g, argb, w, h).also { prepKey = g; prepImg = it }
+    }
+
+    /**
+     * Parameter [cutAtSeam] — HASIL PELATIHAN (tools/autocrop/SeamTrainer.kt, grid 288 kombinasi): dilatih pada set 6
+     * (300 foto umum) + set 8 (160 foto putih-di-atas-putih), dipilih pada set 7 + 9 yang tidak ikut dilatih, dengan
+     * syarat foto asli pengguna (real/) lolos & set umum tidak mundur.
+     * [0] lekuk/undak minimum (tingkat abu-abu), [1] cakupan garis minimum, [2] lebar pita minimum (pecahan),
+     * [3] tinta maksimum di pita, [4] tinta minimum di sisa dokumen.
+     */
+    @JvmField val SEAM = floatArrayOf(1.5f, 0.55f, 0.14f, 0.015f, 0.005f)
+
+    private fun cutAtSeam(img: Img, q0: FloatArray): FloatArray {
+        var q = q0
+        val done = BooleanArray(4)
+        repeat(2) {
+            var best: FloatArray? = null; var bestV = 0f; var bestK = -1
+            for (k in 0 until 4) {
+                if (done[k]) continue
+                val r = seamSide(img, q, k) ?: continue
+                if (r.second > bestV) { bestV = r.second; best = r.first; bestK = k }
+            }
+            val b = best ?: return q
+            if (!convex(b)) return q
+            debugParts?.invoke("SEAM cut side=$bestK cov=%.2f".format(bestV))
+            q = b; done[bestK] = true
+        }
+        return q
+    }
+
+    /** Garis samar terbaik sejajar sisi [k] (sudut k → k+1); hasil = segi-empat baru + cakupan garisnya. */
+    private fun seamSide(img: Img, q: FloatArray, k: Int): Pair<FloatArray, Float>? {
+        val w = img.w; val h = img.h
+        val ax = q[2 * k]; val ay = q[2 * k + 1]
+        val k1 = (k + 1) % 4; val k2 = (k + 2) % 4; val k3 = (k + 3) % 4
+        val bx = q[2 * k1]; val by = q[2 * k1 + 1]
+        val cx = q[2 * k2]; val cy = q[2 * k2 + 1]          // berseberangan dengan B
+        val dx = q[2 * k3]; val dy = q[2 * k3 + 1]          // berseberangan dengan A
+        val depth = max(sqrt((dx - ax) * (dx - ax) + (dy - ay) * (dy - ay)), sqrt((cx - bx) * (cx - bx) + (cy - by) * (cy - by)))
+        val len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
+        if (depth < 30f || len < 24f) return null
+        val nt = depth.toInt()
+        val mu = 40
+        // titik P(u,t): t=0 di sisi k, t=1 di sisi seberang
+        fun px(u: Float, t: Float) = (1 - t) * (ax + (bx - ax) * u) + t * (dx + (cx - dx) * u)
+        fun py(u: Float, t: Float) = (1 - t) * (ay + (by - ay) * u) + t * (dy + (cy - dy) * u)
+        fun gat(x: Float, y: Float): Int { val xi = x.toInt().coerceIn(0, w - 1); val yi = y.toInt().coerceIn(0, h - 1); return img.g[yi * w + xi] }
+        // kecerahan kertas (persentil-90 abu-abu tertutup di isi)
+        val c4s = ArrayList<Int>()
+        for (j in 0 until 12) for (i in 0 until 12) {
+            val x = px(0.1f + 0.8f * j / 11f, 0.1f + 0.8f * i / 11f).toInt(); val y = py(0.1f + 0.8f * j / 11f, 0.1f + 0.8f * i / 11f).toInt()
+            if (x in 0 until w && y in 0 until h) c4s.add(img.c4[y * w + x])
+        }
+        if (c4s.size < 40) return null
+        c4s.sort()
+        val paper = c4s[c4s.size * 9 / 10]
+        if (paper < 170) return null                        // hanya kertas terang
+        val hit = Array(nt + 1) { BooleanArray(mu) }
+        val ink = Array(nt + 1) { BooleanArray(mu) }
+        val bright = Array(nt + 1) { BooleanArray(mu) }
+        for (i in 0..nt) {
+            val t = i.toFloat() / nt
+            for (j in 0 until mu) {
+                val u = 0.05f + 0.9f * j / (mu - 1)
+                val x = px(u, t); val y = py(u, t)
+                val xi = x.toInt(); val yi = y.toInt()
+                if (xi !in 0 until w || yi !in 0 until h) continue
+                val p = yi * w + xi
+                ink[i][j] = img.mn[p] < paper - 45
+                bright[i][j] = img.c4[p] >= paper - 20
+                // arah tegak lurus garis = arah t (1 px)
+                val ex = px(u, t + 1f / nt) - x; val ey = py(u, t + 1f / nt) - y
+                val a = gat(x - 2 * ex, y - 2 * ey); val b = gat(x + 2 * ex, y + 2 * ey)
+                val c = min(img.g[p], min(gat(x - ex, y - ey), gat(x + ex, y + ey)))
+                val valley = (a + b) / 2f - c
+                hit[i][j] = valley >= SEAM[0] || abs(a - b) >= SEAM[0] * 1.5f
+            }
+        }
+        val iMin = max(6, (nt * SEAM[2]).toInt()); val iMax = (nt * 0.55f).toInt()
+        if (iMax <= iMin) return null
+        val dMax = max(2, (nt * 0.1f).toInt())
+        // rekap tinta & kecerahan per baris t (pita = baris 1..garis-2)
+        val inkRow = IntArray(nt + 1) { i -> ink[i].count { it } }
+        val brightRow = IntArray(nt + 1) { i -> bright[i].count { it } }
+        val inkAfter = IntArray(nt + 2)
+        for (i in nt downTo 0) inkAfter[i] = inkAfter[i + 1] + inkRow[i]
+        var best: FloatArray? = null; var bestCov = 0f; var bestT = 0f
+        if (debugParts != null) {
+            var mc = 0f; var a0 = 0; var a1 = 0
+            for (i0 in iMin..iMax) for (i1 in max(iMin, i0 - dMax)..min(iMax, i0 + dMax)) { val c = lineCov(hit, ink, nt, mu, i0, i1); if (c > mc) { mc = c; a0 = i0; a1 = i1 } }
+            val lo = min(a0, a1) - 2
+            var inkN = 0; var brN = 0; var n = 0
+            for (i in 1..lo) { inkN += inkRow[i]; brN += brightRow[i]; n += mu }
+            debugParts?.invoke("SEAM? side=$k nt=$nt paper=$paper maxcov=%.2f at %d/%d band ink=%.4f bright=%.2f rest=%.3f".format(mc, a0, a1, inkN / max(1f, n.toFloat()), brN / max(1f, n.toFloat()), inkAfter[max(a0, a1) + 2].toFloat() / ((nt - max(a0, a1)) * mu).coerceAtLeast(1)))
+        }
+        for (i0 in iMin..iMax) for (i1 in max(iMin, i0 - dMax)..min(iMax, i0 + dMax)) {
+            val cov = lineCov(hit, ink, nt, mu, i0, i1)
+            if (cov < SEAM[1] || cov < bestCov - 1e-4f) continue
+            // kertas bergaris / tabel: garis sejajar lain berulang di sisi dalam → ini garis cetak, bukan tepi kertas
+            var rep = 0; var gap = 4
+            while (max(i0, i1) + gap + 1 <= nt && rep < 2) {
+                val o = gap
+                if (lineCov(hit, ink, nt, mu, min(nt, i0 + o), min(nt, i1 + o)) >= SEAM[1]) { rep++; gap += 4 } else gap++
+                if (gap > nt / 3) break
+            }
+            if (rep >= 2) continue
+            // pita yang dibuang: polos & seterang kertas
+            val lo = min(i0, i1) - 2
+            var inkN = 0; var brN = 0; var n = 0
+            for (i in 1..lo) { inkN += inkRow[i]; brN += brightRow[i]; n += mu }
+            if (n == 0 || inkN > n * SEAM[3] || brN < n * 0.95f) continue
+            // sisanya harus memuat tulisan
+            val rest = inkAfter[max(i0, i1) + 2].toFloat() / ((nt - max(i0, i1)) * mu).coerceAtLeast(1)
+            if (rest < SEAM[4]) continue
+            val tm = (i0 + i1) / 2f
+            if (cov > bestCov + 1e-4f || tm > bestT) {
+                bestCov = cov; bestT = tm
+                val t0 = i0.toFloat() / nt; val t1 = i1.toFloat() / nt
+                val out = q.copyOf()
+                out[2 * k] = px(0f, t0); out[2 * k + 1] = py(0f, t0)
+                out[2 * k1] = px(1f, t1); out[2 * k1 + 1] = py(1f, t1)
+                best = out
+            }
+        }
+        return best?.let { it to bestCov }
+    }
+
+    /**
+     * Cakupan garis (i0 di u=0 → i1 di u=1): pecahan sampel yang berupa lekuk/undak samar (±1 baris) dan TIDAK
+     * bertinta di sekitarnya — garis tabel, garis buku tulis, dan ujung baris teks tidak dihitung.
+     */
+    private fun lineCov(hit: Array<BooleanArray>, ink: Array<BooleanArray>, nt: Int, mu: Int, i0: Int, i1: Int): Float {
+        var c = 0
+        for (j in 0 until mu) {
+            val u = 0.05f + 0.9f * j / (mu - 1)
+            val ii = (i0 + (i1 - i0) * u).toInt()
+            var inked = false
+            for (d in -3..3) if (ink[(ii + d).coerceIn(0, nt)][j]) { inked = true; break }
+            if (inked) continue
+            if (hit[ii][j] || hit[max(0, ii - 1)][j] || hit[min(nt, ii + 1)][j]) c++
+        }
+        return c.toFloat() / mu
     }
 
     /**

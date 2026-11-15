@@ -133,6 +133,7 @@ class ViewerActivity : AppCompatActivity() {
     private val showFloats = Runnable { setFloatsShown(true) }
     private lateinit var pageBadge: TextView
     private lateinit var zoomLabel: TextView
+    private var protectedBytes: ByteArray? = null
     private val invert = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
         -1f, 0f, 0f, 0f, 255f,
         0f, -1f, 0f, 0f, 255f,
@@ -149,14 +150,118 @@ class ViewerActivity : AppCompatActivity() {
         // dengan layar memuat, jangan di main thread (dulu bisa memicu "Aplikasi tidak merespons").
         setContentView(openingView(Files.nameOf(this, rawUri)))
         Thread {
-            val uri = Files.cacheCopy(this, rawUri)
+            var rawBytes = ByteArray(0)
+            try {
+                rawBytes = contentResolver.openInputStream(rawUri)?.use { it.readBytes() } ?: ByteArray(0)
+            } catch (_: Exception) {}
+
+            var uri = Files.cacheCopy(this, rawUri)
+            if (ProtectedDoc.isProtected(rawBytes)) {
+                protectedBytes = rawBytes
+                try {
+                    val decryptedBytes = ProtectedDoc.openProtected(rawBytes)
+                    val cacheFile = java.io.File(cacheDir, "decrypted_${System.nanoTime()}.pdf")
+                    cacheFile.writeBytes(decryptedBytes)
+                    uri = android.net.Uri.fromFile(cacheFile)
+                } catch (e: Throwable) {
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            androidx.appcompat.app.AlertDialog.Builder(this)
+                                .setTitle("Akses Ditolak / Modifikasi Terdeteksi")
+                                .setMessage(e.message ?: "Dokumen telah dimodifikasi di luar DepUp Office atau integritas gagal diverifikasi.")
+                                .setCancelable(false)
+                                .setPositiveButton("Tutup") { _, _ -> finish() }
+                                .show()
+                        }
+                    }
+                    return@Thread
+                }
+            }
+
+            // .exe hasil "PDF to EXE": ambil PDF aslinya lalu tampilkan seperti PDF biasa (dulu jatuh ke pratinjau Word kosong).
+            if (isExe(uri, Files.nameOf(this, rawUri))) exeAsPdf(uri, Files.nameOf(this, rawUri))?.let { uri = it }
             // PDF juga DIBUKA di latar: PdfRenderer membaca struktur seluruh berkas, untuk PDF ratusan halaman bisa
             // ratusan milidetik — dulu dikerjakan di main thread sehingga layar sempat membeku.
             val pdf = openPdf(uri)
+            val u = uri
+            // PDF terenkripsi: PdfRenderer menolak. Coba tanpa password (PDF yang hanya dibatasi izin), selain itu minta.
+            if (pdf.locked) {
+                val dec = decryptCopy(u, "")
+                if (dec != null) { pdf.close(); val p2 = openPdf(dec); runOnUiThread { if (isFinishing || isDestroyed) p2.close() else build(rawUri, dec, p2) }; return@Thread }
+                runOnUiThread { if (!isFinishing && !isDestroyed) askPassword(rawUri, u, pdf, false) }
+                return@Thread
+            }
             runOnUiThread {
-                if (isFinishing || isDestroyed) pdf.close() else build(rawUri, uri, pdf)
+                if (isFinishing || isDestroyed) pdf.close() else build(rawUri, u, pdf)
             }
         }.start()
+    }
+
+    /**
+     * Salinan PDF yang sudah didekripsi (cache aplikasi, tidak pernah disimpan di luar) — dibuat dengan pembaca PDF
+     * sendiri ([PdfFile] + [PdfSave]) karena PdfRenderer tidak bisa membuka PDF terkunci. Null bila password salah.
+     */
+    private fun decryptCopy(uri: android.net.Uri, pw: String): android.net.Uri? = try {
+        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException()
+        val f = PdfFile.open(bytes, pw)
+        if (!f.encrypted) null else {
+            val dir = java.io.File(cacheDir, "unlocked").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+            val out = java.io.File(dir, "buka_${System.nanoTime()}.pdf")
+            java.io.FileOutputStream(out).use { PdfSave.write(f, it.buffered(1 shl 16)) }
+            android.net.Uri.fromFile(out)
+        }
+    } catch (_: Throwable) { null }
+
+    private fun askPassword(rawUri: android.net.Uri, uri: android.net.Uri, locked: OpenedPdf, wrong: Boolean) {
+        val f = android.widget.EditText(this).apply {
+            hint = "Password PDF"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setTextColor(C.TEXT); setHintTextColor(C.MUTED)
+        }
+        val box = vbox(20)
+        box.add(tv(if (wrong) "Password salah. Coba lagi." else "Dokumen ini dikunci password. Masukkan password untuk membukanya.", 13f, if (wrong) C.RED else C.MUTED))
+        box.add(f, top = 8)
+        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("PDF terkunci").setView(box).setCancelable(false)
+            .setPositiveButton("Buka") { _, _ ->
+                val pw = f.text.toString()
+                Thread {
+                    val dec = decryptCopy(uri, pw)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (dec == null) askPassword(rawUri, uri, locked, true)
+                        else { locked.close(); val p2 = openPdf(dec); build(rawUri, dec, p2) }
+                    }
+                }.start()
+            }
+            .setNegativeButton("Batal") { _, _ -> build(rawUri, uri, locked) }
+            .show()
+    }
+
+    /** Nama tampilan & jenis pengganti bila .exe berhasil diubah jadi PDF (lihat [exeAsPdf]). */
+    private var nameOverride: String? = null
+    private var exeError: String? = null
+
+    /** Berkas program Windows: berakhiran .exe atau berkepala "MZ". */
+    private fun isExe(uri: android.net.Uri, name: String): Boolean {
+        if (name.endsWith(".exe", ignoreCase = true)) return true
+        return try {
+            contentResolver.openInputStream(uri)?.use { val h = ByteArray(2); it.read(h) == 2 && h[0] == 'M'.code.toByte() && h[1] == 'Z'.code.toByte() } ?: false
+        } catch (_: Exception) { false }
+    }
+
+    /** Ambil PDF dari .exe ke cache; null (dan [exeError] terisi) bila gagal. Dijalankan di thread latar. */
+    private fun exeAsPdf(uri: android.net.Uri, name: String): android.net.Uri? = try {
+        val size = Files.sizeOf(this, uri)
+        if (size > 400L shl 20) throw IllegalStateException("Berkas terlalu besar (maks. 400 MB)")
+        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+        val r = ExeToPdf.extract(bytes)
+        val dir = java.io.File(cacheDir, "exe_pdf").apply { mkdirs() }
+        val out = java.io.File(dir, Files.baseName(name).ifBlank { "dokumen" } + ".pdf")
+        out.writeBytes(r.pdf)
+        nameOverride = name.substringBeforeLast('.').ifBlank { "dokumen" } + ".pdf"
+        android.net.Uri.fromFile(out)
+    } catch (e: Throwable) {
+        exeError = if (e is OutOfMemoryError) "Memori tidak cukup untuk membuka berkas ini." else e.message ?: "PDF tidak ditemukan di berkas ini."
+        null
     }
 
     /** Hasil membuka PDF di thread latar. [aspect] = tinggi/lebar halaman pertama (0 bila tidak diketahui). */
@@ -200,8 +305,8 @@ class ViewerActivity : AppCompatActivity() {
 
     private fun build(rawUri: android.net.Uri, uri: android.net.Uri, pdf: OpenedPdf) {
 
-        val name = Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
-        val mime = intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
+        val name = nameOverride ?: Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
+        val mime = if (nameOverride != null) PDF else intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
         mimeStr = mime
         paperTheme = PdfSettings.readerTheme(this)
         night = paperTheme == 1
@@ -247,6 +352,7 @@ class ViewerActivity : AppCompatActivity() {
         subTv = tv(when {
             isPdfLoaded -> "PDF • $total halaman"
             mime.startsWith("image/") -> "Gambar"
+            exeError != null -> "Program Windows (.exe)"
             else -> when (OfficeView.kindOf(name, mime)) { "docx" -> "Dokumen Word"; "xlsx" -> "Lembar kerja Excel"; "pptx" -> "Presentasi PowerPoint"; else -> "Dokumen" }
         }, 12f, C.MUTED).apply { maxLines = 1 }
         tcol.add(subTv)
@@ -280,13 +386,16 @@ class ViewerActivity : AppCompatActivity() {
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 val office = officeWeb != null
                 pm.menu.add(0, 1, 0, "Bagikan")
-                pm.menu.add(0, 2, 1, "🖨️ Cetak Dokumen")
-                if (isPdfLoaded) pm.menu.add(0, 8, 2, "🔊 Bacakan Suara (Voice Reader)")
+                pm.menu.add(0, 2, 1, "Cetak Dokumen")
+                if (isPdfLoaded) pm.menu.add(0, 8, 2, "Bacakan Suara (Voice Reader)")
                 if (isPdfLoaded) pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF")
                 pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
                 if (isPdfLoaded) pm.menu.add(0, 5, 5, "Lompat Halaman")
                 if (isPdfLoaded) pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
                 if (isPdfLoaded) pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar")
+                if (protectedBytes != null) {
+                    pm.menu.add(0, 9, 8, "Ekspor PDF Asli (Password Guru)")
+                }
                 pm.setOnMenuItemClickListener { m ->
                     try {
                         when (m.itemId) {
@@ -297,16 +406,48 @@ class ViewerActivity : AppCompatActivity() {
                             4 -> showRenameDialog(rawUri, uri, name)
                             5 -> showJumpPageDialog()
                             6 -> showPdfSettingsSheet()
-                            else -> {
+                            7 -> {
                                 val base = Files.baseName(name)
                                 work("Menyedot semua gambar dari PDF…", {
                                     Pdf.extractImagesFromPdf(this@ViewerActivity, uri, base)
                                 }) { r ->
                                     r.onSuccess { count ->
-                                        toast("✓ $count gambar diekstrak ke Pictures/Depup Office!")
+                                        toast("$count gambar diekstrak ke Pictures/Depup Office!")
                                     }.onFailure { fail(it) }
                                 }
                             }
+                            9 -> {
+                                val bytes = protectedBytes ?: return@setOnMenuItemClickListener true
+                                val pwField = field("Password Edit Guru", pin = false).apply {
+                                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                                }
+                                androidx.appcompat.app.AlertDialog.Builder(this@ViewerActivity)
+                                    .setTitle("Ekspor PDF Asli")
+                                    .setView(vbox(16).apply {
+                                        setPadding(dp(16), dp(16), dp(16), dp(16))
+                                        add(tv("Masukkan password edit guru untuk mengekspor dokumen PDF asli:", 13f, C.TEXT))
+                                        add(pwField, top = 8)
+                                    })
+                                    .setPositiveButton("Ekspor") { _, _ ->
+                                        val pw = pwField.text.toString()
+                                        if (ProtectedDoc.verifyEditPassword(bytes, pw)) {
+                                            try {
+                                                val originalBytes = ProtectedDoc.openProtected(bytes)
+                                                val out = Files.namedOut(this@ViewerActivity, "Asli_" + Files.baseName(name), "pdf")
+                                                out.writeBytes(originalBytes)
+                                                toast("PDF asli diekstrak ke Unduhan/Depup Office!")
+                                                Files.open(this@ViewerActivity, Files.uriFor(this@ViewerActivity, out), PDF)
+                                            } catch (e: Exception) {
+                                                toast("Gagal mengekstrak: ${e.message}")
+                                            }
+                                        } else {
+                                            toast("Password edit salah")
+                                        }
+                                    }
+                                    .setNegativeButton("Batal", null)
+                                    .show()
+                            }
+                            else -> {}
                         }
                     } catch (_: Exception) { toast("Tidak bisa dijalankan") }
                     true
@@ -564,6 +705,14 @@ class ViewerActivity : AppCompatActivity() {
         }
 
         when {
+            exeError != null -> {
+                val banner = card(16, 16).apply { background = shape(C.SURFACE2, 16, C.LINE, 1) }
+                banner.add(tv("Program Windows (.exe)", 18f, C.TEXT, true))
+                banner.add(tv("Berkas .exe adalah program Windows dan tidak bisa dijalankan di HP. Bila berkas ini hasil \"PDF to EXE\", PDF di dalamnya biasanya bisa diambil otomatis — tetapi kali ini gagal:\n\n$exeError", 13f, C.MUTED), top = 6)
+                banner.add(btn("Bagikan ke aplikasi lain", true, C.ACCENT) { try { Files.share(this, uri, mime, false) } catch (_: Exception) {} }, top = 16)
+                banner.add(btn("Tutup Pembaca", false, C.ACCENT) { finish() }, top = 8)
+                paper.add(banner)
+            }
             mime == PDF || name.endsWith(".pdf") -> {
                 val banner = card(16, 16).apply {
                     background = shape(C.RED_BG, 16, C.RED, 1)

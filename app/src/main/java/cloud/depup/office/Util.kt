@@ -112,13 +112,14 @@ object Files {
     } catch (_: Exception) { 0L to 0L }
 
     fun outDir(ctx: Context): File {
+        val docs = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "DepupOffice")
+        if (!docs.exists()) docs.mkdirs()
+        if (docs.exists() && docs.canWrite()) return docs
         val sd = Environment.getExternalStorageDirectory()
         val depupDir = File(sd, "DepupOffice")
         if (!depupDir.exists()) depupDir.mkdirs()
         if (depupDir.exists() && depupDir.canWrite()) return depupDir
-        val docs = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "DepupOffice")
-        if (!docs.exists()) docs.mkdirs()
-        return if (docs.exists()) docs else File(ctx.filesDir, "DepupOffice").apply { mkdirs() }
+        return File(ctx.filesDir, "DepupOffice").apply { mkdirs() }
     }
 
     class RenameConflict(msg: String) : Exception(msg)
@@ -128,6 +129,26 @@ object Files {
     private fun withExt(clean: String, oldName: String): String {
         val ext = oldName.substringAfterLast('.', "")
         return if (ext.isBlank() || clean.endsWith(".$ext", ignoreCase = true)) clean else "$clean.$ext"
+    }
+
+    fun showInFileManager(ctx: Context, uri: Uri) {
+        try {
+            val i = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "*/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            ctx.startActivity(i)
+        } catch (_: Exception) {
+            try {
+                val i = Intent(Intent.ACTION_GET_CONTENT).apply {
+                    type = "*/*"
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                }
+                ctx.startActivity(i)
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(ctx, "Tidak dapat membuka file manager", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** File lokal di balik URI file:// atau FileProvider milik app ini; null bila bukan. */
@@ -369,15 +390,16 @@ object Files {
         }, null)
     }
 
-    fun saveToDownloads(ctx: Context, src: Uri, name: String, mime: String) {
-        val r = ctx.contentResolver
-        val cv = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Depup Office")
+    fun saveToDownloads(ctx: Context, src: Uri, name: String, mime: String): File {
+        val ext = name.substringAfterLast('.', "pdf")
+        val base = baseName(name)
+        val out = namedOut(ctx, base, ext)
+        ctx.contentResolver.openInputStream(src)?.let { input ->
+            input.use { i ->
+                out.outputStream().use { o -> i.copyTo(o) }
+            }
         }
-        val dst = r.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: throw IOException("Gagal membuat file di Unduhan")
-        r.openInputStream(src)!!.use { i -> r.openOutputStream(dst)!!.use { o -> i.copyTo(o) } }
+        return out
     }
 }
 

@@ -145,7 +145,8 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                 gravity = Gravity.CENTER_VERTICAL
             }
             val titleTv = TextView(activity).apply {
-                text = "🔊 Voice Reader — $title"
+                text = "Voice Reader — $title"
+                leadingIcon(R.drawable.ic_volume, C.TEXT, 20)
                 textSize = 16f
                 setTextColor(C.TEXT)
                 typeface = Fonts.head(activity)
@@ -250,7 +251,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             }
 
             idBtn.apply {
-                text = "🇮🇩 Indonesia"
+                text = "Indonesia"
                 textSize = 12f
                 setPadding(dp(activity, 10), dp(activity, 4), dp(activity, 10), dp(activity, 4))
                 background = GradientDrawable().apply { cornerRadius = dp(activity, 6).toFloat() }
@@ -261,7 +262,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                 }
             }
             enBtn.apply {
-                text = "🇬🇧 English"
+                text = "English"
                 textSize = 12f
                 setPadding(dp(activity, 10), dp(activity, 4), dp(activity, 10), dp(activity, 4))
                 background = GradientDrawable().apply { cornerRadius = dp(activity, 6).toFloat() }
@@ -289,9 +290,10 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             }
 
             val playBtn = TextView(activity).apply {
-                text = "▶️ Putar Suara"
+                text = "Putar Suara"
                 textSize = 14f
                 setTextColor(C.ON_PRIMARY)
+                leadingIcon(R.drawable.ic_play, C.ON_PRIMARY)
                 typeface = Fonts.label(activity)
                 setPadding(dp(activity, 20), dp(activity, 10), dp(activity, 20), dp(activity, 10))
                 background = GradientDrawable().apply {
@@ -301,9 +303,10 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             }
 
             val stopBtn = TextView(activity).apply {
-                text = "⏹️ Stop"
+                text = "Stop"
                 textSize = 14f
                 setTextColor(C.TEXT)
+                leadingIcon(R.drawable.ic_stop, C.TEXT)
                 setPadding(dp(activity, 16), dp(activity, 10), dp(activity, 16), dp(activity, 10))
                 background = GradientDrawable().apply {
                     setColor(C.SURFACE2)
@@ -326,15 +329,15 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                 if (!isReading) {
                     isReading = true
                     isPaused = false
-                    playBtn.text = "⏸️ Pause"
+                    playBtn.setPlay(false, "Jeda")
                     reader.startReading(contentText, selectedLocale)
                 } else if (!isPaused) {
                     isPaused = true
-                    playBtn.text = "▶️ Lanjutkan"
+                    playBtn.setPlay(true, "Lanjutkan")
                     reader.pause()
                 } else {
                     isPaused = false
-                    playBtn.text = "⏸️ Pause"
+                    playBtn.setPlay(false, "Jeda")
                     reader.resume()
                 }
             }
@@ -342,7 +345,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             stopBtn.setOnClickListener {
                 isReading = false
                 isPaused = false
-                playBtn.text = "▶️ Putar Suara"
+                playBtn.setPlay(true, "Putar Suara")
                 progressTv.text = "Dihentikan"
                 reader.stop()
             }
@@ -355,10 +358,10 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             reader.onStateChange = { playing, paused ->
                 isReading = playing || paused
                 isPaused = paused
-                playBtn.text = when {
-                    paused -> "▶️ Lanjutkan"
-                    playing -> "⏸️ Pause"
-                    else -> "▶️ Putar Suara"
+                when {
+                    paused -> playBtn.setPlay(true, "Lanjutkan")
+                    playing -> playBtn.setPlay(false, "Jeda")
+                    else -> playBtn.setPlay(true, "Putar Suara")
                 }
                 if (!playing && !paused) {
                     progressTv.text = "Selesai membaca seluruh dokumen."
@@ -383,4 +386,10 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             ctx.toast(msg)
         }
     }
+}
+
+/** Tombol putar/jeda: teks + ikon garis (pengganti emoji ▶️/⏸️). */
+private fun TextView.setPlay(play: Boolean, label: String) {
+    text = label
+    leadingIcon(if (play) R.drawable.ic_play else R.drawable.ic_pause, currentTextColor)
 }

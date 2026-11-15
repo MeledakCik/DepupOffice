@@ -28,6 +28,16 @@ class SignatureView(ctx: Context) : View(ctx) {
 
     fun clear() { path.reset(); empty = true; invalidate() }
 
+    /** Warna tinta. */
+    var color: Int
+        get() = paint.color
+        set(v) { paint.color = v; invalidate() }
+
+    /** Tebal goresan (px). */
+    var stroke: Float
+        get() = paint.strokeWidth
+        set(v) { paint.strokeWidth = v; invalidate() }
+
     override fun onDraw(canvas: Canvas) { canvas.drawPath(path, paint) }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {

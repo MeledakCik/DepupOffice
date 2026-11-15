@@ -488,7 +488,7 @@ class DocEditorActivity : AppCompatActivity() {
                             sampler[0]?.stop()
                             // tunggu sebentar agar FrameMetrics frame terakhir ikut tercatat
                             scroll.postDelayed({
-                                res.append("■ kaca ${if (glassOff) "MATI" else "nyala"} · cull ${if (cull) "NYALA" else "mati"} · lembar ${if (paged) "nyala" else "MATI"}\n")
+                                res.append("kaca ${if (glassOff) "MATI" else "nyala"} · cull ${if (cull) "NYALA" else "mati"} · lembar ${if (paged) "nyala" else "MATI"}\n")
                                     .append(EdPerf.report(t - t0, callbacks, moved, gcStat("art.gc.gc-count") - gc0, gcStat("art.gc.gc-time") - gt0))
                                     .append(sampler[0]?.report() ?: "")
                                     .append('\n')
@@ -912,7 +912,7 @@ class DocEditorActivity : AppCompatActivity() {
         var lastHl: Int? = null
         toolStates.add { val c = curFmt().bg.let { if (it == null || it == CharFmt.NONE) 0xFFFFFF00.toInt() else it }; if (c != lastHl) { lastHl = c; hlBar.setBackgroundColor(c) } }
         toolBox("Stabilo", hlG, onClick = { pickHighlight() })
-        toolBox("Hapus Format", glyphText("T✕", 14f, color = C.RED), onClick = { clearFormat() })
+        toolBox("Hapus Format", icon(R.drawable.ic_format_clear, C.RED, 24), onClick = { clearFormat() })
         sep()
         toolBox("Kiri", GlyphIcon(this, GlyphIcon.ALIGN_L), onClick = { setAlign(0) }, isActive = { curAlign() == 0 })
         toolBox("Tengah", GlyphIcon(this, GlyphIcon.ALIGN_C), onClick = { setAlign(1) }, isActive = { curAlign() == 1 })
@@ -932,7 +932,7 @@ class DocEditorActivity : AppCompatActivity() {
         toolBox("Tanda Tangan", icon(R.drawable.ic_sign, C.TEXT, 24), onClick = { drawSignature() })
         sep()
         toolBox("Pemisah Halaman", GlyphIcon(this, GlyphIcon.BREAK), onClick = { insertPageBreak() })
-        toolBox("Baris Baru", glyphText("↵", 18f), onClick = { insertSoftBreak() })
+        toolBox("Baris Baru", icon(R.drawable.ic_line_break, C.TEXT, 24), onClick = { insertSoftBreak() })
         toolBox("Paragraf Baru", glyphText("¶", 18f), onClick = { insertParagraphAfter() })
         sep()
         toolBox("Simbol", glyphText("Ω", 18f), onClick = { pickSymbol() })
@@ -952,7 +952,7 @@ class DocEditorActivity : AppCompatActivity() {
     private fun buildReview() {
         toolBox("Cari & Ganti", icon(R.drawable.ic_search, C.TEXT, 24), onClick = { toggleFindBar() })
         toolBox("Jumlah Kata", glyphText("123", 14f), onClick = { showWordCount() })
-        toolBox("Bacakan", glyphText("🔊", 16f, Typeface.NORMAL), onClick = { readAloud() })
+        toolBox("Bacakan", icon(R.drawable.ic_volume, C.TEXT, 24), onClick = { readAloud() })
         sep()
         toolBox("Cetak / PDF", icon(R.drawable.ic_print, C.TEXT, 24), onClick = { printDoc() })
         toolBox("Simpan Sebagai", icon(R.drawable.ic_download, C.TEXT, 24), onClick = { save(true) })
@@ -1089,7 +1089,7 @@ class DocEditorActivity : AppCompatActivity() {
         root.add(line)
         val imgs = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.add(imgs)
-        if (p.hasObject) root.add(tv("▣ Kotak teks / objek (tetap dipertahankan)", 10.5f, C.MUTED).apply {
+        if (p.hasObject) root.add(tv("Kotak teks / objek (tetap dipertahankan)", 10.5f, C.MUTED).apply {
             gravity = Gravity.CENTER; background = shape(C.SURFACE2, 6); setPadding(dp(6), dp(5), dp(6), dp(5))
         }, top = 2)
         val pr = ParaRow(root, label, ed, imgs)
@@ -2407,7 +2407,7 @@ class DocEditorActivity : AppCompatActivity() {
             "Saat kursor berada di tabel, muncul tab “Tabel” untuk menambah/menghapus baris & kolom.",
             "Tab Tata Letak: ukuran kertas (A4/F4), orientasi, margin (termasuk 4-4-3-3 untuk skripsi), dan spasi.",
             "Ketuk gambar untuk mengubah ukuran atau menghapusnya.",
-            "↶ / ↷ di atas untuk urungkan/ulangi. Tombol − / + di bawah untuk memperbesar tampilan.",
+            "Tombol Urungkan / Ulangi di atas untuk membatalkan atau mengulang. Tombol − / + di bawah untuk memperbesar tampilan.",
             "Format asli dokumen (header, footer, gaya, gambar) selalu dipertahankan saat disimpan."
         )
         val pad = vbox().apply { setPadding(dp(20), 0, dp(20), dp(24)) }

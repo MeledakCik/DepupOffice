@@ -283,8 +283,8 @@ class SheetEditorActivity : AppCompatActivity() {
         caps.add(capsuleBtn(R.drawable.ic_tune, "Pengaturan spreadsheet") { showExcelSettingsSheet() }, w = dp(40), h = dp(40))
         caps.add(capsuleBtn(R.drawable.ic_more, "Opsi lain") { v ->
             val pm = android.widget.PopupMenu(this@SheetEditorActivity, v)
-            pm.menu.add(0, 1, 0, "🔊 Bacakan Isi Tabel (Voice Reader)")
-            pm.menu.add(0, 2, 1, "🖨️ Cetak Spreadsheet")
+            pm.menu.add(0, 1, 0, "Bacakan Isi Tabel (Voice Reader)")
+            pm.menu.add(0, 2, 1, "Cetak Spreadsheet")
             pm.setOnMenuItemClickListener { m ->
                 val title = sheetTitleEt.text.toString().ifBlank { "Spreadsheet Excel" }
                 when (m.itemId) {

@@ -31,8 +31,13 @@ class PageMarks {
     class Stroke(val color: Int, val width: Float, val highlight: Boolean, val pts: MutableList<Float> = ArrayList())
     /** Catatan teks di posisi (x, y) = pojok kiri atas kotak catatan. */
     class Note(val text: String, val x: Float, val y: Float)
-    /** Tanda tangan (PNG transparan) di kotak [box]. */
-    class Stamp(val bmp: Bitmap, val box: RectF)
+    /**
+     * Tanda tangan (PNG transparan) di kotak [box] (pecahan halaman, sebelum diputar), diputar [rot] derajat searah
+     * jarum jam terhadap pusat kotak. [bmp] bisa diganti (ganti warna tinta).
+     */
+    class Stamp(var bmp: Bitmap, val box: RectF, var rot: Float = 0f) {
+        fun copy(dx: Float = 0f, dy: Float = 0f) = Stamp(bmp, RectF(box).apply { offset(dx, dy) }, rot)
+    }
 
     val items = ArrayList<Any>()          // urutan gambar = urutan dibuat (untuk Urungkan)
     fun isEmpty() = items.isEmpty()
@@ -135,8 +140,79 @@ object PdfTools {
 
     // ------------------------------------------------------------------ PDF ke Word
 
-    /** PDF -> .docx yang bisa diedit (OCR per halaman; teks digital pun dibaca lewat OCR karena PdfRenderer tidak memberi teks). */
-    fun toWord(ctx: Context, uri: Uri, out: File, progress: (Int, Int) -> Unit = { _, _ -> }) {
+    /** Isi berkas PDF (maks. 300 MB). */
+    private fun readPdf(ctx: Context, uri: Uri): ByteArray {
+        val size = Files.sizeOf(ctx, uri)
+        if (size > 300L shl 20) throw IllegalStateException("Berkas terlalu besar (maks. 300 MB)")
+        return ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+    }
+
+    /**
+     * PDF → Word semirip mungkin: teks asli + font/ukuran/warna, tabel (garis, sel gabungan, arsiran), foto, bentuk,
+     * dan tata letak dibaca langsung dari isi PDF ([PdfToDocx]). Halaman hasil pindaian (tanpa teks) dibaca dengan OCR.
+     * Bila struktur PDF tidak bisa dibaca sama sekali, jatuh ke jalur OCR lama ([toWordOcr]).
+     */
+    fun toWord(ctx: Context, uri: Uri, out: File, password: String = "", progress: (Int, Int) -> Unit = { _, _ -> }) {
+        val pdf = try { PdfFile.open(readPdf(ctx, uri), password) } catch (e: PdfPasswordException) { throw e } catch (e: OutOfMemoryError) { throw e } catch (_: Throwable) { null }
+        if (pdf == null) { toWordOcr(ctx, uri, out, progress); return }
+        PdfLayout.jpegWithAlpha = { jpg, a, w, h -> jpegAlpha(jpg, a, w, h) }
+        // PdfRenderer (untuk OCR halaman pindaian) tidak bisa membuka PDF terkunci → tanpa OCR
+        val src = if (pdf.encrypted) null else try { Src(ctx, uri) } catch (_: Throwable) { null }
+        try {
+            val scan = src?.let { s ->
+                object : PdfToDocx.Scan {
+                    override fun ocr(pageIndex: Int): List<Block>? {
+                        val rd = Pdf.render(s.r, pageIndex, ocrScale(s, pageIndex), 0, Perf.ocrCap())
+                        try { val res = Ocr.run(rd.bmp); return if (res.conf < Ocr.LOW_CONF) null else res.blocks } finally { rd.bmp.recycle() }
+                    }
+                    override fun pageImage(pageIndex: Int): Triple<ByteArray, Int, Int>? {
+                        val rd = Pdf.render(s.r, pageIndex, scale())
+                        try { val sm = scaled(rd.bmp, Export.WORD_IMG_DIM); try { return Triple(jpeg(sm, Export.WORD_IMG_Q), sm.width, sm.height) } finally { if (sm !== rd.bmp) sm.recycle() } } finally { rd.bmp.recycle() }
+                    }
+                }
+            }
+            try { PdfToDocx(out).convert(pdf, scan, progress) } catch (e: OutOfMemoryError) { out.delete(); throw e } catch (t: Throwable) { out.delete(); if (src != null) toWordOcr(ctx, uri, out, progress) else throw t }
+        } finally { try { src?.close() } catch (_: Throwable) {} }
+    }
+
+    /** JPEG + kanal alfa (SMask) → PNG transparan. */
+    private fun jpegAlpha(jpg: ByteArray, a: ByteArray, w: Int, h: Int): ByteArray? = try {
+        val b = android.graphics.BitmapFactory.decodeByteArray(jpg, 0, jpg.size) ?: null
+        if (b == null) null else {
+            val m = if (b.width == w && b.height == h) b.copy(Bitmap.Config.ARGB_8888, true) else Bitmap.createScaledBitmap(b, w, h, true).copy(Bitmap.Config.ARGB_8888, true)
+            if (m !== b) b.recycle()
+            val px = IntArray(w * h); m.getPixels(px, 0, w, 0, 0, w, h)
+            for (i in px.indices) px[i] = (px[i] and 0xFFFFFF) or ((a[i].toInt() and 0xFF) shl 24)
+            m.setPixels(px, 0, w, 0, 0, w, h)
+            ByteArrayOutputStream().also { m.compress(Bitmap.CompressFormat.PNG, 100, it); m.recycle() }.toByteArray()
+        }
+    } catch (_: Throwable) { null }
+
+    // ------------------------------------------------------------------ Kunci AES-256 & penanda anti-AI (tanpa render ulang)
+
+    /** Kunci PDF dengan AES-256 TANPA mengubah halaman jadi gambar: teks tetap bisa dicari, ukuran tetap kecil. */
+    fun lockLossless(ctx: Context, uri: Uri, out: File, userPw: String, ownerPw: String, perms: PdfSave.Perms) {
+        val pdf = PdfFile.open(readPdf(ctx, uri))
+        FileOutputStream(out).use { PdfSave.write(pdf, it.buffered(1 shl 16), PdfSave.Lock(userPw, ownerPw, perms)) }
+    }
+
+    /** Status penanda anti-AI dokumen. */
+    fun aiMarked(ctx: Context, uri: Uri): Boolean = PdfAiMark.isMarked(PdfFile.open(readPdf(ctx, uri)))
+
+    /** Pasang ([mark] = true) atau hapus penanda anti-AI & proteksi blokir AI (tanpa password pembuka bagi user, tanpa tanda visual di halaman); isi halaman tidak berubah. */
+    fun aiMark(ctx: Context, uri: Uri, out: File, mark: Boolean, owner: String) {
+        val pdf = PdfFile.open(readPdf(ctx, uri))
+        val perms = if (mark) PdfSave.Perms(print = true, copy = false, modify = false, annotate = false) else PdfSave.Perms(print = true, copy = true, modify = true, annotate = true)
+        val lock = if (mark) PdfSave.Lock("", "owner_${System.currentTimeMillis()}", perms) else null
+        FileOutputStream(out).use { o ->
+            PdfSave.write(pdf, o.buffered(1 shl 16), lock) { c ->
+                if (mark) PdfAiMark.apply(c, owner) else PdfAiMark.remove(c)
+            }
+        }
+    }
+
+    /** PDF -> .docx lewat OCR per halaman (cadangan bila isi PDF tidak bisa dibaca langsung). */
+    fun toWordOcr(ctx: Context, uri: Uri, out: File, progress: (Int, Int) -> Unit = { _, _ -> }) {
         val d = DocxWriter(out)
         try {
             Src(ctx, uri).use { s ->
@@ -199,9 +275,23 @@ object PdfTools {
                 p.xfermode = null
             }
             is PageMarks.Note -> drawNote(c, w, h, it)
-            is PageMarks.Stamp -> c.drawBitmap(it.bmp, null,
-                RectF(it.box.left * w, it.box.top * h, it.box.right * w, it.box.bottom * h), bmpPaint)
+            is PageMarks.Stamp -> {
+                val r = RectF(it.box.left * w, it.box.top * h, it.box.right * w, it.box.bottom * h)
+                c.save()
+                if (it.rot != 0f) c.rotate(it.rot, r.centerX(), r.centerY())
+                c.drawBitmap(it.bmp, null, r, bmpPaint)
+                c.restore()
+            }
         }
+    }
+
+    /** Warnai ulang tanda tangan: bentuk (kanal alfa) tetap, warna tinta diganti [color]. */
+    fun recolor(src: Bitmap, color: Int): Bitmap {
+        val w = src.width; val h = src.height
+        val px = IntArray(w * h); src.getPixels(px, 0, w, 0, 0, w, h)
+        val rgb = color and 0xFFFFFF
+        for (i in px.indices) px[i] = (px[i] and 0xFF000000.toInt()) or rgb
+        return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
     }
 
     /** Catatan = kotak kuning lembut berisi teks (gaya "sticky note"). */

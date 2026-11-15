@@ -58,7 +58,7 @@ fun objective(data: List<List<Cand>>, P: FloatArray): Pair<Int, Float> {
 }
 
 object Trainer { @JvmStatic fun main(args: Array<String>) {
-    val dir = File("/home/claude/crop")
+    val dir = File(System.getenv("CROP") ?: "/home/claude/crop")
     fun bigSet(cj: String, d: String) = Regex("\"file\": \"([^\"]+)\"").findAll(File(dir, cj).readText()).map { it.groupValues[1] }.map { n ->
         val mk = ImageIO.read(File(dir, "$d/" + n.replace(".jpg", "_mask.png")))
         File(dir, "$d/$n") to { q: FloatArray -> iouMask(q, mk) }

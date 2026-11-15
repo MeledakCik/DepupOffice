@@ -470,8 +470,8 @@ class ScanEditActivity : AppCompatActivity() {
         bar.add(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ScanEditActivity, v)
-                pm.menu.add(0, 1, 0, "🔊 Bacakan Teks OCR (Voice Reader)")
-                pm.menu.add(0, 2, 1, "🖨️ Cetak Hasil Scan")
+                pm.menu.add(0, 1, 0, "Bacakan Teks OCR (Voice Reader)")
+                pm.menu.add(0, 2, 1, "Cetak Hasil Scan")
                 pm.setOnMenuItemClickListener { m ->
                     when (m.itemId) {
                         1 -> {
@@ -501,7 +501,7 @@ class ScanEditActivity : AppCompatActivity() {
             }
         }, w = dp(40), h = dp(40))
 
-        bar.add(btn("Lanjut  →", true) { save() }, w = WRAP)
+        bar.add(btn("Lanjut", true, iconRes = R.drawable.ic_next) { save() }, w = WRAP)
         root.add(bar)
 
         // ----- isi (bisa digulir) -----
@@ -935,7 +935,7 @@ class ScanEditActivity : AppCompatActivity() {
                 pages.add(ktpPg)
                 cur = 0
                 show()
-                toast("✓ KTP Sisi Depan & Belakang berhasil ditata dalam 1 Halaman A4!")
+                toast("KTP Sisi Depan & Belakang berhasil ditata dalam 1 Halaman A4!")
             }.onFailure { fail(it) }
         }
     }
@@ -985,7 +985,7 @@ class ScanEditActivity : AppCompatActivity() {
         val fRect = RectF(fLeft, fTop, fLeft + cardW, fTop + cardH)
         canvas.drawBitmap(fBmp, null, fRect, Paint(Paint.FILTER_BITMAP_FLAG))
         canvas.drawRoundRect(fRect, 20f, 20f, borderPaint)
-        canvas.drawText("● SISI DEPAN (FRONT)", a4W / 2f, fTop + cardH + 50f, labelPaint)
+        canvas.drawText("SISI DEPAN (FRONT)", a4W / 2f, fTop + cardH + 50f, labelPaint)
 
         // --- Belakang ---
         val bLeft = (a4W - cardW) / 2f
@@ -993,7 +993,7 @@ class ScanEditActivity : AppCompatActivity() {
         val bRect = RectF(bLeft, bTop, bLeft + cardW, bTop + cardH)
         canvas.drawBitmap(bBmp, null, bRect, Paint(Paint.FILTER_BITMAP_FLAG))
         canvas.drawRoundRect(bRect, 20f, 20f, borderPaint)
-        canvas.drawText("● SISI BELAKANG (BACK)", a4W / 2f, bTop + cardH + 50f, labelPaint)
+        canvas.drawText("SISI BELAKANG (BACK)", a4W / 2f, bTop + cardH + 50f, labelPaint)
 
         fBmp.recycle(); bBmp.recycle()
 
@@ -1115,7 +1115,7 @@ class ScanEditActivity : AppCompatActivity() {
         cropHint.text = when {
             Quad.isFull(q) -> "Geser 4 titik sudut ke ujung dokumen — boleh miring atau tidak sejajar. Hasilnya otomatis diluruskan jadi kotak 90°."
             Quad.isRect(q) -> "Area potong berbentuk kotak. Geser titik sudut secara bebas bila dokumen miring/berperspektif."
-            else -> "✓ Area miring akan otomatis diluruskan jadi persegi panjang 90° saat disimpan. Ketuk “Lihat Hasil” untuk pratinjau."
+            else -> "Area miring akan otomatis diluruskan jadi persegi panjang 90° saat disimpan. Ketuk “Lihat Hasil” untuk pratinjau."
         }
     }
 
@@ -1182,7 +1182,7 @@ class ScanEditActivity : AppCompatActivity() {
             pad.add(tv("Tidak ada teks yang terbaca. Coba gunakan filter Magic Color atau B&W Dokumen, dan pastikan pencahayaan foto tajam.", 13f, C.MUTED))
         } else {
             if (res.conf < Ocr.LOW_CONF) {
-                pad.add(tv("⚠️ OCR kurang yakin (${(res.conf * 100).toInt()}%). Biasanya karena tulisan tangan atau foto buram — OCR offline hanya andal untuk teks cetak. Untuk hasil terbaik: foto lebih dekat & terang (ketuk layar untuk fokus), atau simpan sebagai PDF/Foto.", 12f, C.RED))
+                pad.add(tv("OCR kurang yakin (${(res.conf * 100).toInt()}%). Biasanya karena tulisan tangan atau foto buram — OCR offline hanya andal untuk teks cetak. Untuk hasil terbaik: foto lebih dekat & terang (ketuk layar untuk fokus), atau simpan sebagai PDF/Foto.", 12f, C.RED))
             }
             val t = tv(res.text, 14f, C.TEXT).apply {
                 setTextIsSelectable(true)
@@ -1193,7 +1193,7 @@ class ScanEditActivity : AppCompatActivity() {
 
             // Penerjemah Teks Dokumen
             var isTranslated = false
-            val transBtn = btn("🌐 Terjemahkan Dokumen (Inggris ↔ Indonesia)", false, C.INDIGO, R.drawable.ic_spark) {
+            val transBtn = btn("Terjemahkan Dokumen (Inggris ↔ Indonesia)", false, C.INDIGO, R.drawable.ic_spark) {
                 isTranslated = !isTranslated
                 t.text = Pdf.translateDocText(res.text, isTranslated)
                 toast(if (isTranslated) "Teks diterjemahkan ke Bahasa Indonesia" else "Teks kembali ke Asli")
@@ -1205,7 +1205,7 @@ class ScanEditActivity : AppCompatActivity() {
             if (summary.dates.isNotEmpty() || summary.numbers.isNotEmpty() || summary.amounts.isNotEmpty()) {
                 val sCard = card(12, 12).apply { background = shape(C.AMBER_BG, 12, C.AMBER, 1) }
                 val sCol = vbox()
-                sCol.add(tv("📌 RINGKASAN POIN KRUSIAL DOKUMEN", 12f, C.AMBER, true))
+                sCol.add(tv("RINGKASAN POIN KRUSIAL DOKUMEN", 12f, C.AMBER, true))
                 if (summary.numbers.isNotEmpty()) sCol.add(tv("Nomor/Pasal: ${summary.numbers.joinToString(", ")}", 12f, C.TEXT, true), top = 2)
                 if (summary.dates.isNotEmpty()) sCol.add(tv("Tanggal: ${summary.dates.joinToString(", ")}", 12f, C.TEXT, true), top = 2)
                 if (summary.amounts.isNotEmpty()) sCol.add(tv("Nominal: ${summary.amounts.joinToString(", ")}", 12f, C.TEXT, true), top = 2)
@@ -1218,7 +1218,7 @@ class ScanEditActivity : AppCompatActivity() {
             if (receipt.total != "Rp 0") {
                 val rCard = card(12, 12).apply { background = shape(C.BLUE_BG, 12, C.INDIGO, 1) }
                 val rCol = vbox()
-                rCol.add(tv("🧾 DETEKSI STRUK / NOTA KEUANGAN", 12f, C.INDIGO, true))
+                rCol.add(tv("DETEKSI STRUK / NOTA KEUANGAN", 12f, C.INDIGO, true))
                 rCol.add(tv("Merchant: ${receipt.merchant} • Tanggal: ${receipt.date}", 12f, C.TEXT, true), top = 2)
                 rCol.add(tv("Total Bayar: ${receipt.total}", 15f, C.INDIGO, true), top = 2)
                 rCard.add(rCol)
@@ -1234,13 +1234,13 @@ class ScanEditActivity : AppCompatActivity() {
             val expGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
             val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row1.add(btn("📷 Cuma Foto (JPG)", false, C.SKY, R.drawable.ic_image) {
+            row1.add(btn("Cuma Foto (JPG)", false, C.SKY, R.drawable.ic_image) {
                 dismiss()
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
                 export("Scan_Foto_$stamp", Export.F_JPG, 1, Export.ASPECTS[0], false, null)
             }, w = 0, weight = 1f)
 
-            row1.add(btn("📄 Dokumen PDF", false, C.RED, R.drawable.ic_pdf) {
+            row1.add(btn("Dokumen PDF", false, C.RED, R.drawable.ic_pdf) {
                 dismiss()
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
                 export("Scan_PDF_$stamp", Export.F_PDF, 1, Export.ASPECTS[0], true, null)
@@ -1248,7 +1248,7 @@ class ScanEditActivity : AppCompatActivity() {
             expGrid.add(row1)
 
             val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row2.add(btn("📝 Teks / Word (.docx)", false, C.ACCENT, R.drawable.ic_doc) {
+            row2.add(btn("Teks / Word (.docx)", false, C.ACCENT, R.drawable.ic_doc) {
                 dismiss()
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
                 export("Scan_Word_$stamp", Export.F_WORD, 0, Export.ASPECTS[0], true, null)

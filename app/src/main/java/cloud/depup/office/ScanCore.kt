@@ -304,6 +304,9 @@ object ScanCore {
      * manual) — lebih baik daripada memasang potongan asal-asalan.
      * Buku terbuka 2 halaman tetap dicek ([lastSplit]).
      */
+    /** Tahap [DocFind.cutAtSeam] (bisa dimatikan dari alat uji untuk membandingkan). */
+    @JvmField var seamCut = true
+
     fun findDocument(s0: Small): FloatArray? {
         lastSplit = false
         val s = normalized(s0)
@@ -318,6 +321,9 @@ object ScanCore {
             if (split != null) { q = split; lastSplit = true }
             // jalur permukaan lain (bodi laptop, halaman sebelah) yang masih ikut di pinggir: tarik ke tepi kertas
             q = DocFind.trimToPaper(s.g, s.argb, s.w, s.h, q)
+            // kertas putih di atas kain/papan putih (foto terlalu terang): potong di garis bayangan tipis tepi kertas
+            // (hanya dokumen besar: kartu/struk kecil berpinggir polos lebar tidak disentuh)
+            if (seamCut && Quad.area(q) >= 0.12f * s.w * s.h) q = DocFind.cutAtSeam(s.g, s.argb, s.w, s.h, q)
             return FloatArray(8) { if (it % 2 == 0) (q[it] / s.w).coerceIn(0f, 1f) else (q[it] / s.h).coerceIn(0f, 1f) }
         }
         return null

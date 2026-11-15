@@ -161,7 +161,7 @@ object Export {
                     val bmp = ocrRender(ctx, pg, mode, bright, contrast)
                     val res = try { Ocr.run(bmp) } finally { bmp.recycle() }
                     if (res.conf < Ocr.LOW_CONF) {
-                        d.note("⚠ OCR kurang yakin di halaman ${i + 1} (kemungkinan tulisan tangan atau foto buram). Foto halaman disertakan agar isinya tidak hilang.")
+                        d.note("Catatan: OCR kurang yakin di halaman ${i + 1} (kemungkinan tulisan tangan atau foto buram). Foto halaman disertakan agar isinya tidak hilang.")
                         val lay = layout(process(ctx, pg, mode, WORD_IMG_DIM, bright, contrast), a)
                         try { d.image(jpeg(lay.bmp, WORD_IMG_Q), lay.bmp.width, lay.bmp.height) } finally { lay.recycle() }
                     }

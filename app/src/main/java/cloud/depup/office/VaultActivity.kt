@@ -160,7 +160,7 @@ class VaultActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 888 && resultCode == RESULT_OK) {
-            toast("✓ Autentikasi Biometrik Berhasil!")
+            toast("Autentikasi biometrik berhasil")
             showList()
         }
     }

@@ -283,7 +283,7 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun paintAuto() {
-        autoPill.text = if (autoScan) "● Pindai otomatis: AKTIF" else "○ Pindai otomatis: MATI"
+        autoPill.text = if (autoScan) "Pindai otomatis: AKTIF" else "Pindai otomatis: MATI"
         autoPill.background = shape(if (autoScan) 0xE635754C.toInt() else 0x99000000.toInt(), 100)
     }
 
@@ -516,7 +516,7 @@ class CameraActivity : AppCompatActivity() {
                     updateThumb(f)
                     if (modeIdx == 1) { // KTP Mode
                         if (shots.size == 1) {
-                            toast("✓ Foto Sisi DEPAN KTP disimpan. Sekarang foto Sisi BELAKANG!")
+                            toast("Foto Sisi DEPAN KTP disimpan. Sekarang foto Sisi BELAKANG!")
                             hint("Step 2: Posisikan KTP Sisi BELAKANG di dalam bingkai")
                         } else {
                             finishWithShots()

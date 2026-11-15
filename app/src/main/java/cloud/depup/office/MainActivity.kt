@@ -405,7 +405,7 @@ class MainActivity : AppCompatActivity() {
                 toast("Link $saweriaUrl berhasil disalin!")
             }
             val shareBtn = btn("Bagikan Link Donasi", false, C.ACCENT, R.drawable.ic_share) {
-                val text = "Dukung pengembangan Depup Office 💙\n\nDonasi via Saweria (GoPay, DANA, OVO, QRIS, dll):\n$saweriaUrl\n\nAplikasi office & scanner PDF 100% offline & bebas iklan. Terima kasih!"
+                val text = "Dukung pengembangan Depup Office\n\nDonasi via Saweria (GoPay, DANA, OVO, QRIS, dll):\n$saweriaUrl\n\nAplikasi office & scanner PDF 100% offline & bebas iklan. Terima kasih!"
                 startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, text)
@@ -969,13 +969,15 @@ class MainActivity : AppCompatActivity() {
             pm.menu.add(0, 2, 1, "Edit dokumen")
             pm.menu.add(0, 3, 2, "Ubah nama")
             pm.menu.add(0, 4, 3, "Bagikan")
-            pm.menu.add(0, 5, 4, "Hapus dari riwayat")
+            pm.menu.add(0, 6, 4, "Temukan di File Manager")
+            pm.menu.add(0, 5, 5, "Hapus dari riwayat")
             pm.setOnMenuItemClickListener { m ->
                 when (m.itemId) {
                     1 -> openIt()
                     2 -> editDoc(uriStr, e[1], e[2])
                     3 -> showRenameFileDialog(uriStr, e[1])
                     4 -> try { Files.share(this, Uri.parse(uriStr), e[2], false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+                    6 -> Files.showInFileManager(this, Uri.parse(uriStr))
                     else -> { Recent.remove(this, uriStr); render() }
                 }
                 true
@@ -1386,7 +1388,7 @@ class MainActivity : AppCompatActivity() {
             tile(R.drawable.ic_wand, C.PDF_FG, C.PDF_BG, "Watermark PDF", "Teks diagonal di tiap halaman") { pickFile(arrayOf(PDF)) { watermarkFlow(it) } }
         )
         section("Konversi",
-            tile(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "PDF ke Word", "Teks bisa diedit (OCR)") { pickFile(arrayOf(PDF)) { pdfToWordFlow(it) } },
+            tile(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "PDF ke Word", "Persis aslinya: teks, tabel, foto, bentuk", "Baru", C.DOC_FG, C.DOC_BG) { pickFile(arrayOf(PDF)) { pdfToWordFlow(it) } },
             tile(R.drawable.ic_search, C.DOC_FG, C.DOC_BG, "PDF bisa dicari", "Tanam teks OCR, bisa di-copy") { pickFile(arrayOf(PDF)) { rebuildPdfFlow(it, lock = false) } },
             tile(R.drawable.ic_pdf, C.DOC_FG, C.DOC_BG, "Word/Excel ke PDF", "Tampilan asli, simpan PDF") {
                 pickFile(arrayOf(
@@ -1408,8 +1410,25 @@ class MainActivity : AppCompatActivity() {
             tile(R.drawable.ic_sign, C.IMG_FG, C.IMG_BG, "TTD transparan", "Foto tanda tangan jadi PNG") { extractTransparentSignatureFlow() }
         )
         section("Tanda tangan & keamanan",
-            tile(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Gambar lalu tempel ke halaman") { pickFile(arrayOf(PDF)) { signFlow(it) } },
-            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Password PDF", "Kunci PDF dengan kata sandi") { pickFile(arrayOf(PDF)) { rebuildPdfFlow(it, lock = true) } },
+            tile(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Tempel bebas: geser, ukuran, putar, warna") { pickFile(arrayOf(PDF)) { signFlow(it) } },
+            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Password PDF", "AES-256, dibuka di Adobe Reader & Depup") { pickFile(arrayOf(PDF)) { rebuildPdfFlow(it, lock = true) } },
+            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Dokumen Terlindungi", "Sampul DepUp, AES-256-GCM, HMAC, & password guru", "Baru", C.PRIMARY, C.PRIMARY_C) {
+                val b = vbox(12).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
+                var d: AlertDialog? = null
+                b.add(btn("Pilih File PDF", true, C.PRIMARY) {
+                    d?.dismiss()
+                    pickFile(arrayOf(PDF)) { protectDocFlow(it) }
+                })
+                b.add(btn("Cari di File Manager", false, C.PRIMARY) {
+                    d?.dismiss()
+                    pickFile(arrayOf("*/*")) { protectDocFlow(it) }
+                }, top = 8)
+                d = AlertDialog.Builder(this)
+                    .setTitle("Dokumen Terlindungi")
+                    .setView(b)
+                    .setNegativeButton("Batal", null)
+                    .show()
+            },
             tile(R.drawable.ic_lock, C.PRIMARY, C.PRIMARY_C, "Kunci berkas", "Enkripsi ke Brankas AES-256") { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } },
             tile(R.drawable.ic_qr, C.PRIMARY, C.PRIMARY_C, "QR Code", "Pindai atau buat QR") { showQrDialog() },
             tile(R.drawable.ic_scan, C.XLS_FG, C.XLS_BG, "Scan struk", "Total belanja ke Excel") { startScan() }
@@ -1669,16 +1688,19 @@ class MainActivity : AppCompatActivity() {
             pm.menu.add(0, 2, 1, "Edit dokumen")
             pm.menu.add(0, 3, 2, "Ubah nama")
             pm.menu.add(0, 5, 3, "Bagikan")
-            pm.menu.add(0, 4, 4, "Hapus berkas")
+            pm.menu.add(0, 6, 4, "Temukan di File Manager")
+            pm.menu.add(0, 4, 5, "Hapus berkas")
             pm.setOnMenuItemClickListener { m ->
                 when (m.itemId) {
                     1 -> Files.open(this, uri, mime)
                     2 -> editDoc(uri.toString(), f.name, mime)
                     3 -> showRenameFileDialog(uri.toString(), f.name)
+                    5 -> try { Files.share(this, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+                    6 -> Files.showInFileManager(this, uri)
                     4 -> confirm("Hapus berkas?", "“${f.name}” akan dihapus dari HP dan tidak bisa dikembalikan.", "Hapus") {
                         f.delete(); toast("Berkas dihapus"); onChanged()
                     }
-                    else -> try { Files.share(this, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+                    else -> {}
                 }
                 true
             }
@@ -1870,16 +1892,19 @@ class MainActivity : AppCompatActivity() {
     // ================= TOOLS =================
     private fun mergeFlow() = pickFiles(arrayOf(PDF)) { picked -> orderDialog(picked.toMutableList()) }
 
-    private fun miniBtn(label: String, onClick: () -> Unit) = tv(label, 16f, C.ACCENT_SOFT, true).apply {
-        gravity = Gravity.CENTER
+    /** Tombol kecil ber-ikon garis (naik/turun/putar/hapus) — pengganti simbol teks ↑ ↓ ↻ ✕. */
+    private fun miniBtn(res: Int, desc: String, onClick: () -> Unit) = FrameLayout(this).apply {
         background = raised(C.SURFACE, 10, 2f)
+        contentDescription = desc
+        if (android.os.Build.VERSION.SDK_INT >= 26) tooltipText = desc
+        addView(icon(res, C.ACCENT_SOFT, 18), FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER))
         setOnClickListener { onClick() }
     }
 
     /** Atur urutan manual: naik/turun/hapus, hasil digabung dari atas ke bawah. */
     private fun orderDialog(list: MutableList<Uri>) {
         val box = vbox(16)
-        box.add(tv("Atur urutan dengan ↑ ↓. PDF digabung dari atas ke bawah.", 12f, C.MUTED))
+        box.add(tv("Atur urutan dengan tombol naik/turun. PDF digabung dari atas ke bawah.", 12f, C.MUTED))
         val rows = vbox()
         box.add(rows, top = 8)
         fun rebuild() {
@@ -1892,9 +1917,9 @@ class MainActivity : AppCompatActivity() {
                     background = shape(C.SURFACE2, 12)
                 }
                 r.add(tv("${i + 1}. ${Files.nameOf(this, u)}", 13f).apply { maxLines = 2 }, w = 0, weight = 1f)
-                r.add(miniBtn("↑") { if (i > 0) { list.add(i - 1, list.removeAt(i)); rebuild() } }, w = dp(36), h = dp(36), side = 2)
-                r.add(miniBtn("↓") { if (i < list.size - 1) { list.add(i + 1, list.removeAt(i)); rebuild() } }, w = dp(36), h = dp(36), side = 2)
-                r.add(miniBtn("✕") { list.removeAt(i); rebuild() }, w = dp(36), h = dp(36), side = 2)
+                r.add(miniBtn(R.drawable.ic_up, "Naikkan") { if (i > 0) { list.add(i - 1, list.removeAt(i)); rebuild() } }, w = dp(36), h = dp(36), side = 2)
+                r.add(miniBtn(R.drawable.ic_down, "Turunkan") { if (i < list.size - 1) { list.add(i + 1, list.removeAt(i)); rebuild() } }, w = dp(36), h = dp(36), side = 2)
+                r.add(miniBtn(R.drawable.ic_close, "Hapus") { list.removeAt(i); rebuild() }, w = dp(36), h = dp(36), side = 2)
                 rows.add(r, top = 6)
             }
         }
@@ -2094,7 +2119,7 @@ class MainActivity : AppCompatActivity() {
 
         val box = vbox(12).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         box.add(tv("Kelola & Susun Halaman: $name ($total hal)", 14f, C.TEXT, true))
-        box.add(tv("Atur urutan dengan ↑ ↓, putar 90° dengan ↻, atau hapus halaman dengan ✕.", 12f, C.MUTED))
+        box.add(tv("Atur urutan dengan tombol naik/turun, putar 90°, atau hapus halaman.", 12f, C.MUTED))
 
         val listContainer = vbox(8)
         box.add(ScrollView(this).apply { addView(listContainer) }, h = dp(220))
@@ -2110,10 +2135,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 val rot = rotations[origIdx] ?: 0
                 r.add(tv("${idx + 1}. Halaman ${origIdx + 1}" + if (rot > 0) " ($rot°)" else "", 13f, C.TEXT, true), w = 0, weight = 1f)
-                r.add(miniBtn("↑") { if (idx > 0) { pagesOrder.add(idx - 1, pagesOrder.removeAt(idx)); renderList() } }, w = dp(32), h = dp(32), side = 2)
-                r.add(miniBtn("↓") { if (idx < pagesOrder.size - 1) { pagesOrder.add(idx + 1, pagesOrder.removeAt(idx)); renderList() } }, w = dp(32), h = dp(32), side = 2)
-                r.add(miniBtn("↻") { rotations[origIdx] = ((rotations[origIdx] ?: 0) + 90) % 360; renderList() }, w = dp(32), h = dp(32), side = 2)
-                r.add(miniBtn("✕") { pagesOrder.removeAt(idx); renderList() }, w = dp(32), h = dp(32), side = 2)
+                r.add(miniBtn(R.drawable.ic_up, "Naikkan") { if (idx > 0) { pagesOrder.add(idx - 1, pagesOrder.removeAt(idx)); renderList() } }, w = dp(32), h = dp(32), side = 2)
+                r.add(miniBtn(R.drawable.ic_down, "Turunkan") { if (idx < pagesOrder.size - 1) { pagesOrder.add(idx + 1, pagesOrder.removeAt(idx)); renderList() } }, w = dp(32), h = dp(32), side = 2)
+                r.add(miniBtn(R.drawable.ic_rotate, "Putar 90°") { rotations[origIdx] = ((rotations[origIdx] ?: 0) + 90) % 360; renderList() }, w = dp(32), h = dp(32), side = 2)
+                r.add(miniBtn(R.drawable.ic_close, "Hapus") { pagesOrder.removeAt(idx); renderList() }, w = dp(32), h = dp(32), side = 2)
                 listContainer.add(r, top = 4)
             }
         }
@@ -2144,7 +2169,7 @@ class MainActivity : AppCompatActivity() {
             r.onSuccess { count ->
                 AlertDialog.Builder(this)
                     .setTitle("Ekstrak Foto Selesai")
-                    .setMessage("✓ Berhasil menyedot $count gambar dari PDF ke Galeri › Pictures/Depup Office!")
+                    .setMessage("Berhasil menyedot $count gambar dari PDF ke Galeri › Pictures/Depup Office!")
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
@@ -2175,7 +2200,7 @@ class MainActivity : AppCompatActivity() {
             r.onSuccess { n ->
                 AlertDialog.Builder(this)
                     .setTitle("Konversi Massal Selesai")
-                    .setMessage("✓ Berhasil mengonversi $n foto menjadi $n file PDF terpisah di folder sdcard/DepupOffice!")
+                    .setMessage("Berhasil mengonversi $n foto menjadi $n file PDF terpisah di folder sdcard/DepupOffice!")
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
@@ -2225,7 +2250,7 @@ class MainActivity : AppCompatActivity() {
                         val savedMb = Files.fmtSize(saved)
                         AlertDialog.Builder(this)
                             .setTitle("Kompres Foto Selesai")
-                            .setMessage("✓ Berhasil mengompres $count foto ke Galeri › Pictures/Depup Office!\n" + if (saved > 0) "Hemat ruang penyimpanan: $savedMb" else "")
+                            .setMessage("Berhasil mengompres $count foto ke Galeri › Pictures/Depup Office!\n" + if (saved > 0) "Hemat ruang penyimpanan: $savedMb" else "")
                             .setPositiveButton("Mengerti", null)
                             .show()
                     }.onFailure { fail(it) }
@@ -2253,7 +2278,7 @@ class MainActivity : AppCompatActivity() {
             r.onSuccess {
                 AlertDialog.Builder(this)
                     .setTitle("Ekstrak TTD Selesai")
-                    .setMessage("✓ Tanda Tangan / Stempel Transparan berhasil dibuat dan disimpan ke Galeri › Pictures/Depup Office!\nSiap ditempelkan ke dokumen mana pun.")
+                    .setMessage("Tanda Tangan / Stempel Transparan berhasil dibuat dan disimpan ke Galeri › Pictures/Depup Office!\nSiap ditempelkan ke dokumen mana pun.")
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
@@ -2501,38 +2526,12 @@ class MainActivity : AppCompatActivity() {
             }.setNegativeButton("Batal", null).show()
     }
 
+    /** Tanda tangan PDF: editor bebas (geser, ukuran, putar, warna, banyak TTD, semua halaman). */
     private fun signFlow(uri: Uri) {
-        val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { fail(t); return }
-        val pad = SignatureView(this)
-        val page = field("Halaman (1-$pages)", number = true).apply { setText(pages.toString()) }
-        val pos = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-        val posIds = IntArray(3) { View.generateViewId() }
-        listOf("Kiri", "Tengah", "Kanan").forEachIndexed { i, n ->
-            pos.addView(RadioButton(this).apply { text = n; id = posIds[i]; setTextColor(C.TEXT) })
-        }
-        pos.check(posIds[2])
-        val box = vbox(20)
-        box.add(tv("Gambar tanda tangan di kotak putih", 13f, C.MUTED))
-        box.add(pad, top = 8, h = dp(170))
-        box.add(btn("Hapus", false) { pad.clear() }, top = 8)
-        box.add(tv("Tempel di halaman", 13f, C.MUTED), top = 12)
-        box.add(page, top = 6)
-        box.add(pos, top = 8)
-        val d = AlertDialog.Builder(this).setTitle("Tanda Tangan")
-            .setView(ScrollView(this).apply { addView(box) })
-            .setPositiveButton("Tempel", null).setNegativeButton("Batal", null).create()
-        d.show()
-        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val n = page.text.toString().toIntOrNull()
-            if (n == null || n < 1 || n > pages) { toast("Nomor halaman tidak valid"); return@setOnClickListener }
-            val sig = pad.toBitmap() ?: run { toast("Tanda tangan masih kosong"); return@setOnClickListener }
-            val p = posIds.indexOf(pos.checkedRadioButtonId).coerceAtLeast(0)
-            d.dismiss()
-            val out = Files.newOut(this, "ttd", "pdf")
-            work("Menempel tanda tangan…", { Pdf.sign(this, uri, sig, n, p, out) }) { r ->
-                r.onSuccess { showResult("Tanda tangan ditempel", out, PDF) }.onFailure { fail(it) }
-            }
-        }
+        if (!guardUnlocked(uri)) return
+        startActivity(Intent(this, PdfAnnotateActivity::class.java)
+            .putExtra(PdfAnnotateActivity.EXTRA_URI, uri.toString())
+            .putExtra(PdfAnnotateActivity.EXTRA_SIGN, true))
     }
 
 
@@ -2603,12 +2602,19 @@ class MainActivity : AppCompatActivity() {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         val useLock = android.widget.CheckBox(this).apply { text = "Kunci dengan password"; isChecked = lock; setTextColor(C.TEXT) }
-        val useOcr = android.widget.CheckBox(this).apply { text = "Tanam teks OCR (bisa dicari & di-copy)"; isChecked = !lock; setTextColor(C.TEXT) }
-        val pwBox = vbox().apply { add(pw); add(pw2, top = 8) }
+        val useOcr = android.widget.CheckBox(this).apply { text = "Tanam teks OCR (untuk PDF hasil scan)"; isChecked = !lock; setTextColor(C.TEXT) }
+        fun permBox(t: String) = android.widget.CheckBox(this).apply { text = t; isChecked = true; setTextColor(C.TEXT) }
+        val canPrint = permBox("Izinkan cetak"); val canCopy = permBox("Izinkan salin teks"); val canEdit = permBox("Izinkan ubah & beri komentar")
+        val pwBox = vbox().apply {
+            add(pw); add(pw2, top = 8)
+            add(tv("Izin setelah dibuka (dihormati Adobe Reader & pembaca resmi):", 12f, C.MUTED), top = 10)
+            add(canPrint, top = 2); add(canCopy); add(canEdit)
+        }
         fun sync() { pwBox.visibility = if (useLock.isChecked) View.VISIBLE else View.GONE }
         useLock.setOnCheckedChangeListener { _, _ -> sync() }
-        box.add(tv("$pages halaman. Halaman disimpan ulang sebagai gambar berkualitas tinggi" +
-            (if (lock) "; PDF hanya bisa dibuka dengan password." else "; teks hasil OCR ditaruh tak terlihat di bawahnya."), 13f, C.MUTED))
+        box.add(tv(if (lock) "$pages halaman. Dikunci AES-256 TANPA mengubah isi: teks tetap asli & bisa dicari, ukuran tetap kecil. " +
+                "Bisa dibuka di Adobe Reader, Chrome, Depup Office, dan pembaca PDF lain dengan password."
+            else "$pages halaman. Halaman disimpan ulang sebagai gambar berkualitas tinggi; teks hasil OCR ditaruh tak terlihat di bawahnya.", 13f, C.MUTED))
         box.add(useLock, top = 10)
         box.add(pwBox, top = 4)
         box.add(useOcr, top = 8)
@@ -2631,7 +2637,18 @@ class MainActivity : AppCompatActivity() {
             val suffix = if (password != null) "_terkunci" else "_ocr"
             val out = Files.newOut(this, Files.baseName(Files.nameOf(this, uri)) + suffix, "pdf")
             val msg = if (ocr) "Membaca teks tiap halaman…" else "Mengunci PDF…"
-            work(msg, { PdfTools.rebuild(this, uri, out, password, ocr) }) { r ->
+            val perms = PdfSave.Perms(print = canPrint.isChecked, copy = canCopy.isChecked, modify = canEdit.isChecked, annotate = canEdit.isChecked)
+            // izin dibatasi → password pemilik acak (izin tidak bisa dicabut balik dengan password pembuka)
+            val owner = if (canPrint.isChecked && canCopy.isChecked && canEdit.isChecked) password.orEmpty() else java.util.UUID.randomUUID().toString()
+            work(msg, {
+                if (password == null) PdfTools.rebuild(this, uri, out, null, ocr)
+                else if (!ocr) PdfTools.lockLossless(this, uri, out, password, owner, perms)
+                else {
+                    // OCR dulu (halaman jadi gambar + teks tersembunyi), lalu kunci AES-256
+                    val tmp = File(cacheDir, "ocr_${System.nanoTime()}.pdf")
+                    try { PdfTools.rebuild(this, uri, tmp, null, true); PdfTools.lockLossless(this, Uri.fromFile(tmp), out, password, owner, perms) } finally { tmp.delete() }
+                }
+            }) { r ->
                 r.onSuccess {
                     showResult(if (password != null) "PDF dikunci" else "PDF bisa dicari", out, PDF,
                         if (password != null) "Simpan password Anda baik-baik — PDF tidak bisa dibuka tanpanya." else "")
@@ -2640,17 +2657,60 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun pdfToWordFlow(uri: Uri) {
-        if (!guardUnlocked(uri)) return
-        val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { fail(t); return }
-        confirm("PDF ke Word", "$pages halaman akan dibaca dengan OCR lalu disusun jadi dokumen Word yang bisa diedit " +
-            "(paragraf & tabel). Halaman yang sulit dibaca disertakan sebagai gambar." +
-            (if (pages > 20) "\n\nDokumen panjang bisa memakan beberapa menit." else ""), "Konversi") {
+    private fun pdfToWordFlow(uri: Uri, password: String = "") {
+        confirm("PDF ke Word", "Teks asli (font, ukuran, warna, tebal/miring), tabel lengkap dengan garis & sel gabungan, foto, " +
+            "bentuk, dan tata letak diambil langsung dari PDF supaya hasilnya semirip mungkin dengan aslinya. " +
+            "Halaman hasil scan dibaca dengan OCR.", "Konversi") {
             val out = Files.newOut(this, Files.baseName(Files.nameOf(this, uri)), "docx")
-            work("Mengubah PDF ke Word…", { PdfTools.toWord(this, uri, out) }) { r ->
-                r.onSuccess { showResult("PDF diubah ke Word", out, Files.byName(out.name)) }.onFailure { fail(it) }
+            work("Mengubah PDF ke Word…", { PdfTools.toWord(this, uri, out, password) }) { r ->
+                r.onSuccess { showResult("PDF diubah ke Word", out, Files.byName(out.name)) }.onFailure { e ->
+                    if (e is PdfPasswordException) askPdfPassword(password.isNotEmpty()) { pdfToWordFlow(uri, it) } else fail(e)
+                }
             }
         }
+    }
+
+    /** Minta password PDF terkunci. [wrong] = percobaan sebelumnya salah. */
+    private fun askPdfPassword(wrong: Boolean, then: (String) -> Unit) {
+        val pw = field("Password PDF").apply { inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val box = vbox(20)
+        box.add(tv(if (wrong) "Password salah. Coba lagi." else "PDF ini dikunci. Masukkan password untuk membukanya.", 13f, if (wrong) C.RED else C.MUTED))
+        box.add(pw, top = 8)
+        AlertDialog.Builder(this).setTitle("PDF terkunci").setView(box)
+            .setPositiveButton("Buka") { _, _ -> then(pw.text.toString()) }.setNegativeButton("Batal", null).show()
+    }
+
+    /** Buat Dokumen Terlindungi (sampul + enkripsi AES-256-GCM + password edit guru + HMAC). */
+    private fun protectDocFlow(uri: Uri) {
+        val pwField = field("Password Edit Guru", pin = false).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val box = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
+        box.add(tv("Buat Dokumen Terlindungi", 16f, C.TEXT, true))
+        box.add(tv("Dokumen akan dibungkus dengan halaman sampul DepUp dan dienkripsi AES-256-GCM + HMAC integritas penuh. Guru dapat mengekspor PDF asli nanti dengan password edit.", 13f, C.MUTED), top = 6)
+        box.add(pwField, top = 12)
+        AlertDialog.Builder(this)
+            .setTitle("Proteksi Dokumen")
+            .setView(box)
+            .setPositiveButton("Lindungi") { _, _ ->
+                val editPw = pwField.text.toString().trim()
+                if (editPw.length < 4) {
+                    toast("Password edit minimal 4 karakter")
+                    return@setPositiveButton
+                }
+                val base = Files.baseName(Files.nameOf(this, uri))
+                val out = Files.newOut(this, base + "_terlindungi", "pdf")
+                work("Melindungi dokumen…", {
+                    val originalBytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Tidak bisa membaca file")
+                    ProtectedDoc.protect(originalBytes, editPw, out)
+                }) { res ->
+                    res.onSuccess {
+                        showResult("Dokumen Terlindungi Dibuat", out, PDF, "Sampul, enkripsi AES-256-GCM, integritas HMAC, dan password edit guru berhasil diterapkan.")
+                    }.onFailure { fail(it) }
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .show()
     }
 
     /** Word/Excel/PowerPoint -> PDF lewat pembaca (tampilan asli), lalu dialog cetak "Simpan sebagai PDF". */

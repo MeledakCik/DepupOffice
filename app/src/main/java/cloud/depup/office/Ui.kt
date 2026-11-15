@@ -440,6 +440,17 @@ fun View.markHeading() {
 }
 
 /** Ikon dekoratif (diabaikan pembaca layar). Untuk ikon yang bisa diketuk, pakai [iconBtn]. */
+/** Ikon garis (vektor Depup) di depan teks tombol/label — pengganti emoji. */
+fun TextView.leadingIcon(res: Int, tint: Int, sizeDp: Int = 18) {
+    val d = androidx.core.content.ContextCompat.getDrawable(context, res)?.mutate() ?: return
+    d.setTint(tint)
+    val px = context.dp(sizeDp)
+    d.setBounds(0, 0, px, px)
+    setCompoundDrawablesRelative(d, null, null, null)
+    compoundDrawablePadding = context.dp(6)
+    gravity = gravity or android.view.Gravity.CENTER_VERTICAL
+}
+
 fun Context.icon(res: Int, tint: Int, sizeDp: Int = 22): ImageView = ImageView(this).apply {
     setImageResource(res)
     setColorFilter(tint)

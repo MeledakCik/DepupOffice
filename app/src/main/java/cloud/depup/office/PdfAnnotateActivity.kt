@@ -13,7 +13,6 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.view.Gravity
 import android.view.MotionEvent
-import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -53,26 +52,79 @@ class MarkView(ctx: Context) : View(ctx) {
         pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
     }
     private var cur: PageMarks.Stroke? = null
-    private var dragStamp: PageMarks.Stamp? = null
     private var lastX = 0f
     private var lastY = 0f
     private var downX = 0f
     private var downY = 0f
 
-    private val scaler = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-        override fun onScale(d: ScaleGestureDetector): Boolean {
-            val s = dragStamp ?: lastStamp() ?: return false
-            val f = d.scaleFactor
-            val b = s.box
-            val cx = b.centerX(); val cy = b.centerY()
-            val nw = (b.width() * f).coerceIn(0.06f, 0.9f)
-            val nh = nw * b.height() / b.width()
-            b.set(cx - nw / 2, cy - nh / 2, cx + nw / 2, cy + nh / 2)
-            invalidate(); return true
-        }
-    })
+    // ---------------- tanda tangan: pilih, geser, ubah ukuran bebas, putar, hapus
+    /** TTD terpilih (pegangan tampil di sekelilingnya). */
+    var selected: PageMarks.Stamp? = null
+        set(v) { field = v; onSelect?.invoke(v); invalidate() }
+    var onSelect: ((PageMarks.Stamp?) -> Unit)? = null
+    private enum class Drag { NONE, MOVE, CORNER, RIGHT, BOTTOM, ROTATE, DELETE, PINCH }
+    private var drag = Drag.NONE
+    private var hw0 = 0f; private var hh0 = 0f            // setengah ukuran (px) saat mulai menarik
+    private var pinchDist = 0f; private var pinchAng = 0f; private var pinchRot = 0f
+    private val handleR get() = dp(13).toFloat()
+    private val hitR get() = dp(24).toFloat()
+    private val hPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL; setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat(), 0x55000000) }
+    private val hStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C.ACCENT; style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat(); strokeCap = Paint.Cap.ROUND }
+    private val delPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(220, 38, 38); style = Paint.Style.FILL }
+    private val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat(); strokeCap = Paint.Cap.ROUND }
 
-    private fun lastStamp(): PageMarks.Stamp? = marks.items.lastOrNull { it is PageMarks.Stamp } as? PageMarks.Stamp
+    /** [cx, cy, setengahLebar, setengahTinggi, sudutRadian] TTD dalam piksel layar. */
+    private fun geo(s: PageMarks.Stamp): FloatArray {
+        val l = dst.left + s.box.left * dst.width(); val t = dst.top + s.box.top * dst.height()
+        val r = dst.left + s.box.right * dst.width(); val b = dst.top + s.box.bottom * dst.height()
+        return floatArrayOf((l + r) / 2, (t + b) / 2, (r - l) / 2, (b - t) / 2, Math.toRadians(s.rot.toDouble()).toFloat())
+    }
+
+    /** Titik lokal (lx, ly) relatif pusat TTD → layar. */
+    private fun toScreen(g: FloatArray, lx: Float, ly: Float): FloatArray {
+        val c = kotlin.math.cos(g[4]); val sn = kotlin.math.sin(g[4])
+        return floatArrayOf(g[0] + lx * c - ly * sn, g[1] + lx * sn + ly * c)
+    }
+
+    /** Titik layar → lokal (putaran dibatalkan). */
+    private fun toLocal(g: FloatArray, x: Float, y: Float): FloatArray {
+        val c = kotlin.math.cos(-g[4]); val sn = kotlin.math.sin(-g[4])
+        val dx = x - g[0]; val dy = y - g[1]
+        return floatArrayOf(dx * c - dy * sn, dx * sn + dy * c)
+    }
+
+    private fun setGeo(s: PageMarks.Stamp, cx: Float, cy: Float, hw: Float, hh: Float) {
+        val w = dst.width(); val h = dst.height()
+        val mhw = max(hw, dp(14).toFloat()); val mhh = max(hh, dp(8).toFloat())
+        // pusat tetap di dalam halaman
+        val x = cx.coerceIn(dst.left, dst.right); val y = cy.coerceIn(dst.top, dst.bottom)
+        s.box.set((x - mhw - dst.left) / w, (y - mhh - dst.top) / h, (x + mhw - dst.left) / w, (y + mhh - dst.top) / h)
+    }
+
+    private fun insideStamp(s: PageMarks.Stamp, x: Float, y: Float): Boolean {
+        val g = geo(s); val p = toLocal(g, x, y)
+        return kotlin.math.abs(p[0]) <= g[2] + dp(6) && kotlin.math.abs(p[1]) <= g[3] + dp(6)
+    }
+
+    private fun near(p: FloatArray, x: Float, y: Float) = kotlin.math.hypot(p[0] - x, p[1] - y) <= hitR
+
+    /** Letak pegangan di layar. */
+    private fun handles(s: PageMarks.Stamp): Map<Drag, FloatArray> {
+        val g = geo(s)
+        return linkedMapOf(
+            Drag.DELETE to toScreen(g, -g[2], -g[3]),
+            Drag.ROTATE to toScreen(g, 0f, -g[3] - dp(30)),
+            Drag.CORNER to toScreen(g, g[2], g[3]),
+            Drag.RIGHT to toScreen(g, g[2], 0f),
+            Drag.BOTTOM to toScreen(g, 0f, g[3])
+        )
+    }
+
+    private fun snap(a0: Float, tol: Float): Float {
+        var a = ((a0 % 360f) + 360f) % 360f
+        for (sn in floatArrayOf(0f, 90f, 180f, 270f, 360f)) if (kotlin.math.abs(a - sn) < tol) a = sn % 360f
+        return a
+    }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) { fit() }
 
@@ -97,10 +149,30 @@ class MarkView(ctx: Context) : View(ctx) {
         PdfTools.drawMarks(c, dst.width(), dst.height(), marks)
         c.restoreToCount(save)
         c.drawRect(dst, edge)
-        if (tool == Tool.SIGN) (dragStamp ?: lastStamp())?.let { s ->
-            c.drawRect(dst.left + s.box.left * dst.width(), dst.top + s.box.top * dst.height(),
-                dst.left + s.box.right * dst.width(), dst.top + s.box.bottom * dst.height(), sel)
+        if (tool == Tool.SIGN) selected?.takeIf { marks.items.contains(it) }?.let { s ->
+            val g = geo(s)
+            c.save(); c.rotate(s.rot, g[0], g[1])
+            c.drawRect(g[0] - g[2], g[1] - g[3], g[0] + g[2], g[1] + g[3], sel)
+            c.restore()
+            val hs = handles(s)
+            val top = toScreen(g, 0f, -g[3])
+            hs[Drag.ROTATE]?.let { r ->
+                c.drawLine(top[0], top[1], r[0], r[1], hStroke)
+                c.drawCircle(r[0], r[1], handleR, hPaint)
+                val o = RectF(r[0] - handleR * 0.5f, r[1] - handleR * 0.5f, r[0] + handleR * 0.5f, r[1] + handleR * 0.5f)
+                c.drawArc(o, -60f, 280f, false, hStroke)          // panah putar
+            }
+            for (d in listOf(Drag.CORNER, Drag.RIGHT, Drag.BOTTOM)) hs[d]?.let { p ->
+                val rr = if (d == Drag.CORNER) handleR else handleR * 0.75f
+                c.drawCircle(p[0], p[1], rr, hPaint); c.drawCircle(p[0], p[1], rr, hStroke)
+            }
+            hs[Drag.DELETE]?.let { p ->
+                c.drawCircle(p[0], p[1], handleR, delPaint)
+                val k = handleR * 0.4f
+                c.drawLine(p[0] - k, p[1] - k, p[0] + k, p[1] + k, xPaint); c.drawLine(p[0] + k, p[1] - k, p[0] - k, p[1] + k, xPaint)
+            }
         }
+
     }
 
     private fun fx(x: Float) = ((x - dst.left) / dst.width()).coerceIn(0f, 1f)
@@ -110,25 +182,56 @@ class MarkView(ctx: Context) : View(ctx) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (page == null || dst.width() <= 0f) return false
         if (tool == Tool.SIGN) {
-            scaler.onTouchEvent(e)
+            parent?.requestDisallowInterceptTouchEvent(true)
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    val x = fx(e.x); val y = fy(e.y)
-                    dragStamp = marks.items.lastOrNull { it is PageMarks.Stamp && it.box.contains(x, y) } as? PageMarks.Stamp
-                    lastX = e.x; lastY = e.y
+                    downX = e.x; downY = e.y; lastX = e.x; lastY = e.y
+                    drag = Drag.NONE
+                    val cur = selected?.takeIf { marks.items.contains(it) }
+                    if (cur != null) {
+                        val h = handles(cur).entries.firstOrNull { near(it.value, e.x, e.y) }?.key
+                        if (h == Drag.DELETE) { marks.items.remove(cur); selected = null; onChanged?.invoke(); return true }
+                        if (h != null) { drag = h; val g = geo(cur); hw0 = g[2]; hh0 = g[3]; return true }
+                    }
+                    val hitS = marks.items.lastOrNull { it is PageMarks.Stamp && insideStamp(it, e.x, e.y) } as? PageMarks.Stamp
+                    if (hitS != null) { selected = hitS; drag = Drag.MOVE } else selected = null
                 }
-                MotionEvent.ACTION_MOVE -> if (!scaler.isInProgress && e.pointerCount == 1) dragStamp?.let { s ->
-                    val dx = (e.x - lastX) / dst.width(); val dy = (e.y - lastY) / dst.height()
-                    s.box.offset(dx, dy)
-                    // tetap di dalam halaman
-                    if (s.box.left < 0) s.box.offset(-s.box.left, 0f)
-                    if (s.box.top < 0) s.box.offset(0f, -s.box.top)
-                    if (s.box.right > 1) s.box.offset(1 - s.box.right, 0f)
-                    if (s.box.bottom > 1) s.box.offset(0f, 1 - s.box.bottom)
+                MotionEvent.ACTION_POINTER_DOWN -> selected?.let { s ->
+                    if (e.pointerCount == 2) {
+                        drag = Drag.PINCH
+                        pinchDist = kotlin.math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0)).coerceAtLeast(1f)
+                        pinchAng = Math.toDegrees(kotlin.math.atan2((e.getY(1) - e.getY(0)).toDouble(), (e.getX(1) - e.getX(0)).toDouble())).toFloat()
+                        pinchRot = s.rot
+                        val g = geo(s); hw0 = g[2]; hh0 = g[3]
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> selected?.let { s ->
+                    val g = geo(s)
+                    when (drag) {
+                        Drag.MOVE -> if (e.pointerCount == 1) setGeo(s, g[0] + e.x - lastX, g[1] + e.y - lastY, g[2], g[3])
+                        Drag.CORNER -> {
+                            // proporsional, pusat tetap: proyeksi jari ke diagonal sudut
+                            val p = toLocal(g, e.x, e.y)
+                            val k = ((p[0] * hw0 + p[1] * hh0) / (hw0 * hw0 + hh0 * hh0)).coerceIn(0.15f, 12f)
+                            setGeo(s, g[0], g[1], hw0 * k, hh0 * k)
+                        }
+                        Drag.RIGHT -> { val p = toLocal(g, e.x, e.y); setGeo(s, g[0], g[1], kotlin.math.abs(p[0]), g[3]) }
+                        Drag.BOTTOM -> { val p = toLocal(g, e.x, e.y); setGeo(s, g[0], g[1], g[2], kotlin.math.abs(p[1])) }
+                        Drag.ROTATE -> s.rot = snap(Math.toDegrees(kotlin.math.atan2((e.y - g[1]).toDouble(), (e.x - g[0]).toDouble())).toFloat() + 90f, 5f)
+                        Drag.PINCH -> if (e.pointerCount >= 2) {
+                            val d = kotlin.math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0))
+                            val k = (d / pinchDist).coerceIn(0.15f, 12f)
+                            val ang = Math.toDegrees(kotlin.math.atan2((e.getY(1) - e.getY(0)).toDouble(), (e.getX(1) - e.getX(0)).toDouble())).toFloat()
+                            s.rot = snap(pinchRot + ang - pinchAng, 4f)
+                            setGeo(s, g[0], g[1], hw0 * k, hh0 * k)
+                        }
+                        else -> {}
+                    }
                     lastX = e.x; lastY = e.y
                     invalidate()
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { onChanged?.invoke() }
+                MotionEvent.ACTION_POINTER_UP -> if (drag == Drag.PINCH) drag = Drag.NONE
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { if (drag != Drag.NONE) onChanged?.invoke(); drag = Drag.NONE; invalidate() }
             }
             return true
         }
@@ -168,7 +271,20 @@ class MarkView(ctx: Context) : View(ctx) {
 
 /** Coret-coret PDF: pena, stabilo, catatan, dan tanda tangan langsung di halaman. */
 class PdfAnnotateActivity : AppCompatActivity() {
-    companion object { const val EXTRA_URI = "uri" }
+    companion object {
+        const val EXTRA_URI = "uri"
+        /** Buka langsung di mode tanda tangan (dari menu "Tanda tangan PDF"). */
+        const val EXTRA_SIGN = "sign"
+    }
+
+    /** Ambil foto tanda tangan / stempel → latar dibuang (PNG transparan) → tempel. */
+    private val pickSigPhoto = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { u ->
+        if (u == null) return@registerForActivityResult
+        work("Membuang latar kertas…", {
+            val raw = Pdf.decode(this, u, 1400)
+            try { Pdf.extractTransparentSignature(raw) } finally { raw.recycle() }
+        }) { r -> r.onSuccess { placeSig(it, remember = true) }.onFailure { fail(it) } }
+    }
 
     private lateinit var uri: Uri
     private var pfd: ParcelFileDescriptor? = null
@@ -263,8 +379,10 @@ class PdfAnnotateActivity : AppCompatActivity() {
         root.add(tools)
 
         setContentView(Glass.scaffold(root))
+        mv.onSelect = { refreshTools() }
+        if (intent.getBooleanExtra(EXTRA_SIGN, false)) { mv.tool = MarkView.Tool.SIGN; go(total - 1) } else go(0)
         refreshTools()
-        go(0)
+        if (intent.getBooleanExtra(EXTRA_SIGN, false)) signDialog()
     }
 
     private fun refreshTools() {
@@ -272,6 +390,7 @@ class PdfAnnotateActivity : AppCompatActivity() {
         fun chip(t: MarkView.Tool, label: String, icon: Int) {
             toolRow.add(filterChip(label, mv.tool == t, icon) {
                 mv.tool = t
+                if (t != MarkView.Tool.SIGN) mv.selected = null
                 if (t == MarkView.Tool.SIGN && marks[cur]?.items?.none { it is PageMarks.Stamp } != false) signDialog()
                 refreshTools(); mv.invalidate()
             }, w = WRAP, side = 4)
@@ -301,8 +420,29 @@ class PdfAnnotateActivity : AppCompatActivity() {
             }
             MarkView.Tool.NOTE -> colorRow.add(tv("Ketuk halaman untuk menambah catatan. Ketuk catatan untuk mengubah/menghapus.", 12f, C.MUTED))
             MarkView.Tool.SIGN -> {
-                colorRow.add(tv("Geser untuk memindah, cubit untuk ubah ukuran.", 12f, C.MUTED), w = 0, weight = 1f)
-                colorRow.add(btn("+ TTD", false, C.ACCENT) { signDialog() }, w = WRAP, side = 8)
+                val col = vbox()
+                val s = mv.selected?.takeIf { pageMarks(cur).items.contains(it) }
+                val row1 = hbox()
+                row1.add(btn("+ TTD", false, C.ACCENT) { signDialog() }, w = WRAP)
+                if (s == null) {
+                    row1.add(tv("Ketuk tanda tangan untuk memilih. Geser = pindah, titik sudut = ukuran, titik sisi = lebar/tinggi bebas, titik atas = putar, dua jari = cubit & putar.", 12f, C.MUTED), w = 0, weight = 1f, side = 10)
+                    col.add(row1)
+                } else {
+                    col.add(row1)
+                    val acts = hbox()
+                    sigInks.forEachIndexed { i, c ->
+                        acts.add(View(this).apply {
+                            background = shape(c, 100, C.LINE, 1)
+                            tappable("Tinta ${sigInkNames[i]}") { s.bmp = PdfTools.recolor(s.bmp, c); dirty = true; mv.invalidate() }
+                        }, w = dp(32), h = dp(32), side = 5)
+                    }
+                    acts.add(btn("Putar 90°", false) { s.rot = (s.rot + 90f) % 360f; dirty = true; mv.invalidate() }, w = WRAP, side = 6)
+                    acts.add(btn("Gandakan", false) { val c = s.copy(0.03f, 0.03f); pageMarks(cur).items.add(c); mv.selected = c; dirty = true; mv.invalidate() }, w = WRAP, side = 6)
+                    acts.add(btn("Ke semua halaman", false) { copyToAllPages(s) }, w = WRAP, side = 6)
+                    acts.add(btn("Hapus", false, C.RED) { pageMarks(cur).items.remove(s); mv.selected = null; dirty = true; mv.invalidate() }, w = WRAP, side = 6)
+                    col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(acts) }, top = 8)
+                }
+                colorRow.add(col, w = MATCH)
             }
         }
     }
@@ -312,6 +452,7 @@ class PdfAnnotateActivity : AppCompatActivity() {
     private fun go(i: Int) {
         if (i < 0 || i >= total) return
         cur = i
+        if (::mv.isInitialized) mv.selected = null
         counter.text = "Halaman ${i + 1} dari $total"
         mv.marks = pageMarks(i)
         val gen = ++loadGen
@@ -357,30 +498,72 @@ class PdfAnnotateActivity : AppCompatActivity() {
         b.show()
     }
 
+    private val sigInks = intArrayOf(Color.rgb(17, 24, 39), Color.rgb(11, 31, 107), Color.rgb(29, 78, 216), Color.rgb(185, 28, 28))
+    private val sigInkNames = arrayOf("hitam", "biru tua", "biru", "merah")
+    private val savedSig get() = java.io.File(filesDir, "ttd/terakhir.png")
+
+    /** Buat tanda tangan: gambar (pilih tinta & tebal), dari foto, atau pakai yang tersimpan. */
     private fun signDialog() {
         val pad = SignatureView(this)
         val box = vbox(20)
         box.add(tv("Gambar tanda tangan di kotak putih", 13f, C.MUTED))
         box.add(pad, top = 8, h = dp(180))
-        box.add(btn("Ulangi", false) { pad.clear() }, top = 8)
-        val d = AlertDialog.Builder(this).setTitle("Tanda tangan")
+        val inks = hbox()
+        sigInks.forEachIndexed { i, c ->
+            inks.add(View(this).apply {
+                background = shape(c, 100, C.LINE, 1)
+                tappable("Tinta ${sigInkNames[i]}") { pad.color = c }
+            }, w = dp(32), h = dp(32), side = 5)
+        }
+        inks.add(btn("Tipis", false) { pad.stroke = dp(2).toFloat() }, w = WRAP, side = 8)
+        inks.add(btn("Tebal", false) { pad.stroke = 4.5f * resources.displayMetrics.density }, w = WRAP, side = 4)
+        box.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(inks) }, top = 8)
+        val more = hbox()
+        more.add(btn("Ulangi", false) { pad.clear() }, w = WRAP)
+        var d: AlertDialog? = null
+        more.add(btn("Dari foto", false, C.ACCENT) { d?.dismiss(); pickSigPhoto.launch("image/*") }, w = WRAP, side = 6)
+        if (savedSig.exists()) more.add(btn("TTD tersimpan", false, C.ACCENT) {
+            d?.dismiss()
+            android.graphics.BitmapFactory.decodeFile(savedSig.path)?.let { placeSig(it, remember = false) } ?: toast("TTD tersimpan tidak bisa dibaca")
+        }, w = WRAP, side = 6)
+        box.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(more) }, top = 8)
+        d = AlertDialog.Builder(this).setTitle("Tanda tangan")
             .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Tempel", null).setNegativeButton("Batal", null).create()
         d.show()
         d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val sig = pad.toBitmap() ?: run { toast("Tanda tangan masih kosong"); return@setOnClickListener }
             d.dismiss()
-            val page = mv.page
-            val pageRatio = if (page != null) page.width.toFloat() / page.height else 0.707f
-            val w = 0.32f
-            val h = w * pageRatio * sig.height / sig.width
-            pageMarks(cur).items.add(PageMarks.Stamp(sig, RectF(0.62f - 0.0f, 0.78f, 0.62f + w, 0.78f + h).also {
-                if (it.right > 0.97f) it.offset(0.97f - it.right, 0f)
-                if (it.bottom > 0.97f) it.offset(0f, 0.97f - it.bottom)
-            }))
-            mv.tool = MarkView.Tool.SIGN
+            placeSig(sig, remember = true)
+        }
+    }
+
+    /** Tempel TTD di halaman ini (kanan bawah), langsung terpilih untuk diatur. [remember] = simpan untuk dipakai lagi. */
+    private fun placeSig(sig: Bitmap, remember: Boolean) {
+        if (remember) Thread {
+            try { savedSig.parentFile?.mkdirs(); java.io.FileOutputStream(savedSig).use { sig.compress(Bitmap.CompressFormat.PNG, 100, it) } } catch (_: Exception) {}
+        }.start()
+        val page = mv.page
+        val pageRatio = if (page != null) page.width.toFloat() / page.height else 0.707f
+        val w = 0.32f
+        val h = w * pageRatio * sig.height / sig.width
+        val st = PageMarks.Stamp(sig, RectF(0.62f, 0.78f, 0.62f + w, 0.78f + h).also {
+            if (it.right > 0.97f) it.offset(0.97f - it.right, 0f)
+            if (it.bottom > 0.97f) it.offset(0f, 0.97f - it.bottom)
+        })
+        pageMarks(cur).items.add(st)
+        mv.tool = MarkView.Tool.SIGN
+        mv.selected = st
+        dirty = true
+        refreshTools(); mv.invalidate()
+    }
+
+    /** Salin TTD terpilih (posisi, ukuran, putaran sama) ke semua halaman lain. */
+    private fun copyToAllPages(s: PageMarks.Stamp) {
+        confirm("Ke semua halaman", "Tanda tangan ini ditempel di posisi yang sama pada ${total - 1} halaman lainnya.", "Tempel") {
+            for (i in 0 until total) if (i != cur) pageMarks(i).items.add(s.copy())
             dirty = true
-            refreshTools(); mv.invalidate()
+            toast("Ditempel di ${total - 1} halaman lain")
         }
     }
 
