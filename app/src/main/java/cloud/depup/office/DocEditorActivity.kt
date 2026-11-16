@@ -17,6 +17,7 @@ import android.print.PrintAttributes
 import android.print.PrintManager
 import android.text.InputType
 import android.text.SpannableString
+import android.annotation.SuppressLint
 import android.text.Spanned
 import android.text.TextUtils
 import android.text.style.StrikethroughSpan
@@ -163,7 +164,14 @@ class DocEditorActivity : AppCompatActivity() {
     private val imgFailed = HashSet<String>()
     private var printView: WebView? = null
 
-    private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { insertImageFrom(it) } }
+    private var onImgPickCb: ((Uri) -> Unit)? = null
+    private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val cb = onImgPickCb
+            onImgPickCb = null
+            if (cb != null) cb(uri) else insertImageFrom(uri)
+        }
+    }
 
     // =========================================================================================
     // Siklus hidup
@@ -180,16 +188,64 @@ class DocEditorActivity : AppCompatActivity() {
         loading.add(android.widget.ProgressBar(this), w = dp(40), h = dp(40))
         loading.add(tv("Membuka dokumen…", 13f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 10)
         setContentView(loading)
+        startOpen()
+    }
+
+    // ---------------- dokumen terkunci (Batasi Pengeditan Word): mengedit butuh password
+    private var lockedProt: DocxProtect.Prot? = null
+    private var editUnlocked = false
+    /** Dokumen terkunci (dibuka dengan password): tanpa tangkapan layar, salin, cetak, simpan sebagai, bagikan. */
+    var secureMode = false; private set
+    private val guard = SecureGuard(this)
+
+    fun secureBlocked() = toast("Dokumen terkunci: menyalin tidak diizinkan")
+
+    override fun onPause() { super.onPause(); if (guard.on) guard.onPause() }
+    override fun onResume() { super.onResume(); if (guard.on) guard.onResume() }
+    override fun onMultiWindowModeChanged(inMulti: Boolean, cfg: android.content.res.Configuration) {
+        super.onMultiWindowModeChanged(inMulti, cfg); if (guard.on) guard.onMultiWindow()
+    }
+
+    private fun startOpen() {
         Thread(null, {
             val opened = try { openDocument() } catch (_: Throwable) { null }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
+                lockedProt?.let { guard.enable(); askEditPassword(it, false); return@runOnUiThread }
+                if (editUnlocked) { secureMode = true; guard.enable() }
                 if (opened == null) { toast("Dokumen tidak dapat dibuka."); finish(); return@runOnUiThread }
                 if (openedFlat) toast("Format dokumen tidak dikenali penuh; hanya teks yang dimuat.")
                 doc = opened
                 buildUi()
             }
         }, "doc-open", 16L * 1024 * 1024).start()
+    }
+
+    /** Dokumen dikunci "hanya-baca + password": minta password; tanpa itu hanya bisa dilihat. */
+    private fun askEditPassword(p: DocxProtect.Prot, wrong: Boolean) {
+        val f = field("Password").apply { inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        val box = vbox(20)
+        box.add(tv(if (wrong) "Password salah. Coba lagi." else "Dokumen ini dikunci untuk diedit. Masukkan password (sama dengan password PDF asalnya) untuk mengedit, atau buka untuk dilihat saja.", 13f, if (wrong) C.RED else C.MUTED))
+        box.add(f, top = 8)
+        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Dokumen terkunci").setView(box).setCancelable(false)
+            .setPositiveButton("Edit") { _, _ ->
+                val pw = f.text.toString()
+                Thread {
+                    val ok = p.check(pw)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (ok) { editUnlocked = true; lockedProt = null; startOpen() } else askEditPassword(p, true)
+                    }
+                }.start()
+            }
+            .setNeutralButton("Lihat saja") { _, _ ->
+                intent.getStringExtra(EXTRA_URI)?.let { u ->
+                    startActivity(android.content.Intent(this, ViewerActivity::class.java).setData(Uri.parse(u)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                }
+                finish()
+            }
+            .setNegativeButton("Batal") { _, _ -> finish() }
+            .show()
     }
 
     private var openedFlat = false
@@ -219,7 +275,7 @@ class DocEditorActivity : AppCompatActivity() {
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
         // tata letak per lembar seperti Word (kertas asli, lembar demi lembar); zoom > 100% → bisa digeser mendatar
-        val hsv = HorizontalScrollView(this).apply { isFillViewport = true; isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        val hsv = ZoomHScroll(this).apply { isFillViewport = true; isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
         val pad = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -244,6 +300,7 @@ class DocEditorActivity : AppCompatActivity() {
             addView(pad, FrameLayout.LayoutParams(WRAP, WRAP))
         }
         (scroll as EditorScroll).zoomFrame = zoomFrame
+        hsv.zoomFrame = zoomFrame
         hsv.addView(zoomFrame)
         scroll.addView(hsv)
         // Ketuk area kosong di bawah halaman -> kursor ke akhir dokumen
@@ -540,6 +597,7 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        guard.disable()
         Cull.releaseAll()
         handler.removeCallbacksAndMessages(null)
         if (::topBarV.isInitialized) try { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(imeWatch) } catch (_: Exception) {}
@@ -552,6 +610,7 @@ class DocEditorActivity : AppCompatActivity() {
         if (rawUri != null) {
             docName = Files.baseName(Files.nameOf(this, rawUri)).removePrefix("open_").ifBlank { "Dokumen" }
             val f = copyToCache(rawUri) ?: return null
+            if (!editUnlocked) DocxProtect.of(f)?.takeIf { it.hasPassword }?.let { lockedProt = it; f.delete(); return null }
             DocxDocument.open(f)?.let { return it }
             // Bukan .docx standar: muat teksnya ke dokumen baru agar tetap bisa diedit.
             val flat = try { OfficeReader.readDocx(this, Uri.fromFile(f)) } catch (_: Exception) { emptyList() }
@@ -953,10 +1012,48 @@ class DocEditorActivity : AppCompatActivity() {
         toolBox("Cari & Ganti", icon(R.drawable.ic_search, C.TEXT, 24), onClick = { toggleFindBar() })
         toolBox("Jumlah Kata", glyphText("123", 14f), onClick = { showWordCount() })
         toolBox("Bacakan", icon(R.drawable.ic_volume, C.TEXT, 24), onClick = { readAloud() })
+        toolBox("Tambah Catatan", icon(R.drawable.ic_note, C.TEXT, 24), onClick = { addDocumentComment() })
         sep()
-        toolBox("Cetak / PDF", icon(R.drawable.ic_print, C.TEXT, 24), onClick = { printDoc() })
-        toolBox("Simpan Sebagai", icon(R.drawable.ic_download, C.TEXT, 24), onClick = { save(true) })
+        if (!secureMode) {
+            toolBox("Cetak / PDF", icon(R.drawable.ic_print, C.TEXT, 24), onClick = { printDoc() })
+            toolBox("Simpan Sebagai", icon(R.drawable.ic_download, C.TEXT, 24), onClick = { save(true) })
+        }
         toolBox("Panduan", glyphText("?", 18f), onClick = { showHelp() })
+    }
+
+    private fun addDocumentComment() {
+        val fComment = field("Ketik catatan revisi / komentar…", multi = true)
+        val authorStr = "Editor (" + SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date()) + ")"
+
+        sheet { body, dismiss ->
+            sheetHeader(body, R.drawable.ic_note, C.ACCENT, C.BLUE_BG, "Tambah Catatan / Komentar Revisi", "Catatan revisi akan disisipkan di posisi kursor", dismiss)
+            val pad = vbox().apply { setPadding(dp(16), 0, dp(16), dp(20)) }
+
+            val formBox = vbox(10).apply {
+                add(tv("Isi Komentar / Catatan", 12f, C.MUTED))
+                add(fComment)
+            }
+            pad.add(formBox)
+
+            val actionRow = hbox().apply {
+                add(btn("Sisipkan Catatan", true, C.PRIMARY, R.drawable.ic_check) {
+                    val commentText = fComment.text.toString().trim()
+                    if (commentText.isBlank()) {
+                        toast("Catatan tidak boleh kosong")
+                        return@btn
+                    }
+                    dismiss()
+                    command {
+                        syncAll()
+                        val formattedComment = " [💬 $authorStr: $commentText] "
+                        insertText(formattedComment)
+                    }
+                    toast("Catatan revisi berhasil disisipkan!")
+                }, w = 0, weight = 1f)
+            }
+            pad.add(actionRow, top = 16)
+            body.add(pad)
+        }
     }
 
     private fun buildTableTab() {
@@ -1364,6 +1461,19 @@ class DocEditorActivity : AppCompatActivity() {
         pending?.let { if (it.editor !== e || it.pos != e.selectionStart || e.selectionEnd != e.selectionStart) pending = null }
         updateTableTab()
         refreshTools()
+        autoZoomForEdit()
+    }
+
+    /** Zoom saat mengedit: teks yang diketuk diperbesar ke 120% (bila sedang lebih kecil), berpusat di titik ketukan. */
+    private val editZoom = 1.2f
+
+    private fun autoZoomForEdit() {
+        val sc = scroll as? EditorScroll ?: return
+        if (!::zoomFrame.isInitialized) return
+        if (android.os.SystemClock.uptimeMillis() - sc.tapAt > 500) return      // hanya karena diketuk, bukan kursor dipindah kode
+        if (zoomFrame.zoom >= editZoom - 0.01f) return
+        sc.tapAtConsumed()
+        zoomFrame.animateZoomTo(editZoom, sc.tapX, sc.tapY)
     }
 
     private fun updateTableTab() {
@@ -2165,21 +2275,17 @@ class DocEditorActivity : AppCompatActivity() {
         return EImage(out.toByteArray(), if (isPng) "png" else "jpeg", bmp.width, bmp.height, 0.6f)
     }
 
-    private fun drawSignature() = sheet { body, dismiss ->
-        sheetHeader(body, R.drawable.ic_sign, C.ACCENT, C.BLUE_BG, "Tanda Tangan", "Gambar tanda tangan dengan jari", dismiss)
-        val pad = vbox().apply { setPadding(dp(18), dp(4), dp(18), dp(20)) }
-        val sv = SignatureView(this)
-        pad.add(sv, h = dp(200))
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row.add(btn("Ulangi", false, C.ACCENT) { sv.clear() }, w = 0, weight = 1f, side = 4)
-        row.add(btn("Sisipkan", true, C.ACCENT, R.drawable.ic_check) {
-            val bmp = sv.toBitmap() ?: run { toast("Tanda tangan masih kosong"); return@btn }
-            val out = ByteArrayOutputStream(); bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-            dismiss()
-            command { syncAll(); insertBlocksAfterCurrent(listOf(EImage(out.toByteArray(), "png", bmp.width, bmp.height, 0.3f))) }
-        }, w = 0, weight = 1f, side = 4)
-        pad.add(row, top = 12)
-        body.add(pad)
+    @SuppressLint("ThreadConstraint")
+    private fun drawSignature() = SignatureManager.showSheet(
+        this, "Tanda Tangan & Stempel Dokumen",
+        onPickImage = { cb ->
+            onImgPickCb = cb
+            pickImage.launch("image/*")
+        }
+    ) { bmp, _ ->
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        command { syncAll(); insertBlocksAfterCurrent(listOf(EImage(out.toByteArray(), "png", bmp.width, bmp.height, 0.3f))) }
     }
 
     // =========================================================================================
@@ -2452,8 +2558,15 @@ class DocEditorActivity : AppCompatActivity() {
             }.setNegativeButton("Batal", null).show()
     }
 
-    private fun save(asNew: Boolean, after: (() -> Unit)? = null) {
+    private fun save(asNew0: Boolean, after: (() -> Unit)? = null) {
         syncAll()
+        // dokumen terkunci: tidak ada "simpan sebagai" — selalu berkas yang sama (proteksi ikut tersimpan)
+        val asNew = asNew0 && !secureMode
+        if (secureMode && savedFile == null) {
+            val out = Files.namedOut(this, docName, "docx")
+            work("Menyimpan…", { doc.save(out) }) { res -> res.onSuccess { onSaved(out, false); after?.invoke() }.onFailure { fail(it) } }
+            return
+        }
         val target = savedFile
         if (!asNew && target != null) {
             work("Menyimpan…", { doc.save(target) }) { res ->
@@ -2480,14 +2593,14 @@ class DocEditorActivity : AppCompatActivity() {
         val uri = Files.uriFor(this, f)
         Recent.add(this, uri, f.name, DOCX)
         Meta.setLastJob(this, "Dokumen Word Tersimpan", f)
-        if (!showSheet) { toast("Tersimpan: ${f.name}"); return }
+        if (!showSheet || secureMode) { toast("Tersimpan: ${f.name}" + if (secureMode) " (tetap terkunci)" else ""); return }
         resultSheet(
             "Dokumen Tersimpan", "${f.name} • ${Files.fmtSize(f.length())}", "Klik Simpan lagi untuk memperbarui berkas yang sama.", "Buka di Aplikasi Lain",
             { Files.open(this, uri, DOCX) },
             listOf(
-                SheetAction(R.drawable.ic_download, "Simpan ke Unduhan") {
+                SheetAction(R.drawable.ic_download, "Simpan salinan ke DepUp Office") {
                     work("Menyimpan…", { Files.saveToDownloads(this, uri, f.name, DOCX) }) { r ->
-                        r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+                        r.onSuccess { toast("Tersimpan di Documents/DepUp Office") }.onFailure { fail(it) }
                     }
                 },
                 SheetAction(R.drawable.ic_chat, "Kirim via WhatsApp", C.TEAL, C.TEAL_BG) { Files.share(this, uri, DOCX, true) },

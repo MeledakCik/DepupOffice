@@ -123,6 +123,29 @@ class ViewerActivity : AppCompatActivity() {
     /** Tombol-tombol bilah atas (ukurannya dipadatkan saat layar mendatar). */
     private val barBtns = ArrayList<View>()
     private var editBtn: View? = null
+    /** PDF asli terkunci password (yang tampil = salinan terdekripsi di cache): tidak boleh diedit/diekstrak, dibagikan dalam bentuk ASLI terkunci. */
+    private var lockedSource: android.net.Uri? = null
+    /** Word yang hanya bisa diedit dengan password (lihat [DocxProtect]). */
+    private var secureDocx = false
+    /** Dokumen terkunci dalam bentuk apa pun → mode aman (tanpa tangkapan layar, salin, cetak, simpan sebagai). */
+    private val secure get() = lockedSource != null || protectedBytes != null || secureDocx
+    private val guard = SecureGuard(this)
+
+    override fun onPause() { super.onPause(); if (guard.on) guard.onPause() }
+    override fun onResume() { super.onResume(); if (guard.on) guard.onResume() }
+    override fun onMultiWindowModeChanged(inMulti: Boolean, cfg: android.content.res.Configuration) {
+        super.onMultiWindowModeChanged(inMulti, cfg); if (guard.on) guard.onMultiWindow()
+    }
+
+    /** Tampilan Word terkunci: seleksi teks (salin) dimatikan. */
+    private fun lockWeb(wv: android.webkit.WebView) {
+        wv.setOnLongClickListener { true }
+        wv.isLongClickable = false
+        wv.isHapticFeedbackEnabled = false
+        val js = "(function(){var s=document.createElement('style');s.textContent='*{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}';(document.head||document.documentElement).appendChild(s);document.addEventListener('copy',function(e){e.preventDefault()},true);document.addEventListener('contextmenu',function(e){e.preventDefault()},true);})()"
+        wv.evaluateJavascript(js, null)
+        wv.postDelayed({ try { wv.evaluateJavascript(js, null) } catch (_: Throwable) {} }, 800)
+    }
     private var printBtn: View? = null
     private var signBtn: View? = null
     /** Garis kemajuan baca tipis di bawah bilah atas (pengganti baris status PDF yang memakan tempat). */
@@ -156,6 +179,7 @@ class ViewerActivity : AppCompatActivity() {
             } catch (_: Exception) {}
 
             var uri = Files.cacheCopy(this, rawUri)
+            if (uri.scheme == "file") secureDocx = uri.path?.let { DocxProtect.of(java.io.File(it)) }?.hasPassword == true
             if (ProtectedDoc.isProtected(rawBytes)) {
                 protectedBytes = rawBytes
                 try {
@@ -187,7 +211,7 @@ class ViewerActivity : AppCompatActivity() {
             // PDF terenkripsi: PdfRenderer menolak. Coba tanpa password (PDF yang hanya dibatasi izin), selain itu minta.
             if (pdf.locked) {
                 val dec = decryptCopy(u, "")
-                if (dec != null) { pdf.close(); val p2 = openPdf(dec); runOnUiThread { if (isFinishing || isDestroyed) p2.close() else build(rawUri, dec, p2) }; return@Thread }
+                if (dec != null) { pdf.close(); val p2 = openPdf(dec); runOnUiThread { lockedSource = rawUri; if (isFinishing || isDestroyed) p2.close() else build(rawUri, dec, p2) }; return@Thread }
                 runOnUiThread { if (!isFinishing && !isDestroyed) askPassword(rawUri, u, pdf, false) }
                 return@Thread
             }
@@ -228,7 +252,7 @@ class ViewerActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         if (dec == null) askPassword(rawUri, uri, locked, true)
-                        else { locked.close(); val p2 = openPdf(dec); build(rawUri, dec, p2) }
+                        else { locked.close(); val p2 = openPdf(dec); lockedSource = rawUri; build(rawUri, dec, p2) }
                     }
                 }.start()
             }
@@ -304,6 +328,7 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     private fun build(rawUri: android.net.Uri, uri: android.net.Uri, pdf: OpenedPdf) {
+        if (secure) guard.enable()
 
         val name = nameOverride ?: Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
         val mime = if (nameOverride != null) PDF else intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
@@ -379,27 +404,29 @@ class ViewerActivity : AppCompatActivity() {
         barBtn(markBtn)
         signBtn = barBtn(icon(R.drawable.ic_sign, C.ACCENT, 22).asButton("Tanda tangan & edit PDF").apply {
             setOnClickListener { showPdfEditDialog(uri, name) }
-        }).apply { visibility = if (isPdfLoaded) View.VISIBLE else View.GONE }
+        }).apply { visibility = if (isPdfLoaded && lockedSource == null) View.VISIBLE else View.GONE }
 
         barBtn(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 val office = officeWeb != null
                 pm.menu.add(0, 1, 0, "Bagikan")
-                pm.menu.add(0, 2, 1, "Cetak Dokumen")
+                if (!secure) pm.menu.add(0, 2, 1, "Cetak Dokumen")
                 if (isPdfLoaded) pm.menu.add(0, 8, 2, "Bacakan Suara (Voice Reader)")
-                if (isPdfLoaded) pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF")
-                pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
+                if (isPdfLoaded && lockedSource == null) pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF")
+                if (!secure) pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
                 if (isPdfLoaded) pm.menu.add(0, 5, 5, "Lompat Halaman")
                 if (isPdfLoaded) pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
-                if (isPdfLoaded) pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar")
+                if (isPdfLoaded && lockedSource == null) pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar")
+                if (isPdfLoaded && lockedSource == null) pm.menu.add(0, 10, 8, "Susun & Putar Halaman")
+                if (isPdfLoaded) pm.menu.add(0, 11, 9, "Mode Slideshow & Presentasi")
                 if (protectedBytes != null) {
-                    pm.menu.add(0, 9, 8, "Ekspor PDF Asli (Password Guru)")
+                    pm.menu.add(0, 9, 10, "Ekspor PDF Asli (Password Guru)")
                 }
                 pm.setOnMenuItemClickListener { m ->
                     try {
                         when (m.itemId) {
-                            1 -> Files.share(this@ViewerActivity, uri, mime, false)
+                            1 -> Files.share(this@ViewerActivity, lockedSource ?: uri, mime, false)
                             2 -> if (office) officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } else PrintHelper.printPdf(this@ViewerActivity, uri, name)
                             8 -> startVoiceReaderForPdf(uri, name)
                             3 -> showPdfEditDialog(uri, name)
@@ -412,7 +439,7 @@ class ViewerActivity : AppCompatActivity() {
                                     Pdf.extractImagesFromPdf(this@ViewerActivity, uri, base)
                                 }) { r ->
                                     r.onSuccess { count ->
-                                        toast("$count gambar diekstrak ke Pictures/Depup Office!")
+                                        toast("$count gambar diekstrak ke Documents/DepUp Office/Gambar!")
                                     }.onFailure { fail(it) }
                                 }
                             }
@@ -435,7 +462,7 @@ class ViewerActivity : AppCompatActivity() {
                                                 val originalBytes = ProtectedDoc.openProtected(bytes)
                                                 val out = Files.namedOut(this@ViewerActivity, "Asli_" + Files.baseName(name), "pdf")
                                                 out.writeBytes(originalBytes)
-                                                toast("PDF asli diekstrak ke Unduhan/Depup Office!")
+                                                toast("PDF asli diekstrak ke Documents/DepUp Office!")
                                                 Files.open(this@ViewerActivity, Files.uriFor(this@ViewerActivity, out), PDF)
                                             } catch (e: Exception) {
                                                 toast("Gagal mengekstrak: ${e.message}")
@@ -447,6 +474,13 @@ class ViewerActivity : AppCompatActivity() {
                                     .setNegativeButton("Batal", null)
                                     .show()
                             }
+                            10 -> {
+                                PdfTools.showOrganizeSheet(this@ViewerActivity, uri) { out ->
+                                    toast("PDF baru disimpan ke Documents/DepUp Office!")
+                                    Files.open(this@ViewerActivity, Files.uriFor(this@ViewerActivity, out), PDF)
+                                }
+                            }
+                            11 -> PresenterSlideshowManager.startSlideshow(this@ViewerActivity, uri, name)
                             else -> {}
                         }
                     } catch (_: Exception) { toast("Tidak bisa dijalankan") }
@@ -532,14 +566,14 @@ class ViewerActivity : AppCompatActivity() {
             tb.add(icon(R.drawable.ic_zoom_in, C.TEXT, 22).asButton("Perbesar").apply {
                 setOnClickListener { setZoom(zoom + 0.5f, baseW / 2f) }
             }, w = dp(48), h = dp(48))
-            tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
+            if (!secure) tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
                 setOnClickListener { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } }
             }, w = dp(48), h = dp(48), side = 4)
             tb.add(FrameLayout(this).apply {
                 contentDescription = "Bagikan"; isFocusable = true
                 background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.ACCENT) }
                 addView(icon(R.drawable.ic_upload, C.ON_PRIMARY, 22), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
-                setOnClickListener { try { Files.share(this@ViewerActivity, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
+                setOnClickListener { try { Files.share(this@ViewerActivity, lockedSource ?: uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
             }, w = dp(44), h = dp(44), side = 4)
             stage.addView(tb, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(16) })
             floats.add(tb)
@@ -617,7 +651,7 @@ class ViewerActivity : AppCompatActivity() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // aksi Office kini di bilah atas yang sama dengan PDF (tanpa strip kedua)
         if (::subTv.isInitialized) subTv.text = when (kind) { "docx" -> "Dokumen Word"; "xlsx" -> "Lembar kerja Excel"; else -> "Presentasi PowerPoint" }
-        printBtn?.visibility = View.VISIBLE
+        printBtn?.visibility = if (secure) View.GONE else View.VISIBLE
         editBtn?.let { b ->
             if (kind == "docx" || kind == "xlsx") {
                 b.visibility = View.VISIBLE
@@ -653,7 +687,7 @@ class ViewerActivity : AppCompatActivity() {
                 if (isFinishing || isDestroyed) { try { ready?.destroy() } catch (_: Throwable) {}; r.getOrNull()?.close(); return@runOnUiThread }
                 r.onSuccess { doc ->
                     officeDoc?.close(); officeDoc = doc
-                    val auto = intent.getBooleanExtra(EXTRA_AUTO_PRINT, false)
+                    val auto = intent.getBooleanExtra(EXTRA_AUTO_PRINT, false) && !secure
                     val wv = try {
                         Result.success(OfficeView.load(ready ?: OfficeView.newWebView(this, doc.kind), doc, if (!auto) null else {
                             { if (!isFinishing && !isDestroyed) officeWeb?.let { OfficeView.print(this, it, name) } }
@@ -665,6 +699,7 @@ class ViewerActivity : AppCompatActivity() {
                     } catch (e: Throwable) { Result.failure(e) }
                     wv.onSuccess {
                         officeWeb = it
+                        if (secure) lockWeb(it)
                         holder.removeAllViews()
                         holder.addView(it, FrameLayout.LayoutParams(MATCH, MATCH))
                         // garis kemajuan baca yang sama dengan PDF, mengikuti posisi gulir dokumen
@@ -723,12 +758,14 @@ class ViewerActivity : AppCompatActivity() {
                 paper.add(banner)
             }
             mime.startsWith("image/") || name.lowercase().let { n -> listOf(".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".heic", ".tif", ".tiff").any { n.endsWith(it) } } -> {
-                // Didekode di LATAR (foto 50 MP dulu membekukan layar sesaat); TIFF hasil pindai juga bisa tampil.
-                val iv = ImageView(this).apply { adjustViewBounds = true; minimumHeight = dp(160) }
+                // Didekode di LATAR; menggunakan ZoomImageView untuk pinch-zoom, pan & double tap zoom.
+                val iv = ZoomImageView(this).apply { minimumHeight = dp(320) }
                 val spin = android.widget.ProgressBar(this)
+                val hint = tv("Petunjuk: Cubit dua jari atau ketuk 2x untuk zoom & geser", 11f, C.MUTED).apply { gravity = Gravity.CENTER }
                 paper.add(spin, w = dp(36), h = dp(36))
-                paper.add(iv, w = MATCH, h = WRAP)
-                val maxDim = if (Perf.low) 1600 else 2400
+                paper.add(iv, w = MATCH, h = dp(520))
+                paper.add(hint, top = 8)
+                val maxDim = if (Perf.low) 2000 else 3200
                 Perf.io.execute {
                     val bmp = try { Pdf.decode(this, uri, maxDim) } catch (_: Throwable) { null } ?: try {
                         contentResolver.openInputStream(uri)?.use { it.readBytes() }?.let { raw ->
@@ -739,7 +776,11 @@ class ViewerActivity : AppCompatActivity() {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         spin.visibility = View.GONE
                         if (bmp != null) iv.setImageBitmap(bmp)
-                        else { iv.visibility = View.GONE; paper.add(tv("Tidak dapat memuat gambar", 14f, C.MUTED)) }
+                        else {
+                            iv.visibility = View.GONE
+                            hint.visibility = View.GONE
+                            paper.add(tv("Tidak dapat memuat gambar", 14f, C.MUTED))
+                        }
                     }
                 }
             }
@@ -988,7 +1029,7 @@ class ViewerActivity : AppCompatActivity() {
                     res.onSuccess {
                         val newUri = Files.uriFor(this, out)
                         Recent.add(this, newUri, out.name, PDF)
-                        toast("Tanda tangan ditempel di sdcard/DepupOffice!")
+                        toast("Tanda tangan ditempel di Documents/DepUp Office!")
                         Files.open(this, newUri, PDF)
                         finish()
                     }.onFailure { fail(it) }
@@ -1192,6 +1233,12 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        guard.disable()
+        // salinan terdekripsi (PDF terkunci / Dokumen Terlindungi) tidak boleh tertinggal di cache
+        try {
+            java.io.File(cacheDir, "unlocked").deleteRecursively()
+            cacheDir.listFiles()?.filter { it.name.startsWith("decrypted_") }?.forEach { it.delete() }
+        } catch (_: Exception) {}
         Perf.removeTrim(trimHook)
         if (::rv.isInitialized) rv.removeCallbacks(showFloats)
         try { officeWeb?.destroy() } catch (_: Exception) {}

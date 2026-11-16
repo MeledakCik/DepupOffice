@@ -83,7 +83,7 @@ object LiquidGlass {
     /** Panggil sekali di Application.onCreate (setelah [Glass.init]). */
     fun init(ctx: Context) {
         val p = sp(ctx.applicationContext)
-        ON = p.getBoolean("liquid", true)
+        ON = p.getBoolean("liquid", !Perf.low)
         if (p.getBoolean("liquidAutoOff", false)) { autoDisabled = true; p.edit().remove("liquidAutoOff").apply() }
     }
 

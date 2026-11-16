@@ -35,12 +35,15 @@ class SheetEditorActivity : AppCompatActivity() {
     private lateinit var topBarV: View
     private lateinit var formulaBarV: View
     private lateinit var gridToolbarV: View
+    private lateinit var sheetBarContainer: LinearLayout
+    private val sheetList = mutableListOf<Pair<String, MutableList<MutableList<SheetCell>>>>()
+    private var currentSheetIdx = 0
     /** Keyboard sedang tampil (diperkirakan dari tinggi area tampak jendela). */
     private var imeShown = false
 
     private var numCols = 4
     private val colNames = listOf("A", "B", "C", "D", "E", "F", "G", "H")
-    private val matrix = mutableListOf<MutableList<SheetCell>>()
+    private var matrix = mutableListOf<MutableList<SheetCell>>()
 
     private var activeRow = 0
     private var activeCol = 0
@@ -121,12 +124,133 @@ class SheetEditorActivity : AppCompatActivity() {
         gridScroll.addView(pad)
 
         root.add(gridScroll, w = MATCH, h = 0, weight = 1f)
+
+        if (sheetList.isEmpty()) {
+            sheetList.add(Pair("Sheet1", matrix))
+        } else {
+            sheetList[0] = Pair("Sheet1", matrix)
+        }
+        sheetBarContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(C.SURFACE)
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+        }
+        root.add(sheetBarContainer, w = MATCH, h = WRAP)
+
         setContentView(Glass.scaffold(root))
 
+        updateSheetBar()
         syncFormulaBar()
         renderGrid()
         applyDensity()
         window.decorView.viewTreeObserver.addOnGlobalLayoutListener(imeWatch)
+    }
+
+    private fun updateSheetBar() {
+        if (!::sheetBarContainer.isInitialized) return
+        sheetBarContainer.removeAllViews()
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        }
+
+        sheetList.forEachIndexed { idx, (sName, _) ->
+            val isSel = idx == currentSheetIdx
+            val tabBtn = tv(sName, 12f, if (isSel) C.ON_PRIMARY else C.TEXT, true).apply {
+                background = shape(if (isSel) C.TEAL else C.SURFACE, 100, C.LINE, 1)
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                isClickable = true
+                setOnClickListener {
+                    if (currentSheetIdx != idx) {
+                        currentSheetIdx = idx
+                        val targetM = sheetList[idx].second
+                        this@SheetEditorActivity.matrix.clear()
+                        this@SheetEditorActivity.matrix.addAll(targetM)
+                        numCols = targetM.maxOfOrNull { it.size } ?: 4
+                        activeRow = 0
+                        activeCol = 0
+                        syncFormulaBar()
+                        renderGrid()
+                        updateSheetBar()
+                    }
+                }
+                setOnLongClickListener {
+                    showRenameSheetDialog(idx)
+                    true
+                }
+            }
+            row.add(tabBtn, w = WRAP, side = 3)
+        }
+
+        val addBtn = tv("+ Sheet", 12f, C.ACCENT, true).apply {
+            background = shape(C.BLUE_BG, 100)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            isClickable = true
+            setOnClickListener {
+                val newIndex = sheetList.size + 1
+                val newMatrix = mutableListOf<MutableList<SheetCell>>()
+                newMatrix.add(MutableList(4) { SheetCell("") })
+                sheetList.add(Pair("Sheet$newIndex", newMatrix))
+                currentSheetIdx = sheetList.size - 1
+                this@SheetEditorActivity.matrix.clear()
+                this@SheetEditorActivity.matrix.addAll(newMatrix)
+                numCols = 4
+                activeRow = 0
+                activeCol = 0
+                syncFormulaBar()
+                renderGrid()
+                updateSheetBar()
+                toast("Sheet$newIndex ditambahkan")
+            }
+        }
+        row.add(addBtn, w = WRAP, side = 6)
+
+        sheetBarContainer.addView(android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(row)
+        })
+    }
+
+    private fun showRenameSheetDialog(sheetIdx: Int) {
+        val currentName = sheetList.getOrNull(sheetIdx)?.first ?: "Sheet"
+        val et = field("Nama Sheet").apply { setText(currentName) }
+
+        val box = vbox(12).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
+        box.add(tv("Kelola Sheet: $currentName", 15f, C.TEXT, true))
+        box.add(et, top = 8)
+
+        val builder = AlertDialog.Builder(this)
+            .setTitle("Ubah Nama / Hapus Sheet")
+            .setView(box)
+            .setPositiveButton("Simpan Nama") { _, _ ->
+                val newName = et.text.toString().trim().ifBlank { currentName }
+                if (sheetIdx in sheetList.indices) {
+                    val m = sheetList[sheetIdx].second
+                    sheetList[sheetIdx] = Pair(newName, m)
+                    updateSheetBar()
+                }
+            }
+
+        if (sheetList.size > 1) {
+            builder.setNeutralButton("Hapus Sheet") { _, _ ->
+                sheetList.removeAt(sheetIdx)
+                currentSheetIdx = currentSheetIdx.coerceIn(0, sheetList.size - 1)
+                val targetM = sheetList[currentSheetIdx].second
+                this@SheetEditorActivity.matrix.clear()
+                this@SheetEditorActivity.matrix.addAll(targetM)
+                numCols = targetM.maxOfOrNull { it.size } ?: 4
+                activeRow = 0
+                activeCol = 0
+                syncFormulaBar()
+                renderGrid()
+                updateSheetBar()
+                toast("Sheet dihapus")
+            }
+        }
+
+        builder.setNegativeButton("Batal", null).show()
     }
 
     private val imeWatch = android.view.ViewTreeObserver.OnGlobalLayoutListener {
@@ -301,6 +425,51 @@ class SheetEditorActivity : AppCompatActivity() {
         return bar
     }
 
+    private fun showFormulaAssistantSheet() {
+        val colName = colNames.getOrNull(activeCol) ?: "A"
+        val activeCellName = "$colName${activeRow + 1}"
+        val smartRange = if (activeRow > 0) "${colName}1:${colName}${activeRow}" else "${colName}1"
+
+        val formulas = listOf(
+            Triple("AutoSum (=SUM)", "=SUM($smartRange)", "Jumlahkan seluruh angka di kolom $colName"),
+            Triple("Rata-Rata (=AVERAGE)", "=AVERAGE($smartRange)", "Hitung rata-rata nilai di sel $smartRange"),
+            Triple("Hitung Data (=COUNT)", "=COUNT($smartRange)", "Hitung jumlah sel ber-angka di $smartRange"),
+            Triple("Nilai Maksimum (=MAX)", "=MAX($smartRange)", "Cari nilai tertinggi di $smartRange"),
+            Triple("Nilai Minimum (=MIN)", "=MIN($smartRange)", "Cari nilai terendah di $smartRange"),
+            Triple("Pengkondisian (=IF)", "=IF(${colName}1>100, \"Lulus\", \"Tidak\")", "Cek kondisi nilai sel"),
+            Triple("Pencarian Data (=VLOOKUP)", "=VLOOKUP(${colName}1, A1:B10, 2, FALSE)", "Cari data dalam rentang tabel"),
+            Triple("Gabung Teks (=CONCAT)", "=CONCAT(A1, \" \", B1)", "Gabungkan teks dari dua sel")
+        )
+
+        sheet { body, dismiss ->
+            sheetHeader(body, R.drawable.ic_sheet, C.ACCENT, C.BLUE_BG, "Asisten Rumus Excel", "Sel aktif: $activeCellName • Pilih rumus cepat", dismiss)
+            val pad = vbox().apply { setPadding(dp(16), 0, dp(16), dp(20)) }
+
+            val list = vbox(8)
+            formulas.forEach { (name, formulaTpl, desc) ->
+                val card = vbox(4).apply {
+                    background = shape(C.SURFACE, 12, C.LINE, 1)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        dismiss()
+                        formulaEt.setText(formulaTpl)
+                        formulaEt.setSelection(formulaTpl.length)
+                        toast("Rumus $name diterapkan pada $activeCellName")
+                    }
+                }
+                card.add(tv(name, 14f, C.ACCENT, true))
+                card.add(tv(formulaTpl, 13f, C.TEXT, true))
+                card.add(tv(desc, 11f, C.MUTED))
+                list.add(card)
+            }
+
+            pad.add(ScrollView(this@SheetEditorActivity).apply { addView(list) }, h = dp(320))
+            body.add(pad)
+        }
+    }
+
     private fun formulaBar(): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -312,7 +481,14 @@ class SheetEditorActivity : AppCompatActivity() {
         activeCellPill = pill("A1", C.TEAL, C.TEAL_BG, 11f)
         bar.add(activeCellPill, w = WRAP)
 
-        bar.add(tv("fx", 13f, C.MUTED, true), w = WRAP, side = 8)
+        val fxBtn = tv("fx", 14f, C.ACCENT, true).apply {
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = shape(C.BLUE_BG, 8)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showFormulaAssistantSheet() }
+        }
+        bar.add(fxBtn, w = WRAP, side = 8)
 
         formulaEt = field("Masukkan teks, angka, atau rumus (=SUM...)", multi = false).apply {
             textSize = 13f
@@ -341,6 +517,60 @@ class SheetEditorActivity : AppCompatActivity() {
         return bar
     }
 
+    private fun showFindReplaceSheet() {
+        val fFind = field("Cari kata / teks…")
+        val fReplace = field("Ganti dengan…")
+
+        sheet { body, dismiss ->
+            sheetHeader(body, R.drawable.ic_search, C.ACCENT, C.BLUE_BG, "Cari & Ganti Kata Massal", "Cari dan ganti teks pada seluruh sel tabel", dismiss)
+            val pad = vbox().apply { setPadding(dp(16), 0, dp(16), dp(20)) }
+
+            val formBox = vbox(10).apply {
+                add(tv("Kata yang Dicari", 12f, C.MUTED))
+                add(fFind)
+                add(tv("Ganti Dengan", 12f, C.MUTED), top = 4)
+                add(fReplace)
+            }
+
+            pad.add(formBox)
+
+            val actionRow = hbox().apply {
+                add(btn("Ganti Semua", true, C.PRIMARY, R.drawable.ic_search) {
+                    val q = fFind.text.toString().trim()
+                    val rText = fReplace.text.toString()
+                    if (q.isEmpty()) {
+                        toast("Ketik kata yang ingin dicari")
+                        return@btn
+                    }
+
+                    var count = 0
+                    val m = this@SheetEditorActivity.matrix
+                    for (r in 0 until m.size) {
+                        for (c in 0 until numCols) {
+                            val cell = m.getOrNull(r)?.getOrNull(c) ?: continue
+                            if (cell.valStr.contains(q, ignoreCase = true)) {
+                                cell.valStr = cell.valStr.replace(q, rText, ignoreCase = true)
+                                count++
+                            }
+                        }
+                    }
+
+                    if (count > 0) {
+                        refreshCells()
+                        syncFormulaBar()
+                        toast("Berhasil mengganti $count kata di tabel")
+                        dismiss()
+                    } else {
+                        toast("Teks \"$q\" tidak ditemukan")
+                    }
+                }, w = 0, weight = 1f)
+            }
+
+            pad.add(actionRow, top = 16)
+            body.add(pad)
+        }
+    }
+
     private fun gridToolbar(): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -353,7 +583,6 @@ class SheetEditorActivity : AppCompatActivity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
 
         fun toolBtn(label: String, onClick: () -> Unit) {
-            // kapsul putih bergaris tipis, senada dengan pita editor Word (dulu kotak berbayangan kecil)
             val tvBtn = tv(label, 13f, C.TEXT, true).apply {
                 gravity = Gravity.CENTER
                 background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
@@ -364,6 +593,9 @@ class SheetEditorActivity : AppCompatActivity() {
             }
             row.add(tvBtn, w = WRAP, side = 3)
         }
+
+        toolBtn("Σ AutoSum") { showFormulaAssistantSheet() }
+        toolBtn("Cari & Ganti") { showFindReplaceSheet() }
 
         toolBtn("+ Baris") {
             matrix.add(MutableList(numCols) { SheetCell("") })
@@ -960,9 +1192,9 @@ class SheetEditorActivity : AppCompatActivity() {
             title, "${file.name} • ${Files.fmtSize(file.length())}", extra, "Buka Dokumen",
             { Files.open(this, uri, mime) },
             listOf(
-                SheetAction(R.drawable.ic_download, "Simpan ke Unduhan") {
+                SheetAction(R.drawable.ic_download, "Simpan salinan ke DepUp Office") {
                     work("Menyimpan…", { Files.saveToDownloads(this, uri, file.name, mime) }) { r ->
-                        r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+                        r.onSuccess { toast("Tersimpan di Documents/DepUp Office") }.onFailure { fail(it) }
                     }
                 },
                 SheetAction(R.drawable.ic_chat, "Kirim via WhatsApp", C.TEAL, C.TEAL_BG) { Files.share(this, uri, mime, true) },

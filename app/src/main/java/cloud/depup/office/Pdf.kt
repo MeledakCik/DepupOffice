@@ -171,7 +171,24 @@ object Pdf {
         }
     }
 
-    /** Simpan tiap halaman sebagai JPG ke Galeri (Pictures/Depup Office). Mengembalikan jumlah gambar. */
+    /** Pecah PDF menjadi beberapa berkas PDF kecil per [chunkSize] halaman. */
+    fun splitChunk(ctx: Context, uri: Uri, chunkSize: Int, baseName: String): List<File> {
+        val total = pageCount(ctx, uri)
+        val createdFiles = ArrayList<File>()
+        var start = 1
+        var part = 1
+        while (start <= total) {
+            val end = (start + chunkSize - 1).coerceAtMost(total)
+            val out = Files.namedOut(ctx, "${baseName}_Bagian${part}_Hal${start}-${end}", "pdf")
+            split(ctx, uri, start, end, out)
+            createdFiles.add(out)
+            start += chunkSize
+            part++
+        }
+        return createdFiles
+    }
+
+    /** Simpan tiap halaman sebagai JPG ke Galeri (Documents/DepUp Office/Gambar). Mengembalikan jumlah gambar. */
     fun toJpg(ctx: Context, uri: Uri, base: String): Int {
         var n = 0
         val r = ctx.contentResolver
@@ -182,9 +199,8 @@ object Pdf {
                     val cv = ContentValues().apply {
                         put(MediaStore.MediaColumns.DISPLAY_NAME, "${base}_${i + 1}.jpg")
                         put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
                     }
-                    val u = r.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: throw IOException("Gagal menyimpan gambar")
+                    val u = Files.insertGallery(r, cv) ?: throw IOException("Gagal menyimpan gambar")
                     r.openOutputStream(u)!!.use { rd.bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
                     n++
                 } finally { rd.bmp.recycle() }
@@ -227,7 +243,40 @@ object Pdf {
         }
     }
 
-    /** Ekstrak seluruh gambar/foto dari PDF ke Galeri (Pictures/Depup Office). */
+    /** Deteksi & hapus halaman kosong/putih dari berkas PDF. Mengembalikan jumlah halaman kosong yang dihapus. */
+    fun removeBlankPages(ctx: Context, uri: Uri, out: File): Int {
+        var removedCount = 0
+        val doc = PdfDocument()
+        try {
+            Src(ctx, uri).use { s ->
+                val n = s.r.pageCount
+                var newIndex = 1
+                for (i in 0 until n) {
+                    val rd = render(s.r, i, 1.5f)
+                    try {
+                        if (ScanCore.isBlankPage(rd.bmp)) {
+                            removedCount++
+                        } else {
+                            addPage(doc, newIndex++, rd)
+                        }
+                    } finally {
+                        rd.bmp.recycle()
+                    }
+                }
+            }
+            if (removedCount < (try { pageCount(ctx, uri) } catch (_: Throwable) { 0 })) {
+                write(doc, out)
+            } else {
+                out.delete()
+                throw IllegalStateException("Seluruh halaman PDF dianggap kosong")
+            }
+        } finally {
+            doc.close()
+        }
+        return removedCount
+    }
+
+    /** Ekstrak seluruh gambar/foto dari PDF ke Galeri (Documents/DepUp Office/Gambar). */
     fun extractImagesFromPdf(ctx: Context, uri: Uri, base: String): Int = toJpg(ctx, uri, "${base}_foto")
 
     /** Kompres foto dari Galeri HP tanpa merusak kualitas visual. Mengembalikan Pair(jumlah_foto, total_byte_hemat). */
@@ -243,9 +292,8 @@ object Pdf {
                 val cv = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, "Kompres_${System.currentTimeMillis()}_${idx + 1}.jpg")
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
                 }
-                val dst = r.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: throw IOException("Gagal menyimpan foto")
+                val dst = Files.insertGallery(r, cv) ?: throw IOException("Gagal menyimpan foto")
                 r.openOutputStream(dst)!!.use { o -> bmp.compress(Bitmap.CompressFormat.JPEG, quality, o) }
                 val newSize = Files.sizeOf(ctx, dst)
                 if (origSize > newSize && origSize > 0) savedBytes += (origSize - newSize)
@@ -595,7 +643,7 @@ object Pdf {
         return res
     }
 
-    /** Halaman scan -> JPG di Galeri (Pictures/Depup Office). Mengembalikan jumlah gambar. */
+    /** Halaman scan -> JPG di Galeri (Documents/DepUp Office/Gambar). Mengembalikan jumlah gambar. */
     fun scansToJpg(ctx: Context, pages: List<ScanPage>, base: String, mode: Int, maxDim: Int, bright: Int, contrast: Int): Int {
         var n = 0
         val r = ctx.contentResolver
@@ -605,9 +653,8 @@ object Pdf {
                 val cv = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, if (pages.size == 1) "$base.jpg" else "${base}_${idx + 1}.jpg")
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
                 }
-                val u = r.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: throw IOException("Gagal menyimpan gambar")
+                val u = Files.insertGallery(r, cv) ?: throw IOException("Gagal menyimpan gambar")
                 r.openOutputStream(u)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
                 n++
             } finally { bmp.recycle() }

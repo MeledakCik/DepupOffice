@@ -11,7 +11,7 @@ import javax.crypto.spec.SecretKeySpec
  * Pembaca struktur PDF (murni Kotlin/JVM, tanpa Android — diuji di JVM).
  *
  * PdfRenderer bawaan Android hanya bisa MENGGAMBAR halaman; untuk PDF ke Word yang lengkap (teks asli, foto, garis,
- * tabel), metadata anti-AI, dan kunci AES-256 tanpa merusak teks, isi PDF perlu dibaca langsung. Mendukung: tabel
+ * tabel) dan kunci AES-256 tanpa merusak teks, isi PDF perlu dibaca langsung. Mendukung: tabel
  * xref klasik & xref stream, object stream, filter Flate (+ prediktor PNG), ASCIIHex, ASCII85, LZW, RunLength, berkas
  * rusak (xref dibangun ulang dengan memindai "n g obj"), dan dekripsi Standard Security Handler (RC4 40/128,
  * AES-128, AES-256) untuk password kosong / password yang diberikan.
@@ -236,6 +236,10 @@ class PdfFile private constructor(val data: ByteArray) {
     var encryptRef: PRef? = null; private set
     /** Izin asli (/P) bila terenkripsi. */
     var permissions: Int = -1; private set
+    /** Dibuka dengan password pemilik (atau tidak terenkripsi): batasan izin tidak berlaku. */
+    var ownerAuth = true; private set
+    /** Isi boleh disalin / diubah menurut izin PDF (bit 5 & 4 /P) atau karena dibuka pemilik. */
+    val canExtract get() = ownerAuth || !encrypted || ((permissions and (1 shl 4)) != 0 && (permissions and (1 shl 3)) != 0)
     val version: String = Regex("%PDF-(\\d\\.\\d)").find(String(data, 0, minOf(1024, data.size), Charsets.ISO_8859_1))?.groupValues?.get(1) ?: "1.4"
 
     companion object {
@@ -681,6 +685,7 @@ class PdfFile private constructor(val data: ByteArray) {
         val id0 = ((res(trailer["ID"]) as? List<*>)?.firstOrNull() as? PStr)?.b ?: ByteArray(0)
         val c = PdfDecrypt.open(ed, id0, password) ?: throw PdfPasswordException("Password salah")
         crypt = c
+        ownerAuth = c.owner
         cache.clear(); stmCache.clear()
     }
 }
@@ -688,6 +693,8 @@ class PdfFile private constructor(val data: ByteArray) {
 /** Standard Security Handler: RC4 (V1/V2), AES-128 (V4 AESV2), AES-256 (V5, R5/R6). */
 class PdfDecrypt private constructor(private val key: ByteArray, private val aes: Boolean, private val v5: Boolean,
                                      private val strF: String, private val stmF: String, private val encMeta: Boolean) {
+    /** true bila dibuka dengan password PEMILIK (boleh mengabaikan batasan izin). */
+    var owner = false; private set
     companion object {
         private val PAD = intArrayOf(0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56, 0xFF, 0xFA, 0x01, 0x08,
             0x2E, 0x2E, 0x00, 0xB6, 0xD0, 0x68, 0x3E, 0x80, 0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A).map { it.toByte() }.toByteArray()
@@ -717,7 +724,7 @@ class PdfDecrypt private constructor(private val key: ByteArray, private val aes
                 }
                 if (o.size >= 48 && oe != null && hashR6(pw, o.copyOfRange(32, 40), u.copyOf(48), r).contentEquals(o.copyOf(32))) {
                     val k = hashR6(pw, o.copyOfRange(40, 48), u.copyOf(48), r)
-                    return PdfDecrypt(aesEcbCbcNoIv(k, oe), true, true, strF, stmF, encMeta)
+                    return PdfDecrypt(aesEcbCbcNoIv(k, oe), true, true, strF, stmF, encMeta).also { it.owner = true }
                 }
                 return null
             }
@@ -748,7 +755,7 @@ class PdfDecrypt private constructor(private val key: ByteArray, private val aes
                 var up = o.copyOf(32)
                 if (r == 2) up = rc4(ok2, up) else for (i in 19 downTo 0) up = rc4(ByteArray(ok2.size) { (ok2[it].toInt() xor i).toByte() }, up)
                 val k = keyFor(up)
-                if (userOk(k)) return PdfDecrypt(k, aes, false, strF, stmF, encMeta)
+                if (userOk(k)) return PdfDecrypt(k, aes, false, strF, stmF, encMeta).also { it.owner = true }
             }
             return null
         }

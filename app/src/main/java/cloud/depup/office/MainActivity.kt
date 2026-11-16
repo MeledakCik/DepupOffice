@@ -1,5 +1,6 @@
 package cloud.depup.office
 
+import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -58,7 +59,7 @@ class MainActivity : AppCompatActivity() {
             val mime = if (f.name.endsWith(".docx")) DOCX else PDF
             showResult(if (mime == DOCX) "Dokumen Word dibuat" else "Scan selesai", f, mime)
         }
-        else if (r.resultCode == RESULT_OK && jpg > 0) toast("$jpg gambar disimpan di Galeri › Pictures/Depup Office")
+        else if (r.resultCode == RESULT_OK && jpg > 0) toast("$jpg gambar disimpan di Documents/DepUp Office/Gambar")
     }
     private val camera = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val files = r.data?.getStringArrayListExtra("files")
@@ -476,7 +477,7 @@ class MainActivity : AppCompatActivity() {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.add(btn("Simpan ke Galeri", true, C.ACCENT, R.drawable.ic_download) {
                 saveQrBitmap(bmp, "Donasi_Depup")
-                toast("QR disimpan ke Galeri › Pictures/Depup Office")
+                toast("QR disimpan ke Documents/DepUp Office/Gambar")
             }, w = 0, weight = 1f)
             val shareQrBtn = btn("Bagikan", false, C.ACCENT, R.drawable.ic_share) {
                 shareQrBitmap(bmp, content)
@@ -494,9 +495,8 @@ class MainActivity : AppCompatActivity() {
             val cv = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, "${base}_${System.currentTimeMillis()}.png")
                 put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
             }
-            val dst = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: throw java.io.IOException("Gagal menyimpan QR")
+            val dst = Files.insertGallery(contentResolver, cv) ?: throw java.io.IOException("Gagal menyimpan QR")
             contentResolver.openOutputStream(dst)!!.use { o -> bmp.compress(Bitmap.CompressFormat.PNG, 100, o) }
         } catch (t: Throwable) {
             fail(t)
@@ -548,6 +548,9 @@ class MainActivity : AppCompatActivity() {
                 if (idx == tab) { sv?.smoothScrollTo(0, 0); nav.beat() }   // tab yang sedang dibuka: kembali ke atas
                 else select(idx)
             }
+        }
+        nav.onTabSelected = { idx ->
+            if (idx != tab) select(idx)
         }
         return nav
     }
@@ -1094,7 +1097,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(8), 0, dp(8))
             tappable(desc) { f() }
             background = rippleBg(14)
-            add(iconBadge(res, fg, bg, 16, 24), w = dp(56), h = dp(56))
+            add(iconBadge(res, fg, C.SURFACE, 16, 24), w = dp(56), h = dp(56))
             add(tv(label, 13f, C.TEXT, true).apply { gravity = Gravity.CENTER; maxLines = 1 }, top = 6, w = WRAP)
         }
         p.add(evenRow(listOf(
@@ -1118,6 +1121,18 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_TEMPLATE, SheetEditorActivity.TEMPLATE_BLANK))
             },
             createRow(R.drawable.ic_note, C.PRIMARY, C.PRIMARY_C, "Catatan jadi PDF", "Tulis teks, simpan sebagai PDF") { textFlow() },
+            createRow(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Nota & Kuitansi Toko", "Buat kuitansi, hitung total & tempel stempel") {
+                InvoiceMakerManager.showDialog(this) { cb -> pickFile(arrayOf("image/*")) { cb(it) } }
+            },
+            createRow(R.drawable.ic_doc, C.DOC_FG, C.DOC_BG, "Katalog Produk & Portofolio", "Buat katalog jualan / portofolio PDF") {
+                CatalogMakerManager.showDialog(this) { cb -> pickFile(arrayOf("image/*")) { cb(it) } }
+            },
+            createRow(R.drawable.ic_note, C.PRIMARY, C.PRIMARY_C, "Jadwal & Perencana Tugas", "Template agenda kerja / To-Do List ke PDF/Excel") {
+                SchedulePlannerManager.showDialog(this)
+            },
+            createRow(R.drawable.ic_note, C.PRIMARY, C.PRIMARY_C, "Ringkas Dokumen PDF / Word", "Ekstrak poin-poin utama & buat PDF ringkasan") {
+                DocumentSummarizerManager.showDialog(this) { cb -> pickFile(arrayOf(PDF, DOCX, "*/*")) { cb(it) } }
+            },
             createRow(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Gambar tanda tangan, tempel ke PDF") {
                 pickFile(arrayOf(PDF)) { signFlow(it) }
             }
@@ -1301,7 +1316,7 @@ class MainActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
         })
-        val outNote = tv("Berkas yang dibuat aplikasi ini · folder sdcard/DepupOffice", 13f, C.MUTED).apply {
+        val outNote = tv("Berkas yang dibuat aplikasi ini · folder Documents/DepUp Office", 13f, C.MUTED).apply {
             visibility = if (docsMode == 2) View.VISIBLE else View.GONE
         }
         p.add(segmented(listOf("Terkini", "Ditandai", "Hasil olahan"), docsMode) {
@@ -1355,13 +1370,13 @@ class MainActivity : AppCompatActivity() {
             col.add(tv("Terakhir: $title", 14f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
             col.add(tv(name, 13f, C.MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, top = 1)
             r1.add(col, w = 0, weight = 1f, side = 10)
-            r1.add(tv("Simpan ke Unduhan", 14f, C.PRIMARY, true).apply {
+            r1.add(tv("Simpan salinan ke DepUp Office", 14f, C.PRIMARY, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(10), 0, dp(6), 0)
                 tappable {
                     val f = File(path)
                     if (f.exists()) work("Menyimpan…", { Files.saveToDownloads(this@MainActivity, Files.uriFor(this@MainActivity, f), name, Files.byName(name)) }) { r ->
-                        r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+                        r.onSuccess { toast("Tersimpan di Documents/DepUp Office") }.onFailure { fail(it) }
                     } else toast("Berkas sudah tidak ada")
                 }
             }, w = WRAP)
@@ -1379,7 +1394,13 @@ class MainActivity : AppCompatActivity() {
             tile(R.drawable.ic_merge, C.PDF_FG, C.PDF_BG, "Gabung PDF", "Satukan beberapa PDF, urutan bebas") { mergeFlow() },
             tile(R.drawable.ic_cut, C.PDF_FG, C.PDF_BG, "Pisah PDF", "Ambil halaman tertentu") { pickFile(arrayOf(PDF)) { splitFlow(it) } },
             tile(R.drawable.ic_crop, C.PDF_FG, C.PDF_BG, "Susun halaman", "Urutkan, putar, atau hapus halaman") { pickFile(arrayOf(PDF)) { organizePdfFlow(it) } },
-            tile(R.drawable.ic_compress, C.PDF_FG, C.PDF_BG, "Kompres PDF", "Target < 200 KB / 500 KB / 1 MB", "CPNS", C.PDF_FG, C.PDF_BG) { pickFile(arrayOf(PDF)) { compressFlow(it) } },
+            tile(R.drawable.ic_crop, C.PDF_FG, C.PDF_BG, "Nomor Halaman PDF", "Tambahkan Hal X dari Y & Header") {
+                PdfPageNumberingManager.showDialog(this) { cb -> pickFile(arrayOf(PDF)) { cb(it) } }
+            },
+            tile(R.drawable.ic_crop, C.PDF_FG, C.PDF_BG, "Hapus hal. kosong", "Deteksi & buang halaman putih polos") { pickFile(arrayOf(PDF)) { removeBlankPagesFlow(it) } },
+            tile(R.drawable.ic_compress, C.PDF_FG, C.PDF_BG, "Kompres PDF Presisi", "Target < 200 KB / 500 KB / 1 MB", "CPNS", C.PDF_FG, C.PDF_BG) {
+                PdfTargetCompressorManager.showDialog(this) { cb -> pickFile(arrayOf(PDF)) { cb(it) } }
+            },
             tile(R.drawable.ic_image, C.PDF_FG, C.PDF_BG, "PDF ke JPG", "Tiap halaman jadi gambar") { pickFile(arrayOf(PDF)) { pdfToJpgFlow(it) } },
             tile(R.drawable.ic_img_add, C.PDF_FG, C.PDF_BG, "Ambil gambar", "Simpan foto di dalam PDF") { pickFile(arrayOf(PDF)) { extractImagesFlow(it) } },
             tile(R.drawable.ic_bright, C.PDF_FG, C.PDF_BG, "Coret-coret PDF", "Stabilo, pena, catatan, TTD", "Baru", C.PDF_FG, C.PDF_BG) {
@@ -1404,14 +1425,40 @@ class MainActivity : AppCompatActivity() {
             }
         )
         section("Gambar & foto",
+            tile(R.drawable.ic_wand, C.IMG_FG, C.IMG_BG, "Watermark foto massal", "Tempel teks/stempel pada banyak foto produk") {
+                BatchWatermarkManager.showDialog(this) { cb -> pickFiles(arrayOf("image/*")) { cb(it) } }
+            },
+            tile(R.drawable.ic_wand, C.IMG_FG, C.IMG_BG, "Pembersih bayangan foto", "Hapus bayangan tangan/HP & putihkan kertas") {
+                DocShadowRemoverManager.showDialog(this) { cb -> pickFile(arrayOf("image/*")) { cb(it) } }
+            },
+            tile(R.drawable.ic_user, C.IMG_FG, C.IMG_BG, "Pindai kartu nama", "Ekstrak Kontak, HP & Email ke Kontak/VCF") {
+                BusinessCardManager.showDialog(this) { cb -> pickFile(arrayOf("image/*")) { cb(it) } }
+            },
+            tile(R.drawable.ic_user, C.IMG_FG, C.IMG_BG, "Pembuat Pasfoto", "Potong 2x3 3x4 4x6, latar Merah/Biru, cetak A4") {
+                IdPhotoManager.showDialog(this) { cb -> pickFile(arrayOf("image/*")) { cb(it) } }
+            },
+            tile(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Pindai tabel ke Excel", "Foto tabel/kuitansi jadi file .xlsx") {
+                TableToExcelManager.showDialog(this) { cb -> pickFile(arrayOf("image/*")) { cb(it) } }
+            },
+            tile(R.drawable.ic_sheet, C.XLS_FG, C.XLS_BG, "Grafik & Chart Excel", "Buat grafik Batang, Lingkaran & Garis dari .xlsx") {
+                ExcelChartGeneratorManager.showDialog(this) { cb -> pickFile(arrayOf(XLSX, "text/csv", "*/*")) { cb(it) } }
+            },
             tile(R.drawable.ic_pdf, C.IMG_FG, C.IMG_BG, "Foto ke PDF", "Gabung foto jadi satu PDF") { jpgToPdfFlow() },
             tile(R.drawable.ic_grid, C.IMG_FG, C.IMG_BG, "Konversi massal", "Banyak foto jadi PDF terpisah") { batchConvertFlow() },
             tile(R.drawable.ic_image, C.IMG_FG, C.IMG_BG, "Kompres foto", "Kecilkan sebelum kirim WA/email") { compressGalleryFlow() },
             tile(R.drawable.ic_sign, C.IMG_FG, C.IMG_BG, "TTD transparan", "Foto tanda tangan jadi PNG") { extractTransparentSignatureFlow() }
         )
         section("Tanda tangan & keamanan",
+            tile(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Pustaka TTD & Stempel", "Kelola & simpan tanda tangan & stempel") {
+                SignatureManager.showSheet(this, "Pustaka Tanda Tangan & Stempel", onPickImage = { cb -> pickFile(arrayOf("image/*")) { cb(it) } }) { _, _ ->
+                    toast("Tanda tangan / stempel tersimpan dan siap digunakan")
+                }
+            },
             tile(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Tempel bebas: geser, ukuran, putar, warna") { pickFile(arrayOf(PDF)) { signFlow(it) } },
             tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Password PDF", "AES-256, dibuka di Adobe Reader & Depup") { pickFile(arrayOf(PDF)) { rebuildPdfFlow(it, lock = true) } },
+            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Proteksi Anti-Kopi PDF", "Kunci izin Salin Teks & Cetak tanpa password") {
+                PdfProtectionManager.showDialog(this) { cb -> pickFile(arrayOf(PDF)) { cb(it) } }
+            },
             tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Dokumen Terlindungi", "Sampul DepUp, AES-256-GCM, HMAC, & password guru", "Baru", C.PRIMARY, C.PRIMARY_C) {
                 val b = vbox(12).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
                 var d: AlertDialog? = null
@@ -1430,17 +1477,20 @@ class MainActivity : AppCompatActivity() {
                     .show()
             },
             tile(R.drawable.ic_lock, C.PRIMARY, C.PRIMARY_C, "Kunci berkas", "Enkripsi ke Brankas AES-256") { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } },
+            tile(R.drawable.ic_search, C.PRIMARY, C.PRIMARY_C, "Cari teks dalam file", "Cari kata kunci di dalam isi PDF & Word") { GlobalSearchManager.showSearchDialog(this) },
+            tile(R.drawable.ic_qr, C.PRIMARY, C.PRIMARY_C, "Label Harga & Barcode", "Buat label harga toko & cetak lebel A4") { BarcodePriceTagManager.showDialog(this) },
             tile(R.drawable.ic_qr, C.PRIMARY, C.PRIMARY_C, "QR Code", "Pindai atau buat QR") { showQrDialog() },
             tile(R.drawable.ic_scan, C.XLS_FG, C.XLS_BG, "Scan struk", "Total belanja ke Excel") { startScan() }
         )
         section("Bagikan & ekspor",
+            tile(R.drawable.ic_cloud, C.PRIMARY, C.PRIMARY_C, "Web / Artikel ke PDF", "Simpan halaman web & artikel online ke PDF") { WebToPdfManager.showDialog(this) },
             tile(R.drawable.ic_chat, C.SUCCESS, C.SUCCESS_C, "Kirim ke WhatsApp", "Pilih berkas lalu kirim") {
                 pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), true) }
             },
             tile(R.drawable.ic_share, C.PRIMARY, C.PRIMARY_C, "Bagikan", "Drive, email, aplikasi lain") {
                 pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), false) }
             },
-            tile(R.drawable.ic_download, C.PRIMARY, C.PRIMARY_C, "Simpan ke HP", "Salin ke folder Unduhan") { exportFlow() },
+            tile(R.drawable.ic_download, C.PRIMARY, C.PRIMARY_C, "Simpan ke HP", "Salin ke Documents/DepUp Office") { exportFlow() },
             tile(R.drawable.ic_print, C.PRIMARY, C.PRIMARY_C, "Cetak", "Printer atau simpan PDF") {
                 pickFile(arrayOf(PDF)) { u -> Files.print(this, u, Files.nameOf(this, u)) }
             }
@@ -1658,8 +1708,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Hasil olahan, terbaru dulu. Waktu ubah dibaca SEKALI per berkas (bukan berulang di setiap perbandingan urut). */
     private fun outFiles(): List<File> {
-        val fs = Files.outDir(this).listFiles() ?: return emptyList()
-        return fs.filter { it.isFile }.map { it to it.lastModified() }.sortedByDescending { it.second }.map { it.first }
+        val fs = Files.outFiles(this)
+        return fs.map { it to it.lastModified() }.sortedByDescending { it.second }.map { it.first }
     }
 
     private fun catOf(f: File) = typeOf(Files.byName(f.name), f.name).first
@@ -1761,7 +1811,7 @@ class MainActivity : AppCompatActivity() {
 
         // Penyimpanan
         val vaultSize = dirSize(Vault.dir(this))
-        val outSize = dirSize(Files.outDir(this))
+        val outSize = Files.outFiles(this).sumOf { it.length() }
         val (free, total) = Files.deviceStorage()
         p.add(sectionTitle("Penyimpanan"), top = 22)
         val st = card(16, 16, shadow = false)
@@ -1890,7 +1940,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ================= TOOLS =================
-    private fun mergeFlow() = pickFiles(arrayOf(PDF)) { picked -> orderDialog(picked.toMutableList()) }
+    private fun mergeFlow() = pickFiles(arrayOf(PDF, "image/*")) { picked -> orderDialog(picked.toMutableList()) }
 
     /** Tombol kecil ber-ikon garis (naik/turun/putar/hapus) — pengganti simbol teks ↑ ↓ ↻ ✕. */
     private fun miniBtn(res: Int, desc: String, onClick: () -> Unit) = FrameLayout(this).apply {
@@ -1904,7 +1954,7 @@ class MainActivity : AppCompatActivity() {
     /** Atur urutan manual: naik/turun/hapus, hasil digabung dari atas ke bawah. */
     private fun orderDialog(list: MutableList<Uri>) {
         val box = vbox(16)
-        box.add(tv("Atur urutan dengan tombol naik/turun. PDF digabung dari atas ke bawah.", 12f, C.MUTED))
+        box.add(tv("Atur urutan dengan tombol naik/turun. Campuran file (PDF & Foto) digabung dari atas ke bawah.", 12f, C.MUTED))
         val rows = vbox()
         box.add(rows, top = 8)
         fun rebuild() {
@@ -1924,17 +1974,17 @@ class MainActivity : AppCompatActivity() {
             }
         }
         rebuild()
-        val d = AlertDialog.Builder(this).setTitle("Urutan penggabungan")
+        val d = AlertDialog.Builder(this).setTitle("Urutan penggabungan file")
             .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Gabung", null).setNegativeButton("Batal", null).create()
         d.show()
         d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if (list.size < 2) { toast("Minimal 2 PDF"); return@setOnClickListener }
+            if (list.size < 2) { toast("Pilih minimal 2 file untuk digabung"); return@setOnClickListener }
             d.dismiss()
             val files = list.toList()
             val out = Files.newOut(this, "gabung", "pdf")
-            work("Menggabungkan…", { Pdf.merge(this, files, out) }) { r ->
-                r.onSuccess { showResult("PDF digabung", out, PDF) }.onFailure { fail(it) }
+            work("Menggabungkan campuran file ke PDF…", { UniversalMergeManager.merge(this, files, out) }) { r ->
+                r.onSuccess { showResult("File berhasil digabung ke PDF", out, PDF) }.onFailure { fail(it) }
             }
         }
     }
@@ -1963,6 +2013,7 @@ class MainActivity : AppCompatActivity() {
     private fun splitFlow(uri: Uri) {
         val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { fail(t); return }
         val name = Files.nameOf(this, uri)
+        var splitMode = 0
 
         val box = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -1970,25 +2021,58 @@ class MainActivity : AppCompatActivity() {
         val infoCol = vbox()
         infoCol.add(tv(name, 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
         infoCol.add(tv("Total Halaman: $pages hal", 13f, C.ACCENT, true), top = 4)
-        infoCol.add(tv("Pilih rentang halaman yang ingin dipisah:", 12f, C.MUTED), top = 4)
+        infoCol.add(tv("Pilih metode pemisahan halaman:", 12f, C.MUTED), top = 4)
         topRow.add(infoCol, w = 0, weight = 1f, side = 10)
         box.add(topRow)
 
+        val modeHolder = vbox()
+        val rangeBox = vbox(8)
+        val chunkBox = vbox(8)
+
         val a = field("Dari halaman", number = true).apply { setText("1") }
         val b = field("Sampai halaman", number = true).apply { setText(pages.toString()) }
-        box.add(a, top = 12)
-        box.add(b, top = 8)
+        rangeBox.add(a)
+        rangeBox.add(b, top = 4)
+
+        val fChunk = field("Pecah per berapa halaman? (misal: 5)", number = true).apply { setText("5") }
+        chunkBox.add(fChunk)
+        chunkBox.visibility = View.GONE
+
+        modeHolder.add(segmented(listOf("Rentang Halaman", "Pecah per N Hal"), splitMode) { mode ->
+            splitMode = mode
+            rangeBox.visibility = if (mode == 0) View.VISIBLE else View.GONE
+            chunkBox.visibility = if (mode == 1) View.VISIBLE else View.GONE
+        })
+
+        box.add(modeHolder, top = 10)
+        box.add(rangeBox, top = 8)
+        box.add(chunkBox, top = 8)
 
         AlertDialog.Builder(this).setTitle("Pratinjau & Pisah PDF").setView(box)
-            .setPositiveButton("Pisahkan Halaman") { _, _ ->
-                val f = a.text.toString().toIntOrNull()
-                val t = b.text.toString().toIntOrNull()
-                if (f == null || t == null || f < 1 || t > pages || f > t) {
-                    toast("Rentang halaman tidak valid"); return@setPositiveButton
-                }
-                val out = Files.newOut(this, "pisah_${f}-$t", "pdf")
-                work("Memisahkan halaman…", { Pdf.split(this, uri, f, t, out) }) { r ->
-                    r.onSuccess { showResult("PDF dipisah", out, PDF) }.onFailure { fail(it) }
+            .setPositiveButton("Pisahkan") { _, _ ->
+                if (splitMode == 0) {
+                    val f = a.text.toString().toIntOrNull()
+                    val t = b.text.toString().toIntOrNull()
+                    if (f == null || t == null || f < 1 || t > pages || f > t) {
+                        toast("Rentang halaman tidak valid"); return@setPositiveButton
+                    }
+                    val out = Files.newOut(this, "pisah_${f}-$t", "pdf")
+                    work("Memisahkan halaman…", { Pdf.split(this, uri, f, t, out) }) { r ->
+                        r.onSuccess { showResult("PDF dipisah", out, PDF) }.onFailure { fail(it) }
+                    }
+                } else {
+                    val chunkSize = fChunk.text.toString().toIntOrNull() ?: 5
+                    if (chunkSize < 1) {
+                        toast("Jumlah halaman per bagian minimal 1"); return@setPositiveButton
+                    }
+                    work("Memecah PDF per $chunkSize halaman…", {
+                        Pdf.splitChunk(this, uri, chunkSize, Files.baseName(name))
+                    }) { r ->
+                        r.onSuccess { files ->
+                            toast("${files.size} berkas PDF berhasil dibuat!")
+                            if (files.isNotEmpty()) showResult("PDF dipecah per $chunkSize hal", files.first(), PDF)
+                        }.onFailure { fail(it) }
+                    }
                 }
             }.setNegativeButton("Batal", null).show()
     }
@@ -2084,6 +2168,18 @@ class MainActivity : AppCompatActivity() {
             }.setNegativeButton("Batal", null).show()
     }
 
+    private fun removeBlankPagesFlow(uri: Uri) {
+        val out = Files.newOut(this, Files.baseName(Files.nameOf(this, uri)) + "_bersih", "pdf")
+        work("Mendeteksi & menghapus halaman kosong…", {
+            Pdf.removeBlankPages(this, uri, out)
+        }) { res ->
+            res.onSuccess { count ->
+                if (count > 0) showResult("Halaman Kosong Dibuang ($count hal)", out, PDF)
+                else toast("Tidak ada halaman kosong yang terdeteksi")
+            }.onFailure { fail(it) }
+        }
+    }
+
     private fun pdfToJpgFlow(uri: Uri) {
         val name = Files.nameOf(this, uri)
         val pages = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { 1 }
@@ -2104,7 +2200,7 @@ class MainActivity : AppCompatActivity() {
                 work("Mengubah ke JPG…", { Pdf.toJpg(this, uri, base) }) { r ->
                     r.onSuccess { n ->
                         AlertDialog.Builder(this).setTitle("Selesai")
-                            .setMessage("$n gambar disimpan di Galeri › Pictures/Depup Office")
+                            .setMessage("$n gambar disimpan di Documents/DepUp Office/Gambar")
                             .setPositiveButton("OK", null).show()
                     }.onFailure { fail(it) }
                 }
@@ -2112,52 +2208,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun organizePdfFlow(uri: Uri) {
-        val total = try { Pdf.pageCount(this, uri) } catch (t: Throwable) { fail(t); return }
-        val name = Files.nameOf(this, uri)
-        val pagesOrder = (0 until total).toMutableList()
-        val rotations = mutableMapOf<Int, Int>()
-
-        val box = vbox(12).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
-        box.add(tv("Kelola & Susun Halaman: $name ($total hal)", 14f, C.TEXT, true))
-        box.add(tv("Atur urutan dengan tombol naik/turun, putar 90°, atau hapus halaman.", 12f, C.MUTED))
-
-        val listContainer = vbox(8)
-        box.add(ScrollView(this).apply { addView(listContainer) }, h = dp(220))
-
-        fun renderList() {
-            listContainer.removeAllViews()
-            pagesOrder.forEachIndexed { idx, origIdx ->
-                val r = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    background = shape(C.SURFACE2, 10)
-                    setPadding(dp(10), dp(8), dp(6), dp(8))
-                }
-                val rot = rotations[origIdx] ?: 0
-                r.add(tv("${idx + 1}. Halaman ${origIdx + 1}" + if (rot > 0) " ($rot°)" else "", 13f, C.TEXT, true), w = 0, weight = 1f)
-                r.add(miniBtn(R.drawable.ic_up, "Naikkan") { if (idx > 0) { pagesOrder.add(idx - 1, pagesOrder.removeAt(idx)); renderList() } }, w = dp(32), h = dp(32), side = 2)
-                r.add(miniBtn(R.drawable.ic_down, "Turunkan") { if (idx < pagesOrder.size - 1) { pagesOrder.add(idx + 1, pagesOrder.removeAt(idx)); renderList() } }, w = dp(32), h = dp(32), side = 2)
-                r.add(miniBtn(R.drawable.ic_rotate, "Putar 90°") { rotations[origIdx] = ((rotations[origIdx] ?: 0) + 90) % 360; renderList() }, w = dp(32), h = dp(32), side = 2)
-                r.add(miniBtn(R.drawable.ic_close, "Hapus") { pagesOrder.removeAt(idx); renderList() }, w = dp(32), h = dp(32), side = 2)
-                listContainer.add(r, top = 4)
-            }
+        PdfTools.showOrganizeSheet(this, uri) { out ->
+            showResult("PDF dikelola & disusun", out, PDF)
         }
-        renderList()
-
-        AlertDialog.Builder(this)
-            .setTitle("Kelola & Susun Ulang PDF")
-            .setView(box)
-            .setPositiveButton("Simpan PDF Baru") { _, _ ->
-                if (pagesOrder.isEmpty()) { toast("Semua halaman telah dihapus"); return@setPositiveButton }
-                val out = Files.newOut(this, "susun_" + Files.baseName(name), "pdf")
-                work("Menyusun PDF baru…", {
-                    Pdf.organizePdf(this, uri, pagesOrder, rotations, out)
-                }) { r ->
-                    r.onSuccess { showResult("PDF dikelola & disusun", out, PDF) }.onFailure { fail(it) }
-                }
-            }
-            .setNegativeButton("Batal", null)
-            .show()
     }
 
     private fun extractImagesFlow(uri: Uri) {
@@ -2169,7 +2222,7 @@ class MainActivity : AppCompatActivity() {
             r.onSuccess { count ->
                 AlertDialog.Builder(this)
                     .setTitle("Ekstrak Foto Selesai")
-                    .setMessage("Berhasil menyedot $count gambar dari PDF ke Galeri › Pictures/Depup Office!")
+                    .setMessage("Berhasil menyedot $count gambar dari PDF ke Documents/DepUp Office/Gambar!")
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
@@ -2200,7 +2253,7 @@ class MainActivity : AppCompatActivity() {
             r.onSuccess { n ->
                 AlertDialog.Builder(this)
                     .setTitle("Konversi Massal Selesai")
-                    .setMessage("Berhasil mengonversi $n foto menjadi $n file PDF terpisah di folder sdcard/DepupOffice!")
+                    .setMessage("Berhasil mengonversi $n foto menjadi $n file PDF terpisah di folder Documents/DepUp Office!")
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
@@ -2250,7 +2303,7 @@ class MainActivity : AppCompatActivity() {
                         val savedMb = Files.fmtSize(saved)
                         AlertDialog.Builder(this)
                             .setTitle("Kompres Foto Selesai")
-                            .setMessage("Berhasil mengompres $count foto ke Galeri › Pictures/Depup Office!\n" + if (saved > 0) "Hemat ruang penyimpanan: $savedMb" else "")
+                            .setMessage("Berhasil mengompres $count foto ke Documents/DepUp Office/Gambar!\n" + if (saved > 0) "Hemat ruang penyimpanan: $savedMb" else "")
                             .setPositiveButton("Mengerti", null)
                             .show()
                     }.onFailure { fail(it) }
@@ -2269,16 +2322,15 @@ class MainActivity : AppCompatActivity() {
             val cv = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, "TTD_Transparan_${System.currentTimeMillis()}.png")
                 put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
             }
-            val dst = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: throw java.io.IOException("Gagal menyimpan PNG")
+            val dst = Files.insertGallery(contentResolver, cv) ?: throw java.io.IOException("Gagal menyimpan PNG")
             contentResolver.openOutputStream(dst)!!.use { o -> transparentBmp.compress(Bitmap.CompressFormat.PNG, 100, o) }
             transparentBmp.recycle()
         }) { r ->
             r.onSuccess {
                 AlertDialog.Builder(this)
                     .setTitle("Ekstrak TTD Selesai")
-                    .setMessage("Tanda Tangan / Stempel Transparan berhasil dibuat dan disimpan ke Galeri › Pictures/Depup Office!\nSiap ditempelkan ke dokumen mana pun.")
+                    .setMessage("Tanda Tangan / Stempel Transparan berhasil dibuat dan disimpan ke Documents/DepUp Office/Gambar!\nSiap ditempelkan ke dokumen mana pun.")
                     .setPositiveButton("Mengerti", null)
                     .show()
             }.onFailure { fail(it) }
@@ -2388,6 +2440,7 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    @SuppressLint("ThreadConstraint")
     private fun showQrGenerator() {
         sheet { body, dismiss ->
             sheetHeader(
@@ -2476,7 +2529,7 @@ class MainActivity : AppCompatActivity() {
                     return@btn
                 }
                 saveQrBitmap(bmp, "QR_Code")
-                toast("Kode QR disimpan di Galeri › Pictures/Depup Office")
+                toast("Kode QR disimpan di Documents/DepUp Office/Gambar")
             }, w = 0, weight = 1f)
             val shareBtn = btn("Bagikan", false, C.ACCENT, R.drawable.ic_share) {
                 val bmp = currentBitmap
@@ -2550,6 +2603,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun watermarkFlow(uri: Uri) {
         if (!guardUnlocked(uri)) return
+        val dateStamp = "Dipindai: " + java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale("id")).format(java.util.Date())
         val text = field("Teks watermark").apply { setText("RAHASIA") }
         var style = 0
         var colorIdx = 0
@@ -2557,21 +2611,24 @@ class MainActivity : AppCompatActivity() {
         val colors = intArrayOf(0xFFDC2626.toInt(), 0xFF6B7280.toInt(), 0xFF2563EB.toInt())
         val alphas = intArrayOf(45, 80, 130)
         val box = vbox(20)
-        box.add(tv("Contoh: RAHASIA, SALINAN, DRAF, \"Hanya untuk pendaftaran CPNS\"", 13f, C.MUTED))
+        box.add(tv("Pilih preset atau ketik teks kustom (misal: RAHASIA, DRAFT, LUNAS):", 13f, C.MUTED))
         box.add(text, top = 8)
         val quick = hbox()
-        listOf("RAHASIA", "SALINAN", "DRAF", "CONTOH").forEach { q ->
-            quick.add(filterChip(q, false) { text.setText(q); text.setSelection(q.length) }, w = WRAP, side = 3)
+        listOf("RAHASIA", "DRAFT", "CONFIDENTIAL", "LUNAS", dateStamp).forEach { q ->
+            quick.add(filterChip(if (q.startsWith("Dipindai")) "Tanggal Hari Ini" else q, false) {
+                text.setText(q)
+                text.setSelection(q.length)
+                if (q.startsWith("Dipindai")) style = 2
+            }, w = WRAP, side = 3)
         }
         box.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 8)
-        // kontrol segmen menyimpan pilihannya sendiri: dibangun sekali, ibu jari meluncur utuh sampai tujuan
         val styleHolder = vbox(); val colorHolder = vbox(); val opHolder = vbox()
-        styleHolder.add(segmented(listOf("Satu besar", "Berulang"), style) { style = it })
+        styleHolder.add(segmented(listOf("Satu besar", "Berulang", "Stempel Pojok"), style) { style = it })
         colorHolder.add(segmented(listOf("Merah", "Abu-abu", "Biru"), colorIdx) { colorIdx = it })
         opHolder.add(segmented(listOf("Tipis", "Sedang", "Tebal"), opacity) { opacity = it })
-        box.add(tv("Gaya", 13f, C.MUTED), top = 14); box.add(styleHolder, top = 6)
+        box.add(tv("Gaya Penempatan", 13f, C.MUTED), top = 14); box.add(styleHolder, top = 6)
         box.add(tv("Warna", 13f, C.MUTED), top = 12); box.add(colorHolder, top = 6)
-        box.add(tv("Ketebalan", 13f, C.MUTED), top = 12); box.add(opHolder, top = 6)
+        box.add(tv("Ketebalan / Transparansi", 13f, C.MUTED), top = 12); box.add(opHolder, top = 6)
         val d = AlertDialog.Builder(this).setTitle("Watermark PDF")
             .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Terapkan", null).setNegativeButton("Batal", null).create()
@@ -2657,24 +2714,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun pdfToWordFlow(uri: Uri, password: String = "") {
-        confirm("PDF ke Word", "Teks asli (font, ukuran, warna, tebal/miring), tabel lengkap dengan garis & sel gabungan, foto, " +
-            "bentuk, dan tata letak diambil langsung dari PDF supaya hasilnya semirip mungkin dengan aslinya. " +
-            "Halaman hasil scan dibaca dengan OCR.", "Konversi") {
+    private fun pdfToWordFlow(uri: Uri, password: String = "", confirmed: Boolean = false) {
+        fun run() {
             val out = Files.newOut(this, Files.baseName(Files.nameOf(this, uri)), "docx")
             work("Mengubah PDF ke Word…", { PdfTools.toWord(this, uri, out, password) }) { r ->
-                r.onSuccess { showResult("PDF diubah ke Word", out, Files.byName(out.name)) }.onFailure { e ->
-                    if (e is PdfPasswordException) askPdfPassword(password.isNotEmpty()) { pdfToWordFlow(uri, it) } else fail(e)
+                r.onSuccess { locked ->
+                    showResult(if (locked) "PDF diubah ke Word (terkunci)" else "PDF diubah ke Word", out, Files.byName(out.name),
+                        if (locked) "Dokumen Word bisa dibaca siapa saja, tapi untuk MENGEDIT harus memasukkan password yang sama dengan PDF-nya. " +
+                            "Di Depup: diminta saat membuka editor. Di Microsoft Word: Tinjau → Batasi Pengeditan → Hentikan Perlindungan." else "")
+                }.onFailure { e ->
+                    if (e is PdfPasswordException) askPdfPassword(password.isNotEmpty(), e.message?.takeIf { it.startsWith("PDF ini dibatasi") }) { pdfToWordFlow(uri, it, true) }
+                    else fail(e)
                 }
             }
         }
+        if (confirmed) { run(); return }
+        confirm("PDF ke Word", "Teks asli (font, ukuran, warna, tebal/miring), tabel lengkap dengan garis & sel gabungan, foto, " +
+            "bentuk, dan tata letak diambil langsung dari PDF supaya hasilnya semirip mungkin dengan aslinya. " +
+            "Halaman hasil scan dibaca dengan OCR.\n\nPDF terkunci: hasil Word hanya bisa diedit dengan password yang sama.", "Konversi") { run() }
     }
 
-    /** Minta password PDF terkunci. [wrong] = percobaan sebelumnya salah. */
-    private fun askPdfPassword(wrong: Boolean, then: (String) -> Unit) {
+    /** Minta password PDF terkunci. [wrong] = percobaan sebelumnya salah; [msg] = penjelasan khusus. */
+    private fun askPdfPassword(wrong: Boolean, msg: String? = null, then: (String) -> Unit) {
         val pw = field("Password PDF").apply { inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
         val box = vbox(20)
-        box.add(tv(if (wrong) "Password salah. Coba lagi." else "PDF ini dikunci. Masukkan password untuk membukanya.", 13f, if (wrong) C.RED else C.MUTED))
+        box.add(tv(when { msg != null -> msg; wrong -> "Password salah. Coba lagi."; else -> "PDF ini dikunci. Masukkan password untuk membukanya." }, 13f, if (wrong && msg == null) C.RED else C.MUTED))
         box.add(pw, top = 8)
         AlertDialog.Builder(this).setTitle("PDF terkunci").setView(box)
             .setPositiveButton("Buka") { _, _ -> then(pw.text.toString()) }.setNegativeButton("Batal", null).show()
@@ -2731,7 +2795,7 @@ class MainActivity : AppCompatActivity() {
         val name = Files.nameOf(this, u)
         val mime = Files.mimeOf(this, u)
         work("Menyimpan…", { Files.saveToDownloads(this, u, name, mime) }) { r ->
-            r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+            r.onSuccess { toast("Tersimpan di Documents/DepUp Office") }.onFailure { fail(it) }
         }
     }
 
@@ -2742,9 +2806,9 @@ class MainActivity : AppCompatActivity() {
         resultSheet(
             title, "${file.name} · ${Files.fmtSize(file.length())}", extra, "Buka Dokumen", { Files.open(this, uri, mime) },
             listOf(
-                SheetAction(R.drawable.ic_download, "Simpan ke Unduhan") {
+                SheetAction(R.drawable.ic_download, "Simpan salinan ke DepUp Office") {
                     work("Menyimpan…", { Files.saveToDownloads(this, uri, file.name, mime) }) { r ->
-                        r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+                        r.onSuccess { toast("Tersimpan di Documents/DepUp Office") }.onFailure { fail(it) }
                     }
                 },
                 SheetAction(R.drawable.ic_lock, "Masukkan ke Brankas", C.AMBER, C.AMBER_BG) {

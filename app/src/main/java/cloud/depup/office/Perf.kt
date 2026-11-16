@@ -33,17 +33,19 @@ object Perf {
             cores <= 4
     }
 
-    /** Ukuran cache bitmap: 1/8 heap (HP lemah) atau 1/5 heap, dibatasi 16–64 MB. */
+    val isUltraLow: Boolean get() = low && (heap <= 128L * 1024 * 1024 || Runtime.getRuntime().availableProcessors() <= 4)
+
+    /** Ukuran cache bitmap: 1/12 heap (HP kentang) atau 1/8 heap, dibatasi 12–48 MB. */
     fun bitmapCacheBytes(): Int {
-        val frac = if (low) heap / 8 else heap / 5
-        return frac.coerceIn(16L * 1024 * 1024, 64L * 1024 * 1024).toInt()
+        val frac = if (isUltraLow) heap / 12 else if (low) heap / 8 else heap / 5
+        return frac.coerceIn(12L * 1024 * 1024, 48L * 1024 * 1024).toInt()
     }
 
     /** Sisi terpanjang maksimum saat merender halaman PDF di layar. */
-    fun pageMaxPx(): Int = if (low) 1800 else 2600
+    fun pageMaxPx(): Int = if (isUltraLow) 1400 else if (low) 1800 else 2600
 
     /** Batas dimensi dekode untuk OCR/ekspor resolusi tinggi. */
-    fun ocrCap(): Int = if (low) 2800 else 3600
+    fun ocrCap(): Int = if (isUltraLow) 2000 else if (low) 2800 else 3600
 
     /** Jumlah pratinjau halaman pindaian yang disimpan di memori. */
     fun previewSlots(): Int = if (low) 2 else 4

@@ -27,11 +27,25 @@ interface KeyProvider {
     fun getSessionReadEncryptionKey(docId: String): ByteArray?
 }
 
+/**
+ * Kunci baca = HMAC-SHA256(rahasia aplikasi, docId). Sama di SEMUA HP yang memasang DepUp Office, tapi tidak bisa
+ * dihitung dari isi berkas saja (dulu: SHA-256(docId + model HP) — docId tercetak di sampul, dan dokumen tidak bisa
+ * dibuka di HP dengan model berbeda).
+ */
 object DefaultKeyProvider : KeyProvider {
-    override fun getSessionReadEncryptionKey(docId: String): ByteArray {
-        val md = MessageDigest.getInstance("SHA-256")
-        return md.digest(("DepUpSessionKey:" + docId + ":" + android.os.Build.MODEL).toByteArray(Charsets.UTF_8))
-    }
+    private val APP_SECRET = byteArrayOf(
+        0x5A, 0x1F, 0x7C, 0x33, 0x0E, 0x6B, 0x52, 0x29, 0x71, 0x44, 0x18, 0x6D, 0x3B, 0x09, 0x67, 0x2E,
+        0x4F, 0x15, 0x58, 0x7A, 0x23, 0x0C, 0x61, 0x36, 0x1D, 0x48, 0x75, 0x2A, 0x5E, 0x13, 0x69, 0x40
+    )
+    override fun getSessionReadEncryptionKey(docId: String): ByteArray =
+        Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(APP_SECRET, "HmacSHA256")) }
+            .doFinal(("DepUpReadKey:v2:" + docId).toByteArray(Charsets.UTF_8))
+}
+
+/** Skema lama (v1, terikat model HP) — hanya untuk membuka dokumen yang sudah terlanjur dibuat. */
+object LegacyKeyProvider : KeyProvider {
+    override fun getSessionReadEncryptionKey(docId: String): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(("DepUpSessionKey:" + docId + ":" + android.os.Build.MODEL).toByteArray(Charsets.UTF_8))
 }
 
 object ProtectedDoc {
@@ -125,14 +139,14 @@ object ProtectedDoc {
         val storedHmac = packageWithHmac.copyOfRange(packageWithHmac.size - hmacSize, packageWithHmac.size)
 
         val meta = deserializeMeta(packageData)
-        val readKeyBytes = keyProvider.getSessionReadEncryptionKey(meta.docId)
-            ?: throw SecurityException("Sesi baca kedaluwarsa atau kunci sesi tidak ditemukan.")
-
-        val hmacKey = SecretKeySpec(readKeyBytes, "HmacSHA256")
-        val computedHmac = Mac.getInstance("HmacSHA256").apply { init(hmacKey) }.doFinal(packageData)
-        if (!MessageDigest.isEqual(computedHmac, storedHmac)) {
-            throw SecurityException("Peringatan Keamanan: Dokumen telah dimodifikasi di luar DepUp Office (HMAC tidak cocok).")
-        }
+        fun macOk(k: ByteArray) = MessageDigest.isEqual(
+            Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(k, "HmacSHA256")) }.doFinal(packageData), storedHmac)
+        // kunci v2 dulu; dokumen lama (v1) dibuat dengan kunci terikat model HP
+        val readKeyBytes = listOfNotNull(
+            keyProvider.getSessionReadEncryptionKey(meta.docId),
+            if (keyProvider === DefaultKeyProvider) LegacyKeyProvider.getSessionReadEncryptionKey(meta.docId) else null
+        ).firstOrNull { macOk(it) }
+            ?: throw SecurityException("Dokumen telah dimodifikasi di luar DepUp Office, atau dibuat dengan versi lama di HP model lain.")
 
         val payloadOffset = metaByteLength(packageData)
         val lenBytes = packageData.copyOfRange(payloadOffset, payloadOffset + 4)

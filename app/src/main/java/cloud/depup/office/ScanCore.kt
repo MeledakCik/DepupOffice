@@ -354,4 +354,50 @@ object ScanCore {
 
     /** Nilai keyakinan deteksi terakhir (untuk uji). */
     internal fun debugScore(s: Small): Float = DocFind.find(s.g, s.argb, s.w, s.h)?.score ?: 0f
+
+    /**
+     * Detektor Halaman Kosong (Auto-Skip Blank Pages).
+     * Mengembalikan true jika gambar merupakan halaman putih polos/kosong (tanpa teks/stempel/gambar).
+     */
+    fun isBlankPage(bmp: android.graphics.Bitmap, varianceThreshold: Double = 12.0): Boolean {
+        val w = bmp.width
+        val h = bmp.height
+        val pixels = IntArray(w * h)
+        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+
+        var sum = 0.0
+        val step = maxOf(1, (w * h) / 2000)
+        var sampleCount = 0
+
+        var idx = 0
+        while (idx < pixels.size) {
+            val c = pixels[idx]
+            val r = (c shr 16) and 255
+            val g = (c shr 8) and 255
+            val b = c and 255
+            val lum = (r * 299 + g * 587 + b * 114) / 1000.0
+            sum += lum
+            sampleCount++
+            idx += step
+        }
+
+        val meanLum = sum / sampleCount
+        if (meanLum < 190) return false
+
+        var varSum = 0.0
+        idx = 0
+        while (idx < pixels.size) {
+            val c = pixels[idx]
+            val r = (c shr 16) and 255
+            val g = (c shr 8) and 255
+            val b = c and 255
+            val lum = (r * 299 + g * 587 + b * 114) / 1000.0
+            val diff = lum - meanLum
+            varSum += diff * diff
+            idx += step
+        }
+
+        val stdDev = Math.sqrt(varSum / sampleCount)
+        return stdDev < varianceThreshold
+    }
 }

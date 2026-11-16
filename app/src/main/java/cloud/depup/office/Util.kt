@@ -111,15 +111,64 @@ object Files {
         } ?: (0L to 0L)
     } catch (_: Exception) { 0L to 0L }
 
+    /** Folder utama semua hasil: Documents/DepUp Office (subfolder per jenis, lihat [subFolder]). */
+    const val ROOT = "DepUp Office"
+    /** Teks lokasi untuk pesan ke pengguna. */
+    const val ROOT_LABEL = "Documents/DepUp Office"
+
+    /** Subfolder menurut ekstensi: PDF, Doc, Excel, PowerPoint, Gambar, Lainnya. */
+    fun subFolder(ext: String): String = when (ext.lowercase().removePrefix(".")) {
+        "pdf" -> "PDF"
+        "docx", "doc", "docm", "dotx", "rtf", "odt", "txt", "md" -> "Doc"
+        "xlsx", "xls", "xlsm", "csv", "ods" -> "Excel"
+        "pptx", "ppt", "odp" -> "PowerPoint"
+        "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "tif", "tiff" -> "Gambar"
+        else -> "Lainnya"
+    }
+
+    /** Folder utama (Documents/DepUp Office); cadangan bila tidak bisa ditulisi. */
     fun outDir(ctx: Context): File {
-        val docs = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "DepupOffice")
+        val docs = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), ROOT)
         if (!docs.exists()) docs.mkdirs()
         if (docs.exists() && docs.canWrite()) return docs
-        val sd = Environment.getExternalStorageDirectory()
-        val depupDir = File(sd, "DepupOffice")
-        if (!depupDir.exists()) depupDir.mkdirs()
-        if (depupDir.exists() && depupDir.canWrite()) return depupDir
-        return File(ctx.filesDir, "DepupOffice").apply { mkdirs() }
+        val sd = File(Environment.getExternalStorageDirectory(), ROOT)
+        if (!sd.exists()) sd.mkdirs()
+        if (sd.exists() && sd.canWrite()) return sd
+        return File(ctx.filesDir, ROOT).apply { mkdirs() }
+    }
+
+    /** Subfolder untuk berkas berekstensi [ext]. */
+    fun outDir(ctx: Context, ext: String): File = File(outDir(ctx), subFolder(ext)).apply { mkdirs() }
+
+    /** Folder lama (sebelum ada subfolder) — isinya tetap ditampilkan, tidak dipindah (riwayat tetap jalan). */
+    private fun legacyDirs(ctx: Context): List<File> = listOf(
+        File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "DepupOffice"),
+        File(Environment.getExternalStorageDirectory(), "DepupOffice"),
+        File(ctx.filesDir, "DepupOffice")
+    ).filter { it.isDirectory }
+
+    /** Semua hasil olahan: folder utama + subfoldernya, ditambah folder lama. */
+    fun outFiles(ctx: Context): List<File> {
+        val out = ArrayList<File>()
+        val root = outDir(ctx)
+        root.listFiles()?.forEach { f -> if (f.isFile) out.add(f) else if (f.isDirectory) f.listFiles()?.filterTo(out) { it.isFile } }
+        for (d in legacyDirs(ctx)) if (d.absolutePath != root.absolutePath) d.listFiles()?.filterTo(out) { it.isFile }
+        return out
+    }
+
+    /** RELATIVE_PATH MediaStore untuk subfolder [sub] di Documents/DepUp Office. */
+    fun mediaPath(sub: String) = Environment.DIRECTORY_DOCUMENTS + "/" + ROOT + "/" + sub
+
+    /**
+     * Simpan gambar lewat MediaStore ke Documents/DepUp Office/Gambar (tetap muncul di Galeri). RELATIVE_PATH diisi
+     * di sini. Bila perangkat menolak folder Documents untuk gambar, jatuh ke Pictures/DepUp Office.
+     */
+    fun insertGallery(r: android.content.ContentResolver, cv: ContentValues): Uri? = try {
+        cv.put(MediaStore.MediaColumns.RELATIVE_PATH, mediaPath("Gambar"))
+        r.insert(MediaStore.Files.getContentUri("external"), cv)
+    } catch (_: Exception) {
+        cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + ROOT)
+        r.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
     }
 
     class RenameConflict(msg: String) : Exception(msg)
@@ -221,7 +270,7 @@ object Files {
         return null
     }
 
-    /** Cadangan bila file asli tidak bisa di-rename: simpan salinan bernama baru di Unduhan/Depup Office (terlihat di file manager). */
+    /** Cadangan bila file asli tidak bisa di-rename: simpan salinan bernama baru di Documents/DepUp Office (terlihat di file manager). */
     fun saveCopy(ctx: Context, src: Uri, newName: String, nameForExt: String): Renamed {
         val target = withExt(cleanName(newName).ifBlank { "dokumen" }, nameForExt)
         val mime = byName(target).let { if (it == "application/octet-stream") mimeOf(ctx, src) else it }
@@ -229,9 +278,9 @@ object Files {
         val cv = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, target)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Depup Office")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, mediaPath(subFolder(target.substringAfterLast('.', ""))))
         }
-        val dst = r.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: throw IOException("Gagal membuat file di Unduhan")
+        val dst = r.insert(MediaStore.Files.getContentUri("external"), cv) ?: throw IOException("Gagal membuat file di $ROOT_LABEL")
         r.openInputStream(src)!!.use { i -> r.openOutputStream(dst)!!.use { o -> i.copyTo(o) } }
         val n = nameOf(ctx, dst)
         Recent.add(ctx, dst, n, mime)
@@ -240,13 +289,13 @@ object Files {
 
     fun newOut(ctx: Context, base: String, ext: String): File {
         val s = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        return File(outDir(ctx), "${base}_$s.$ext")
+        return File(outDir(ctx, ext), "${base}_$s.$ext")
     }
 
     /** Nama pilihan pengguna; kalau sudah ada, ditambah cap waktu supaya tidak menimpa. */
     fun namedOut(ctx: Context, name: String, ext: String): File {
         val safe = name.replace(Regex("[^\\p{L}\\p{N} _.-]+"), "_").trim().ifBlank { "dokumen" }
-        val f = File(outDir(ctx), "$safe.$ext")
+        val f = File(outDir(ctx, ext), "$safe.$ext")
         return if (f.exists()) newOut(ctx, safe, ext) else f
     }
 

@@ -13,6 +13,7 @@ import android.widget.ImageView
 import android.widget.ScrollView
 import androidx.core.content.res.ResourcesCompat
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -63,30 +64,33 @@ object C {
     val LINE get() = t(0xFFE4E2DD, 0xFF2C2C29)        // pemisah & garis tepi tipis
     val LINE_STRONG get() = t(0xFF84817B, 0xFF6F6D68) // batas kontrol (>= 3:1)
 
-    // ---------- Tinta: aksi utama & panel kontras (hitam di tema terang, putih-hangat di tema gelap) ----------
+    // ---------- Warna Biru Utama (Kotak & Kapsul) ----------
+    val BLUE_ACCENT get() = t(0xFF1652F6, 0xFF1D56FF)
+
+    // ---------- Tinta: aksi utama & panel kontras ----------
     val INK get() = t(0xFF111111, 0xFFF2F1EE)
     val ON_INK get() = t(0xFFFFFFFF, 0xFF111111)
     val ON_INK_MUTED get() = t(0xB3FFFFFF, 0xB3111111)
-    /** Tombol di atas panel tinta: pil putih (terang) / hitam (gelap). */
-    val INK_ACCENT get() = t(0xFFFFFFFF, 0xFF111111)
-    val ON_INK_ACCENT get() = t(0xFF111111, 0xFFF2F1EE)
+    /** Tombol di atas panel tinta: pil putih (terang) / biru (gelap). */
+    val INK_ACCENT get() = 0xFFFFFFFF.toInt()
+    val ON_INK_ACCENT get() = BLUE_ACCENT
 
-    // ---------- Panel sorotan (kartu Scan, ubin angka, notifikasi): selalu gelap, di mode gelap sedikit terangkat ----------
-    val PANEL get() = t(0xFF111111, 0xFF2A2A27)
-    val ON_PANEL get() = t(0xFFFFFFFF, 0xFFF2F1EE)
-    val ON_PANEL_MUTED get() = t(0xB3FFFFFF, 0xB3F2F1EE)
-    val PANEL_BTN get() = t(0xFFFFFFFF, 0xFFF2F1EE)
-    val ON_PANEL_BTN get() = 0xFF111111.toInt()
+    // ---------- Panel sorotan (kartu Scan, ubin angka, notifikasi): warna biru royal di terang & gelap ----------
+    val PANEL get() = BLUE_ACCENT
+    val ON_PANEL get() = 0xFFFFFFFF.toInt()
+    val ON_PANEL_MUTED get() = 0xD9FFFFFF.toInt()
+    val PANEL_BTN get() = 0xFFFFFFFF.toInt()
+    val ON_PANEL_BTN get() = BLUE_ACCENT
 
     // ---------- Teks ----------
     val TEXT get() = t(0xFF111111, 0xFFF2F1EE)
     val MUTED get() = t(0xFF65625D, 0xFF9C9A95)       // teks sekunder (>= 4.8:1 di halaman & kartu)
 
-    // ---------- Warna utama = tinta (monokrom); merek Depup tetap di logo ----------
-    val PRIMARY get() = INK
-    val ON_PRIMARY get() = ON_INK
-    val PRIMARY_C get() = SURFACE2                    // wadah lembut netral
-    val ON_PRIMARY_C get() = TEXT
+    // ---------- Warna utama / aksen (biru royal di tema terang dan tema gelap) ----------
+    val PRIMARY get() = BLUE_ACCENT
+    val ON_PRIMARY get() = 0xFFFFFFFF.toInt()
+    val PRIMARY_C get() = t(0xFFE8EEFF, 0xFF19254D)    // wadah lembut biru
+    val ON_PRIMARY_C get() = BLUE_ACCENT
 
     // ---------- Status ----------
     val SUCCESS get() = t(0xFF15703A, 0xFF5BD88A)
@@ -669,10 +673,9 @@ fun Context.card(pad: Int = 16, radius: Int = 16, shadow: Boolean = true): Linea
 }
 
 /** Lencana ikon di atas wadah warna kategori (dekoratif). */
-fun Context.iconBadge(res: Int, tint: Int, @Suppress("UNUSED_PARAMETER") bg: Int, radius: Int = 12, iconDp: Int = 22): FrameLayout =
+fun Context.iconBadge(res: Int, tint: Int, bg: Int = C.SURFACE, radius: Int = 12, iconDp: Int = 22): FrameLayout =
     FrameLayout(this).apply {
-        // Minimalis: wadah netral (lingkaran / kotak lembut) + ikon garis berwarna kategori. Tanpa gradien.
-        background = if (radius >= 100) shape(C.SOFT, radius) else squircle(C.SOFT, radius)
+        background = if (radius >= 100) shape(bg, radius) else squircle(bg, radius)
         addView(icon(res, tint, iconDp), FrameLayout.LayoutParams(dp(iconDp), dp(iconDp), Gravity.CENTER))
     }
 
@@ -1186,7 +1189,7 @@ fun <T> AppCompatActivity.work(msg: String, job: () -> T, done: (Result<T>) -> U
 
 /**
  * Dialog ubah nama yang dipakai Beranda & Viewer. Mengubah berkas ASLI; bila tidak diizinkan
- * (mis. file manager hanya memberi akses baca), menawarkan simpan salinan bernama baru di Unduhan/Depup Office.
+ * (mis. file manager hanya memberi akses baca), menawarkan simpan salinan bernama baru di Documents/DepUp Office.
  * [copySource] = sumber isi untuk salinan (boleh salinan cache yang sudah terbaca penuh).
  */
 fun AppCompatActivity.renameFlow(origin: android.net.Uri, currentName: String, copySource: android.net.Uri = origin, onDone: (Renamed) -> Unit) {
@@ -1208,11 +1211,11 @@ fun AppCompatActivity.renameFlow(origin: android.net.Uri, currentName: String, c
             } else {
                 AlertDialog.Builder(this)
                     .setTitle("Tidak bisa mengubah file asli")
-                    .setMessage("Aplikasi file manager hanya memberi akses baca untuk file ini, jadi namanya tidak bisa diubah di tempat asalnya. Simpan salinan bernama \"$newName\" ke Unduhan/Depup Office?")
+                    .setMessage("Aplikasi file manager hanya memberi akses baca untuk file ini, jadi namanya tidak bisa diubah di tempat asalnya. Simpan salinan bernama \"$newName\" ke Documents/DepUp Office?")
                     .setPositiveButton("Simpan Salinan") { _, _ ->
                         try {
                             val c = Files.saveCopy(this, copySource, newName, currentName)
-                            toast("Salinan disimpan di Unduhan/Depup Office: ${c.name}")
+                            toast("Salinan disimpan di Documents/DepUp Office: ${c.name}")
                             onDone(c)
                         } catch (t: Throwable) { fail(t) }
                     }
@@ -1237,4 +1240,20 @@ fun ImageView.asButton(desc: String): ImageView = apply {
     background = context.rippleBg()
     val p = context.dp(12)
     setPadding(p, p, p, p)
+}
+
+/** Dialog pratinjau gambar penuh dengan fitur cubit-zoom (pinch zoom), geser (pan) & ketuk 2x. */
+fun AppCompatActivity.showImagePreviewDialog(bmp: Bitmap, title: String = "Pratinjau Gambar") {
+    sheet { body, dismiss ->
+        sheetHeader(body, R.drawable.ic_image, C.ACCENT, C.BLUE_BG, title, "${bmp.width} × ${bmp.height} px • Cubit dua jari / ketuk 2x untuk zoom", dismiss)
+        val pad = vbox().apply { setPadding(dp(16), 0, dp(16), dp(20)) }
+        val iv = ZoomImageView(this).apply {
+            setImageBitmap(bmp)
+            background = shape(C.SURFACE2, 16)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        pad.add(iv, h = dp(420))
+        pad.add(btn("Tutup", true, C.ACCENT) { dismiss() }, top = 12)
+        body.add(pad)
+    }
 }

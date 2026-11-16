@@ -12,6 +12,12 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import androidx.appcompat.app.AppCompatActivity
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -87,6 +93,14 @@ object PdfTools {
             isFakeBoldText = true
             textAlign = Paint.Align.CENTER
         }
+        if (style == 2) {
+            // Stempel tanggal / teks di pojok kanan bawah halaman
+            p.textSize = min(w, h) * 0.032f
+            p.textAlign = Paint.Align.RIGHT
+            val margin = min(w, h) * 0.04f
+            c.drawText(text, w - margin, h - margin, p)
+            return
+        }
         c.save()
         c.rotate(-35f, w / 2f, h / 2f)
         if (style == 0) {
@@ -152,9 +166,17 @@ object PdfTools {
      * dan tata letak dibaca langsung dari isi PDF ([PdfToDocx]). Halaman hasil pindaian (tanpa teks) dibaca dengan OCR.
      * Bila struktur PDF tidak bisa dibaca sama sekali, jatuh ke jalur OCR lama ([toWordOcr]).
      */
-    fun toWord(ctx: Context, uri: Uri, out: File, password: String = "", progress: (Int, Int) -> Unit = { _, _ -> }) {
+    /**
+     * Kembalikan true bila hasil Word DIKUNCI: PDF terkunci yang dibuka dengan password → Word hanya-baca, mengedit
+     * butuh password yang sama ([DocxProtect]). PDF tanpa password pembuka tapi dibatasi pemiliknya (tidak boleh
+     * disalin/diubah) butuh password pemilik.
+     */
+    fun toWord(ctx: Context, uri: Uri, out: File, password: String = "", progress: (Int, Int) -> Unit = { _, _ -> }): Boolean {
         val pdf = try { PdfFile.open(readPdf(ctx, uri), password) } catch (e: PdfPasswordException) { throw e } catch (e: OutOfMemoryError) { throw e } catch (_: Throwable) { null }
-        if (pdf == null) { toWordOcr(ctx, uri, out, progress); return }
+        if (pdf == null) { toWordOcr(ctx, uri, out, progress); return false }
+        if (pdf.encrypted && password.isEmpty() && !pdf.canExtract)
+            throw PdfPasswordException("PDF ini dibatasi pemiliknya (tidak boleh disalin/diubah). Masukkan password pemilik untuk mengubahnya ke Word.")
+        val protectPw = if (pdf.encrypted && password.isNotEmpty()) password else null
         PdfLayout.jpegWithAlpha = { jpg, a, w, h -> jpegAlpha(jpg, a, w, h) }
         // PdfRenderer (untuk OCR halaman pindaian) tidak bisa membuka PDF terkunci → tanpa OCR
         val src = if (pdf.encrypted) null else try { Src(ctx, uri) } catch (_: Throwable) { null }
@@ -171,8 +193,13 @@ object PdfTools {
                     }
                 }
             }
-            try { PdfToDocx(out).convert(pdf, scan, progress) } catch (e: OutOfMemoryError) { out.delete(); throw e } catch (t: Throwable) { out.delete(); if (src != null) toWordOcr(ctx, uri, out, progress) else throw t }
+            try { PdfToDocx(out, protectPw).convert(pdf, scan, progress) } catch (e: OutOfMemoryError) { out.delete(); throw e } catch (t: Throwable) {
+                out.delete()
+                // jalur OCR cadangan tidak bisa mengunci → hanya untuk PDF tak terkunci
+                if (src != null && protectPw == null) toWordOcr(ctx, uri, out, progress) else throw t
+            }
         } finally { try { src?.close() } catch (_: Throwable) {} }
+        return protectPw != null
     }
 
     /** JPEG + kanal alfa (SMask) → PNG transparan. */
@@ -188,27 +215,12 @@ object PdfTools {
         }
     } catch (_: Throwable) { null }
 
-    // ------------------------------------------------------------------ Kunci AES-256 & penanda anti-AI (tanpa render ulang)
+    // ------------------------------------------------------------------ Kunci AES-256 (tanpa render ulang)
 
     /** Kunci PDF dengan AES-256 TANPA mengubah halaman jadi gambar: teks tetap bisa dicari, ukuran tetap kecil. */
     fun lockLossless(ctx: Context, uri: Uri, out: File, userPw: String, ownerPw: String, perms: PdfSave.Perms) {
         val pdf = PdfFile.open(readPdf(ctx, uri))
         FileOutputStream(out).use { PdfSave.write(pdf, it.buffered(1 shl 16), PdfSave.Lock(userPw, ownerPw, perms)) }
-    }
-
-    /** Status penanda anti-AI dokumen. */
-    fun aiMarked(ctx: Context, uri: Uri): Boolean = PdfAiMark.isMarked(PdfFile.open(readPdf(ctx, uri)))
-
-    /** Pasang ([mark] = true) atau hapus penanda anti-AI & proteksi blokir AI (tanpa password pembuka bagi user, tanpa tanda visual di halaman); isi halaman tidak berubah. */
-    fun aiMark(ctx: Context, uri: Uri, out: File, mark: Boolean, owner: String) {
-        val pdf = PdfFile.open(readPdf(ctx, uri))
-        val perms = if (mark) PdfSave.Perms(print = true, copy = false, modify = false, annotate = false) else PdfSave.Perms(print = true, copy = true, modify = true, annotate = true)
-        val lock = if (mark) PdfSave.Lock("", "owner_${System.currentTimeMillis()}", perms) else null
-        FileOutputStream(out).use { o ->
-            PdfSave.write(pdf, o.buffered(1 shl 16), lock) { c ->
-                if (mark) PdfAiMark.apply(c, owner) else PdfAiMark.remove(c)
-            }
-        }
     }
 
     /** PDF -> .docx lewat OCR per halaman (cadangan bila isi PDF tidak bisa dibaca langsung). */
@@ -351,5 +363,169 @@ object PdfTools {
             }
             FileOutputStream(out).use { doc.writeTo(it) }
         } catch (t: Throwable) { out.delete(); throw t } finally { doc.close() }
+    }
+
+    /**
+     * Dialog interaktif visual untuk menyusun, memutar 90°, dan menghapus halaman PDF dengan thumbnail pratinjau.
+     */
+    fun showOrganizeSheet(
+        activity: AppCompatActivity,
+        uri: Uri,
+        onDone: (File) -> Unit
+    ) {
+        val total = try { Pdf.pageCount(activity, uri) } catch (_: Throwable) {
+            activity.toast("Gagal membaca dokumen PDF")
+            return
+        }
+        val name = Files.nameOf(activity, uri)
+        val pagesOrder = (0 until total).toMutableList()
+        val rotations = mutableMapOf<Int, Int>()
+
+        activity.sheet { body, dismiss ->
+            activity.sheetHeader(
+                body, R.drawable.ic_crop, C.ACCENT, C.BLUE_BG,
+                "Susun & Putar Halaman PDF", "$name • $total halaman", dismiss
+            )
+            val pad = activity.vbox().apply { setPadding(activity.dp(16), 0, activity.dp(16), activity.dp(20)) }
+
+            val container = activity.vbox(8)
+            val thumbCache = mutableMapOf<Int, Bitmap>()
+
+            fun getThumb(origIdx: Int, rot: Int): Bitmap? {
+                val key = origIdx * 1000 + rot
+                thumbCache[key]?.let { return it }
+                return try {
+                    val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return null
+                    val renderer = android.graphics.pdf.PdfRenderer(pfd)
+                    val pg = renderer.openPage(origIdx)
+                    val w = (pg.width * 0.32f).toInt().coerceAtLeast(100)
+                    val h = (pg.height * 0.32f).toInt().coerceAtLeast(100)
+                    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    pg.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    pg.close()
+                    renderer.close()
+                    pfd.close()
+                    val result = if (rot % 360 != 0) Pdf.orient(bmp, rot, false) else bmp
+                    thumbCache[key] = result
+                    result
+                } catch (_: Throwable) { null }
+            }
+
+            fun renderList() {
+                container.removeAllViews()
+
+                if (pagesOrder.isEmpty()) {
+                    container.add(activity.tv("Semua halaman telah dihapus", 14f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 20)
+                    return
+                }
+
+                val grid = activity.hbox().apply {
+                    orientation = LinearLayout.HORIZONTAL
+                }
+                val scroll = android.widget.HorizontalScrollView(activity).apply {
+                    isHorizontalScrollBarEnabled = false
+                    addView(grid)
+                }
+
+                pagesOrder.forEachIndexed { idx, origIdx ->
+                    val rot = rotations[origIdx] ?: 0
+                    val thumb = getThumb(origIdx, rot)
+
+                    val card = FrameLayout(activity).apply {
+                        background = activity.shape(C.SURFACE, 14, C.LINE, 1)
+                        setPadding(activity.dp(6), activity.dp(6), activity.dp(6), activity.dp(6))
+                    }
+
+                    val iv = ImageView(activity).apply {
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        if (thumb != null) setImageBitmap(thumb)
+                        else setBackgroundColor(C.SURFACE2)
+                    }
+                    card.addView(iv, FrameLayout.LayoutParams(activity.dp(110), activity.dp(150)))
+
+                    val badge = activity.tv("${idx + 1}", 11f, Color.WHITE, true).apply {
+                        background = activity.shape(C.ACCENT, 100)
+                        setPadding(activity.dp(6), activity.dp(2), activity.dp(6), activity.dp(2))
+                    }
+                    card.addView(badge, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START))
+
+                    val ctrlRow = activity.hbox().apply {
+                        gravity = Gravity.CENTER
+                    }
+
+                    fun miniBtn(iconRes: Int, desc: String, onClick: () -> Unit): View = FrameLayout(activity).apply {
+                        background = activity.shape(C.SURFACE2, 100)
+                        isClickable = true
+                        isFocusable = true
+                        contentDescription = desc
+                        addView(activity.icon(iconRes, C.TEXT, 14), FrameLayout.LayoutParams(activity.dp(14), activity.dp(14), Gravity.CENTER))
+                        setOnClickListener { onClick() }
+                    }
+
+                    if (idx > 0) {
+                        ctrlRow.add(miniBtn(R.drawable.ic_back, "Geser Kiri") {
+                            pagesOrder.add(idx - 1, pagesOrder.removeAt(idx))
+                            renderList()
+                        }, w = activity.dp(28), h = activity.dp(28))
+                    }
+
+                    ctrlRow.add(miniBtn(R.drawable.ic_rotate, "Putar 90°") {
+                        rotations[origIdx] = ((rotations[origIdx] ?: 0) + 90) % 360
+                        renderList()
+                    }, w = activity.dp(28), h = activity.dp(28), side = 2)
+
+                    ctrlRow.add(miniBtn(R.drawable.ic_close, "Hapus") {
+                        pagesOrder.removeAt(idx)
+                        renderList()
+                    }, w = activity.dp(28), h = activity.dp(28), side = 2)
+
+                    if (idx < pagesOrder.size - 1) {
+                        ctrlRow.add(miniBtn(R.drawable.ic_next, "Geser Kanan") {
+                            pagesOrder.add(idx + 1, pagesOrder.removeAt(idx))
+                            renderList()
+                        }, w = activity.dp(28), h = activity.dp(28))
+                    }
+
+                    val itemBox = activity.vbox(0).apply {
+                        add(card)
+                        add(ctrlRow, top = 6)
+                    }
+
+                    grid.addView(itemBox, LinearLayout.LayoutParams(WRAP, WRAP).apply {
+                        if (idx > 0) marginStart = activity.dp(10)
+                    })
+                }
+
+                container.add(scroll, top = 8)
+            }
+
+            renderList()
+            pad.add(container)
+
+            val actionRow = activity.hbox().apply {
+                add(activity.btn("Putar Semua 90°", false, C.ACCENT) {
+                    pagesOrder.forEach { origIdx ->
+                        rotations[origIdx] = ((rotations[origIdx] ?: 0) + 90) % 360
+                    }
+                    renderList()
+                }, w = 0, weight = 1f)
+
+                add(activity.btn("Simpan PDF Baru", true, C.ACCENT) {
+                    if (pagesOrder.isEmpty()) {
+                        activity.toast("Semua halaman telah dihapus")
+                        return@btn
+                    }
+                    dismiss()
+                    val out = Files.newOut(activity, "susun_" + Files.baseName(name), "pdf")
+                    activity.work("Menyusun PDF baru…", {
+                        Pdf.organizePdf(activity, uri, pagesOrder, rotations, out)
+                    }) { r ->
+                        r.onSuccess { onDone(out) }.onFailure { activity.fail(it) }
+                    }
+                }, w = 0, weight = 1f, side = 8)
+            }
+            pad.add(actionRow, top = 16)
+            body.add(pad)
+        }
     }
 }

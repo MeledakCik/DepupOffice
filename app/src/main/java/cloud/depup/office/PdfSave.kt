@@ -13,7 +13,6 @@ import javax.crypto.spec.SecretKeySpec
  * PdfTools.rebuild yang mengubah halaman jadi gambar). Dipakai untuk:
  *  - kunci password AES-256 (Standard Security Handler V5/R6, dibuka Adobe Reader, Chrome, Depup, dll) + izin
  *    cetak/salin/ubah,
- *  - metadata anti-AI (pasang/hapus), lihat [PdfAiMark].
  * Object stream & xref stream dibuka jadi objek biasa + tabel xref klasik (paling luas didukung).
  */
 object PdfSave {

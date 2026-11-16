@@ -1132,9 +1132,8 @@ class ScanEditActivity : AppCompatActivity() {
             } else Pdf.warp(src, q, 1400)
         } catch (t: Throwable) { fail(t); return }
         sheet { body, dismiss ->
-            sheetHeader(body, R.drawable.ic_check_ok, C.ACCENT, C.BLUE_BG, "Pratinjau Hasil", "${res.width} × ${res.height} px · sudut 90°", dismiss)
-            val iv = android.widget.ImageView(this).apply {
-                adjustViewBounds = true
+            sheetHeader(body, R.drawable.ic_check_ok, C.ACCENT, C.BLUE_BG, "Pratinjau Hasil", "${res.width} × ${res.height} px · Cubit/ketuk 2x untuk zoom", dismiss)
+            val iv = ZoomImageView(this).apply {
                 setImageBitmap(res)
                 background = shape(C.NAVY_PANEL, 12)
                 setPadding(dp(10), dp(10), dp(10), dp(10))

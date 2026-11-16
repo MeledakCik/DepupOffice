@@ -352,7 +352,18 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
 
             reader.onProgressUpdate = { idx, total, textP ->
                 progressTv.text = "Membaca paragraf $idx dari $total..."
-                previewBox.text = textP
+                val spannable = android.text.SpannableString(textP)
+                spannable.setSpan(
+                    android.text.style.BackgroundColorSpan(0xFFFFF176.toInt()),
+                    0, textP.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                spannable.setSpan(
+                    android.text.style.ForegroundColorSpan(0xFF111111.toInt()),
+                    0, textP.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                previewBox.text = spannable
             }
 
             reader.onStateChange = { playing, paused ->

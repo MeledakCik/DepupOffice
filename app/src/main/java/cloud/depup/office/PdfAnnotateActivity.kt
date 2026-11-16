@@ -599,9 +599,9 @@ class PdfAnnotateActivity : AppCompatActivity() {
         resultSheet("Coretan disimpan", "${file.name} · ${Files.fmtSize(file.length())}", "",
             "Buka Dokumen", { Files.open(this, u, PDF) },
             listOf(
-                SheetAction(R.drawable.ic_download, "Simpan ke Unduhan") {
+                SheetAction(R.drawable.ic_download, "Simpan salinan ke DepUp Office") {
                     work("Menyimpan…", { Files.saveToDownloads(this, u, file.name, PDF) }) { r ->
-                        r.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+                        r.onSuccess { toast("Tersimpan di Documents/DepUp Office") }.onFailure { fail(it) }
                     }
                 },
                 SheetAction(R.drawable.ic_chat, "Kirim via WhatsApp", C.TEAL, C.TEAL_BG) { Files.share(this, u, PDF, true) },

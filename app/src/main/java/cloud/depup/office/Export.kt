@@ -187,9 +187,8 @@ object Export {
                 val cv = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, if (pages.size == 1) "$base.jpg" else "${base}_${idx + 1}.jpg")
                     put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Depup Office")
                 }
-                val u = r.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: throw IOException("Gagal menyimpan gambar")
+                val u = Files.insertGallery(r, cv) ?: throw IOException("Gagal menyimpan gambar")
                 r.openOutputStream(u)!!.use { lay.bmp.compress(Bitmap.CompressFormat.JPEG, JPG_Q, it) }
                 n++
             } finally { lay.recycle() }

@@ -198,7 +198,7 @@ class VaultActivity : AppCompatActivity() {
     }
 
     private fun fileMenu(f: File) {
-        val items = arrayOf("Buka", "Kirim via WhatsApp", "Bagikan", "Ekspor ke Unduhan", "Hapus dari Brankas")
+        val items = arrayOf("Buka", "Kirim via WhatsApp", "Bagikan", "Ekspor ke DepUp Office", "Hapus dari Brankas")
         AlertDialog.Builder(this).setTitle(Vault.displayName(f)).setItems(items) { _, i ->
             if (i == 4) {
                 confirm("Hapus file?", "${Vault.displayName(f)} akan dihapus permanen dari Brankas.", "Hapus") { f.delete(); showList() }
@@ -214,7 +214,7 @@ class VaultActivity : AppCompatActivity() {
                     1 -> Files.share(this, uri, mime, true)
                     2 -> Files.share(this, uri, mime, false)
                     else -> work("Menyimpan…", { Files.saveToDownloads(this, uri, tmp.name, mime) }) { r2 ->
-                        r2.onSuccess { toast("Tersimpan di Unduhan/Depup Office") }.onFailure { fail(it) }
+                        r2.onSuccess { toast("Tersimpan di Documents/DepUp Office") }.onFailure { fail(it) }
                     }
                 }
             }

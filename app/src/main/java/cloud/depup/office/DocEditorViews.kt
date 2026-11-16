@@ -199,6 +199,20 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
 
     init {
         background = null
+        // dokumen terkunci: menu seleksi tanpa Salin/Potong/Bagikan/Terjemahkan (aplikasi lain lewat PROCESS_TEXT)
+        if (host.secureMode) customSelectionActionModeCallback = object : android.view.ActionMode.Callback {
+            override fun onCreateActionMode(m: android.view.ActionMode, menu: android.view.Menu) = true
+            override fun onPrepareActionMode(m: android.view.ActionMode, menu: android.view.Menu): Boolean {
+                for (i in menu.size() - 1 downTo 0) {
+                    val it = menu.getItem(i)
+                    if (it.itemId == android.R.id.copy || it.itemId == android.R.id.cut || it.itemId == android.R.id.shareText ||
+                        it.itemId == android.R.id.textAssist || it.intent != null) menu.removeItem(it.itemId)
+                }
+                return true
+            }
+            override fun onActionItemClicked(m: android.view.ActionMode, item: android.view.MenuItem) = false
+            override fun onDestroyActionMode(m: android.view.ActionMode) {}
+        }
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         // lanskap: keyboard tidak mengambil alih layar penuh — dokumen tetap terlihat saat mengetik
         imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
@@ -335,8 +349,13 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         if (focused && ::para.isInitialized) host.onSel(this)
     }
 
-    override fun onTextContextMenuItem(id: Int): Boolean =
-        if (id == android.R.id.paste) super.onTextContextMenuItem(android.R.id.pasteAsPlainText) else super.onTextContextMenuItem(id)
+    override fun onTextContextMenuItem(id: Int): Boolean {
+        // dokumen terkunci: salin / potong / bagikan / asisten teks ditolak (termasuk dari keyboard & Ctrl+C)
+        if (host.secureMode && (id == android.R.id.copy || id == android.R.id.cut || id == android.R.id.shareText || id == android.R.id.textAssist)) {
+            host.secureBlocked(); return true
+        }
+        return if (id == android.R.id.paste) super.onTextContextMenuItem(android.R.id.pasteAsPlainText) else super.onTextContextMenuItem(id)
+    }
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
         val ic = super.onCreateInputConnection(outAttrs) ?: return null
@@ -367,10 +386,13 @@ class GlyphIcon(ctx: Context, private val kind: Int, private val tint: Int = C.T
     }
 
     private val d = ctx.resources.displayMetrics.density
+    private val drawRect = RectF()
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = tint; strokeWidth = 1.8f * d; strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
     }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = tint; style = Paint.Style.FILL; textSize = 7.5f * d; typeface = Typeface.DEFAULT_BOLD }
+    private val dashPaint = Paint(p).apply { pathEffect = DashPathEffect(floatArrayOf(2 * d, 2 * d), 0f); strokeWidth = 1.2f * d }
+    private val actionPaint = Paint(fill).apply { textSize = 11f * d }
 
     override fun onDraw(c: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
@@ -398,30 +420,26 @@ class GlyphIcon(ctx: Context, private val kind: Int, private val tint: Int = C.T
                 c.drawLine(x, b + 1 * d, x - 2.5f * d, b - 2 * d, p); c.drawLine(x, b + 1 * d, x + 2.5f * d, b - 2 * d, p)
             }
             MARGIN -> {
-                c.drawRect(RectF(w * .22f, h * .1f, w * .78f, h * .9f), p)
-                val dp = Paint(p).apply { pathEffect = DashPathEffect(floatArrayOf(2 * d, 2 * d), 0f); strokeWidth = 1.2f * d }
-                c.drawRect(RectF(w * .32f, h * .22f, w * .68f, h * .78f), dp)
+                drawRect.set(w * .22f, h * .1f, w * .78f, h * .9f); c.drawRect(drawRect, p)
+                drawRect.set(w * .32f, h * .22f, w * .68f, h * .78f); c.drawRect(drawRect, dashPaint)
             }
-            PAGE -> { c.drawRect(RectF(w * .25f, h * .1f, w * .75f, h * .9f), p); line(w * .34f, h * .35f, w * .66f); line(w * .34f, h * .5f, w * .66f); line(w * .34f, h * .65f, w * .56f) }
-            ORIENT -> { c.drawRect(RectF(w * .12f, h * .3f, w * .7f, h * .75f), p); c.drawRect(RectF(w * .45f, h * .12f, w * .88f, h * .62f), p) }
+            PAGE -> { drawRect.set(w * .25f, h * .1f, w * .75f, h * .9f); c.drawRect(drawRect, p); line(w * .34f, h * .35f, w * .66f); line(w * .34f, h * .5f, w * .66f); line(w * .34f, h * .65f, w * .56f) }
+            ORIENT -> { drawRect.set(w * .12f, h * .3f, w * .7f, h * .75f); c.drawRect(drawRect, p); drawRect.set(w * .45f, h * .12f, w * .88f, h * .62f); c.drawRect(drawRect, p) }
             TABLE, ROW_ADD, ROW_DEL, COL_ADD, COL_DEL -> {
-                val rr = RectF(l, t, r, b)
-                c.drawRect(rr, p)
+                drawRect.set(l, t, r, b)
+                c.drawRect(drawRect, p)
                 line(l, t + (b - t) / 3, r); line(l, t + 2 * (b - t) / 3, r)
                 c.drawLine(l + (r - l) / 3, t, l + (r - l) / 3, b, p); c.drawLine(l + 2 * (r - l) / 3, t, l + 2 * (r - l) / 3, b, p)
-                val ap = Paint(fill).apply { color = if (kind == ROW_DEL || kind == COL_DEL) C.RED else C.TEAL; textSize = 11f * d }
+                actionPaint.color = if (kind == ROW_DEL || kind == COL_DEL) C.RED else C.TEAL
                 when (kind) {
-                    ROW_ADD, COL_ADD -> c.drawText("+", r - 6 * d, b + 2 * d, ap)
-                    ROW_DEL, COL_DEL -> c.drawText("−", r - 6 * d, b + 2 * d, ap)
+                    ROW_ADD, COL_ADD -> c.drawText("+", r - 6 * d, b + 2 * d, actionPaint)
+                    ROW_DEL, COL_DEL -> c.drawText("−", r - 6 * d, b + 2 * d, actionPaint)
                 }
-                if (kind == ROW_ADD || kind == ROW_DEL) c.drawRect(RectF(l, t + 2 * (b - t) / 3, r, b), Paint(fill).apply { alpha = 60 })
-                if (kind == COL_ADD || kind == COL_DEL) c.drawRect(RectF(l + 2 * (r - l) / 3, t, r, b), Paint(fill).apply { alpha = 60 })
             }
             BREAK -> {
-                c.drawRect(RectF(w * .25f, h * .05f, w * .75f, h * .4f), p)
-                c.drawRect(RectF(w * .25f, h * .6f, w * .75f, h * .95f), p)
-                val dp = Paint(p).apply { pathEffect = DashPathEffect(floatArrayOf(2 * d, 2 * d), 0f) }
-                c.drawLine(w * .1f, h * .5f, w * .9f, h * .5f, dp)
+                drawRect.set(w * .25f, h * .05f, w * .75f, h * .4f); c.drawRect(drawRect, p)
+                drawRect.set(w * .25f, h * .6f, w * .75f, h * .95f); c.drawRect(drawRect, p)
+                c.drawLine(w * .1f, h * .5f, w * .9f, h * .5f, dashPaint)
             }
             STYLE -> { fill.textSize = 13f * d; c.drawText("Aa", l, b, fill) }
         }
@@ -475,11 +493,63 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
 
     override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean { track(ev); return super.onInterceptTouchEvent(ev) }
     override fun onTouchEvent(ev: android.view.MotionEvent): Boolean { track(ev); return super.onTouchEvent(ev) }
+    private var downX = 0f; private var downY = 0f; private var moved = false
+    /** Ketukan terakhir (bukan geser/cubit): posisi di layar gulir & waktunya — untuk zoom otomatis saat mengedit. */
+    var tapX = 0f; private set
+    var tapY = 0f; private set
+    var tapAt = 0L; private set
+    /** Ketukan sudah dipakai (mis. untuk zoom otomatis) — tidak dipakai dua kali. */
+    fun tapAtConsumed() { tapAt = 0L }
     private fun track(ev: android.view.MotionEvent) {
         when (ev.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> touching = true
-            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { touching = false; lastMove = android.os.SystemClock.uptimeMillis() }
+            android.view.MotionEvent.ACTION_DOWN -> { touching = true; downX = ev.x; downY = ev.y; moved = false }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+                if (Math.abs(ev.x - downX) > slop || Math.abs(ev.y - downY) > slop) moved = true
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                touching = false; lastMove = android.os.SystemClock.uptimeMillis()
+                if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && !moved) { tapX = ev.x; tapY = ev.y; tapAt = lastMove }
+            }
         }
+    }
+
+    /** Boleh menggulir otomatis ke kursor: bukan selagi jari menggulir / halaman meluncur, dan memang ada ketikan/pindah kursor. */
+    fun autoScrollAllowed(): Boolean {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (touching) return false
+        if (now - ParaEdit.lastChange > 700) return false
+        if (now - lastMove < 250 && ParaEdit.lastChange < lastMove) return false
+        return true
+    }
+
+    private val zoomed get() = zoomFrame?.let { it.zoom != 1f } ?: false
+    private var keepOnLayout = false
+
+    /**
+     * Saat diperbesar, gulir otomatis bawaan ScrollView (saat fokus pindah / keyboard muncul) menghitung posisi TANPA
+     * skala zoom → layar melompat ke tempat acak ketika teks diketuk. Posisi gulir dipertahankan; kursor ditampilkan
+     * oleh [ZoomFrame] dengan perhitungan yang memperhitungkan zoom.
+     */
+    override fun requestChildFocus(child: View?, focused: View?) {
+        if (!zoomed) { super.requestChildFocus(child, focused); return }
+        val sx = scrollX; val sy = scrollY
+        keepOnLayout = isLayoutRequested
+        super.requestChildFocus(child, focused)
+        if (scrollX != sx || scrollY != sy) scrollTo(sx, sy)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        val zf = zoomFrame
+        if (zf == null || zf.zoom == 1f) { super.onSizeChanged(w, h, oldw, oldh); return }
+        val sx = scrollX; val sy = scrollY
+        val smooth = isSmoothScrollingEnabled
+        isSmoothScrollingEnabled = false
+        super.onSizeChanged(w, h, oldw, oldh)
+        isSmoothScrollingEnabled = smooth
+        scrollTo(sx, sy)
+        // keyboard muncul / layar berubah: tampilkan kursor dengan hitungan yang benar
+        post { zf.revealFocus() }
     }
 
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
@@ -496,7 +566,15 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val t0 = System.nanoTime()
+        val sx = scrollX; val sy = scrollY
+        val keep = keepOnLayout && zoomed
+        keepOnLayout = false
         super.onLayout(changed, l, t, r, b)
+        if (keep) {
+            val c = getChildAt(0)
+            val maxY = if (c == null) 0 else maxOf(0, c.height - (height - paddingTop - paddingBottom))
+            scrollTo(sx, sy.coerceIn(0, maxY))
+        }
         EdPerf.layoutNs += System.nanoTime() - t0; EdPerf.layouts++
     }
 
@@ -507,10 +585,9 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
     }
 
     override fun requestChildRectangleOnScreen(child: View, rectangle: android.graphics.Rect, immediate: Boolean): Boolean {
-        val now = android.os.SystemClock.uptimeMillis()
-        if (touching) return false
-        if (now - ParaEdit.lastChange > 700) return false              // bukan karena ketikan / kursor dipindah
-        if (now - lastMove < 250 && ParaEdit.lastChange < lastMove) return false   // masih meluncur
+        // diperbesar: kotak yang sampai ke sini belum diskala (Android tidak memperhitungkan zoom) — sudah ditangani ZoomFrame
+        if (zoomed) return false
+        if (!autoScrollAllowed()) return false
         return super.requestChildRectangleOnScreen(child, rectangle, immediate)
     }
 }
@@ -787,6 +864,36 @@ class CullHelper(val v: android.view.ViewGroup) {
     }
 }
 
+/** Gulir mendatar halaman: saat diperbesar, gulir otomatis bawaan (tanpa skala zoom) dimatikan — lihat [EditorScroll]. */
+class ZoomHScroll(ctx: Context) : android.widget.HorizontalScrollView(ctx) {
+    var zoomFrame: ZoomFrame? = null
+    private val zoomed get() = zoomFrame?.let { it.zoom != 1f } ?: false
+    private var keepOnLayout = false
+
+    override fun requestChildRectangleOnScreen(child: View, rectangle: android.graphics.Rect, immediate: Boolean): Boolean =
+        if (zoomed) false else super.requestChildRectangleOnScreen(child, rectangle, immediate)
+
+    override fun requestChildFocus(child: View?, focused: View?) {
+        if (!zoomed) { super.requestChildFocus(child, focused); return }
+        val sx = scrollX
+        keepOnLayout = isLayoutRequested
+        super.requestChildFocus(child, focused)
+        if (scrollX != sx) scrollTo(sx, 0)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val sx = scrollX
+        val keep = keepOnLayout && zoomed
+        keepOnLayout = false
+        super.onLayout(changed, l, t, r, b)
+        if (keep) {
+            val c = getChildAt(0)
+            val maxX = if (c == null) 0 else maxOf(0, c.width - (width - paddingLeft - paddingRight))
+            scrollTo(sx.coerceIn(0, maxX), 0)
+        }
+    }
+}
+
 /**
  * Zoom VISUAL seperti tampilan cetak Word: halaman ditata SEKALI pada 100% lalu hanya diperbesar/diperkecil sebagai
  * gambar (scale RenderNode). Dulu zoom menata & membangun ulang seluruh dokumen (ribuan view) setiap kali → macet.
@@ -843,6 +950,89 @@ class ZoomFrame(ctx: Context) : android.widget.FrameLayout(ctx) {
         zoom = nz
         requestLayout(); invalidate()
         onZoom?.invoke(zoom)
+    }
+
+    /**
+     * Kotak [r] (koordinat isi, belum diskala) dibuat terlihat: dikali zoom, lalu layar gulir tegak & mendatar
+     * digeser seperlunya (dengan sedikit ruang). Dipanggil untuk kursor saat mengetik / mengetuk.
+     */
+    fun reveal(r: android.graphics.RectF, smooth: Boolean = true) {
+        val c = getChildAt(0) ?: return
+        val vs = vScroll ?: return; val hs = hScroll
+        val l = c.left + r.left * zoom; val t = c.top + r.top * zoom
+        val rr = c.left + r.right * zoom; val b = c.top + r.bottom * zoom
+        val mx = 24f * resources.displayMetrics.density; val my = 40f * resources.displayMetrics.density
+        // tegak
+        val vh = vs.height - vs.paddingTop - vs.paddingBottom
+        var ny = vs.scrollY
+        if (b - t + 2 * my > vh) ny = (t - my).toInt()
+        else if (t - my < ny) ny = (t - my).toInt()
+        else if (b + my > ny + vh) ny = (b + my - vh).toInt()
+        ny = ny.coerceIn(0, maxOf(0, height - vh))
+        // mendatar
+        var nx = hs?.scrollX ?: 0
+        if (hs != null) {
+            val vw = hs.width
+            if (rr - l + 2 * mx > vw) nx = (l - mx).toInt()
+            else if (l - mx < nx) nx = (l - mx).toInt()
+            else if (rr + mx > nx + vw) nx = (rr + mx - vw).toInt()
+            nx = nx.coerceIn(0, maxOf(0, width - vw))
+        }
+        if (smooth) { if (ny != vs.scrollY) vs.smoothScrollTo(0, ny); if (hs != null && nx != hs.scrollX) hs.smoothScrollTo(nx, 0) }
+        else { vs.scrollTo(0, ny); hs?.scrollTo(nx, 0) }
+    }
+
+    /** Ubah kotak [r] dalam koordinat [v] ke koordinat isi (anak langsung wadah ini); false bila [v] bukan keturunannya. */
+    private fun toContent(v: View, r: android.graphics.RectF): Boolean {
+        val c = getChildAt(0) ?: return false
+        var x: View = v
+        while (x !== c) {
+            r.offset((x.left - x.scrollX).toFloat(), (x.top - x.scrollY).toFloat())
+            x = x.parent as? View ?: return false
+        }
+        return true
+    }
+
+    /** Tampilkan kursor kolom teks yang sedang fokus (mis. sesudah keyboard muncul / zoom berubah). */
+    fun revealFocus(smooth: Boolean = true) {
+        val f = findFocus() ?: return
+        val r = android.graphics.RectF()
+        val tv = f as? android.widget.TextView
+        val lay = tv?.layout
+        if (tv != null && lay != null) {
+            val off = tv.selectionEnd.coerceIn(0, tv.text.length)
+            val line = lay.getLineForOffset(off)
+            val x = lay.getPrimaryHorizontal(off) + tv.totalPaddingLeft
+            r.set(x - 2f, (lay.getLineTop(line) + tv.totalPaddingTop).toFloat(), x + 2f, (lay.getLineBottom(line) + tv.totalPaddingTop).toFloat())
+        } else r.set(0f, 0f, f.width.toFloat(), f.height.toFloat())
+        if (toContent(f, r)) reveal(r, smooth)
+    }
+
+    /** Permintaan "tampilkan kotak ini" dari kolom teks (kursor): saat diperbesar, dihitung di sini dengan skala zoom. */
+    override fun requestChildRectangleOnScreen(child: View, rectangle: android.graphics.Rect, immediate: Boolean): Boolean {
+        if (zoom == 1f) return false                      // 100%: jalur bawaan (sudah benar)
+        if ((vScroll as? EditorScroll)?.autoScrollAllowed() == false) return true
+        reveal(android.graphics.RectF(rectangle), !immediate)
+        return true
+    }
+
+    private var anim: android.animation.ValueAnimator? = null
+
+    /** Zoom halus ke [z] dengan titik (fx, fy) di layar gulir tetap di tempatnya; lalu kursor ditampilkan. */
+    fun animateZoomTo(z: Float, fx: Float, fy: Float) {
+        anim?.cancel()
+        val from = zoom
+        val to = z.coerceIn(minZoom, maxZoom)
+        if (Math.abs(to - from) < 1e-3f) { revealFocus(); return }
+        anim = android.animation.ValueAnimator.ofFloat(from, to).apply {
+            duration = 220
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { zoomTo(it.animatedValue as Float, fx, fy) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { post { revealFocus() } }
+            })
+            start()
+        }
     }
 
     /** Jari terangkat: dekat 100% → pas 100%. */

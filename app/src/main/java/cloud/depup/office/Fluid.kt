@@ -196,11 +196,48 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
     /** Tab yang sedang ditinggalkan — hanya tab asal & tujuan yang berganti warna (tab yang dilewati tidak berkedip). */
     private var leaving = -1
 
+    var onTabSelected: ((Int) -> Unit)? = null
+
+    private fun findTabAtX(x: Float): Tab? {
+        for (t in tabs) {
+            val p = t.pill
+            if (x >= p.left - context.dp(10) && x <= p.right + context.dp(10)) {
+                return t
+            }
+        }
+        return null
+    }
+
+    private fun updateSelectionFromTouch(x: Float) {
+        val target = findTabAtX(x) ?: return
+        if (target.index >= 0 && target.index != selected) {
+            onTabSelected?.invoke(target.index)
+        }
+    }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_MOVE) {
+            updateSelectionFromTouch(ev.x)
+        }
+        return super.onInterceptTouchEvent(ev)
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                updateSelectionFromTouch(ev.x)
+                return true
+            }
+        }
+        return super.onTouchEvent(ev)
+    }
+
     init {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setWillNotDraw(false)
-        ind.paint.color = C.INK
+        ind.paint.color = C.PRIMARY
         ind.edge = context.dp(3).toFloat()
         ind.onFrame = { tint() }
     }
@@ -209,7 +246,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
 
     fun addTab(index: Int, iconRes: Int, label: String, onTap: () -> Unit) {
         val ic = context.icon(iconRes, C.MUTED, 22)
-        val lb = context.tv(label, 14f, C.ON_INK, true).apply {
+        val lb = context.tv(label, 14f, C.ON_PRIMARY, true).apply {
             isSingleLine = true   // saat menyempit, teks terpotong rapi — tidak pindah baris
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             forceHasOverlappingRendering(false)
@@ -239,8 +276,8 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
             gravity = Gravity.CENTER
             isClickable = true; isFocusable = true
             contentDescription = desc
-            background = RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), context.shape(C.INK, 100), null)
-            addView(context.icon(iconRes, C.ON_INK, 22), LayoutParams(dp(22), dp(22)))
+            background = RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), context.shape(C.PRIMARY, 100), null)
+            addView(context.icon(iconRes, C.ON_PRIMARY, 22), LayoutParams(dp(22), dp(22)))
             setOnClickListener { onTap() }
         }
         b.squish(0.92f)
@@ -322,14 +359,14 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         for (t in tabs) {
             val active = t.index == selected || t.index == leaving
             if (r == null || !active) {
-                val ci = if (r == null && t.index == selected) C.ON_INK else C.MUTED
+                val ci = if (r == null && t.index == selected) C.ON_PRIMARY else C.MUTED
                 if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
                 continue
             }
             val px = t.pill.left + t.pill.translationX
             val il = px + t.icon.left
             val iw = t.icon.width.toFloat()
-            val ci = mixColor(C.MUTED, C.ON_INK, cover(r, il + iw * 0.3f, il + iw * 0.7f))
+            val ci = mixColor(C.MUTED, C.ON_PRIMARY, cover(r, il + iw * 0.3f, il + iw * 0.7f))
             if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
             val lw = t.label.width
             if (lw > 0) {
@@ -357,7 +394,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
 @SuppressLint("ViewConstructor")
 open class PillRow(ctx: Context) : LinearLayout(ctx) {
     protected val ind = PillIndicator(this)
-    var textOn = C.ON_INK
+    var textOn = C.ON_PRIMARY
     var textOff = C.MUTED
     /** Jarak minimum pil dari tepi kiri/kanan baris (px) — mis. di dalam jalur kapsul. */
     var pillEdge: Float
@@ -368,7 +405,7 @@ open class PillRow(ctx: Context) : LinearLayout(ctx) {
     init {
         orientation = HORIZONTAL
         setWillNotDraw(false)
-        ind.paint.color = C.INK
+        ind.paint.color = C.PRIMARY
         ind.onFrame = { tint() }
     }
 

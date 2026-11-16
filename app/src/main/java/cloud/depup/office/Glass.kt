@@ -1051,7 +1051,7 @@ object Glass {
     fun init(ctx: Context) {
         val app = ctx.applicationContext
         val p = sp(app)
-        BLUR = p.getBoolean("blur", true)
+        BLUR = p.getBoolean("blur", !Perf.low)
         tone = p.getFloat("tone", DEFAULT).coerceIn(0f, 1f)
         blurAmt = p.getFloat("blurAmt", DEFAULT).coerceIn(0f, 1f)
         if (p.getBoolean("autoOff", false)) { autoDisabled = true; p.edit().remove("autoOff").apply() }
