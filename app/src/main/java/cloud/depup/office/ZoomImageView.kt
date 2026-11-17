@@ -61,18 +61,34 @@ class ZoomImageView @JvmOverloads constructor(
         }
     })
 
+    private var zoomAnimator: android.animation.ValueAnimator? = null
+
+    fun animateScaleTo(targetScale: Float, focusX: Float, focusY: Float) {
+        zoomAnimator?.cancel()
+        val startScale = zoomScale
+        val finalScale = targetScale.coerceIn(minScale, maxScale)
+        if (Math.abs(startScale - finalScale) < 0.01f) return
+
+        zoomAnimator = android.animation.ValueAnimator.ofFloat(startScale, finalScale).apply {
+            duration = 220L
+            interpolator = Motion.STANDARD
+            addUpdateListener { anim ->
+                val currScale = anim.animatedValue as Float
+                val factor = currScale / zoomScale
+                zoomScale = currScale
+                imgMatrix.postScale(factor, factor, focusX, focusY)
+                checkMatrixAndBounds()
+                imageMatrix = imgMatrix
+                onZoomChanged?.invoke(zoomScale)
+            }
+            start()
+        }
+    }
+
     private val gestureDetector = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDoubleTap(e: MotionEvent): Boolean {
             val targetScale = if (zoomScale > 1.2f) 1f else 2.5f
-            val factor = targetScale / zoomScale
-            zoomScale = targetScale
-            if (targetScale == 1f) {
-                resetZoom()
-            } else {
-                imgMatrix.postScale(factor, factor, e.x, e.y)
-                checkMatrixAndBounds()
-            }
-            onZoomChanged?.invoke(zoomScale)
+            animateScaleTo(targetScale, e.x, e.y)
             return true
         }
     })

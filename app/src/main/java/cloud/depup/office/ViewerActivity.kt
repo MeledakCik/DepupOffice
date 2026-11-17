@@ -51,10 +51,13 @@ class PinchScroll(ctx: Context) : HorizontalScrollView(ctx) {
             return true
         }
         override fun onScaleEnd(d: ScaleGestureDetector) {
-            target?.let { it.scaleX = 1f; it.scaleY = 1f }
             val f = live
             live = 1f
-            onCommit?.invoke(f, d.focusX)
+            target?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(160L)
+                ?.setInterpolator(Motion.STANDARD)
+                ?.withEndAction {
+                    onCommit?.invoke(f, d.focusX)
+                }?.start() ?: onCommit?.invoke(f, d.focusX)
         }
     })
 
