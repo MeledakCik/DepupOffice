@@ -157,8 +157,9 @@ class ZoomImageView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 mode = ZOOM
-                lastTouchX = currentX
-                lastTouchY = currentY
+                val index = event.actionIndex
+                lastTouchX = event.getX(index)
+                lastTouchY = event.getY(index)
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!scaleDetector.isInProgress && zoomScale > 1.05f) {
@@ -171,9 +172,22 @@ class ZoomImageView @JvmOverloads constructor(
                 lastTouchX = currentX
                 lastTouchY = currentY
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+            MotionEvent.ACTION_POINTER_UP -> {
                 mode = NONE
-                if (zoomScale <= 1.01f) resetZoom()
+                val index = event.actionIndex
+                val newIndex = if (index == 0) 1 else 0
+                if (newIndex < event.pointerCount) {
+                    lastTouchX = event.getX(newIndex)
+                    lastTouchY = event.getY(newIndex)
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                mode = NONE
+                if (zoomScale < 1.0f) {
+                    animateScaleTo(1.0f, width / 2f, height / 2f)
+                } else {
+                    checkMatrixAndBounds()
+                }
             }
         }
         imageMatrix = imgMatrix
