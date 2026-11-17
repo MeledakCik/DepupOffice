@@ -1483,7 +1483,6 @@ class MainActivity : AppCompatActivity() {
             tile(R.drawable.ic_scan, C.XLS_FG, C.XLS_BG, "Scan struk", "Total belanja ke Excel") { startScan() }
         )
         section("Bagikan & ekspor",
-            tile(R.drawable.ic_cloud, C.PRIMARY, C.PRIMARY_C, "Web / Artikel ke PDF", "Simpan halaman web & artikel online ke PDF") { WebToPdfManager.showDialog(this) },
             tile(R.drawable.ic_chat, C.SUCCESS, C.SUCCESS_C, "Kirim ke WhatsApp", "Pilih berkas lalu kirim") {
                 pickFile(arrayOf("*/*")) { u -> Files.share(this, u, Files.mimeOf(this, u), true) }
             },
