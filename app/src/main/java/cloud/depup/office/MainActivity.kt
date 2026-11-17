@@ -1455,26 +1455,8 @@ class MainActivity : AppCompatActivity() {
                 }
             },
             tile(R.drawable.ic_sign, C.SUCCESS, C.SUCCESS_C, "Tanda tangan PDF", "Tempel bebas: geser, ukuran, putar, warna") { pickFile(arrayOf(PDF)) { signFlow(it) } },
-            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Password PDF", "AES-256, dibuka di Adobe Reader & Depup") { pickFile(arrayOf(PDF)) { rebuildPdfFlow(it, lock = true) } },
-            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Proteksi Anti-Kopi PDF", "Kunci izin Salin Teks & Cetak tanpa password") {
-                PdfProtectionManager.showDialog(this) { cb -> pickFile(arrayOf(PDF)) { cb(it) } }
-            },
-            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Dokumen Terlindungi", "Sampul DepUp, AES-256-GCM, HMAC, & password guru", "Baru", C.PRIMARY, C.PRIMARY_C) {
-                val b = vbox(12).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
-                var d: AlertDialog? = null
-                b.add(btn("Pilih File PDF", true, C.PRIMARY) {
-                    d?.dismiss()
-                    pickFile(arrayOf(PDF)) { protectDocFlow(it) }
-                })
-                b.add(btn("Cari di File Manager", false, C.PRIMARY) {
-                    d?.dismiss()
-                    pickFile(arrayOf("*/*")) { protectDocFlow(it) }
-                }, top = 8)
-                d = AlertDialog.Builder(this)
-                    .setTitle("Dokumen Terlindungi")
-                    .setView(b)
-                    .setNegativeButton("Batal", null)
-                    .show()
+            tile(R.drawable.ic_shield, C.PRIMARY, C.PRIMARY_C, "Dokumen Terlindungi", "Password pembuka, anti-kopi, anti-cetak & sampul DepUp", "Utama", C.PRIMARY, C.PRIMARY_C) {
+                ProtectedDocumentManager.showDialog(this) { cb -> pickFile(arrayOf(PDF)) { cb(it) } }
             },
             tile(R.drawable.ic_lock, C.PRIMARY, C.PRIMARY_C, "Kunci berkas", "Enkripsi ke Brankas AES-256") { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } },
             tile(R.drawable.ic_search, C.PRIMARY, C.PRIMARY_C, "Cari teks dalam file", "Cari kata kunci di dalam isi PDF & Word") { GlobalSearchManager.showSearchDialog(this) },
