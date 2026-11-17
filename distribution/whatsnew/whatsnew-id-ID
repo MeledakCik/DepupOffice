@@ -1,0 +1,6 @@
+Versi 4.1.0 — Keamanan & stabilitas
+• Dokumen Terlindungi lebih aman: deteksi aplikasi yang dimodifikasi, debugger, dan alat injeksi.
+• Dokumen terkunci tidak bisa dibaca asisten AI di layar.
+• Teks dokumen dibersihkan dari perintah tersembunyi sebelum diringkas.
+• Pembaca PDF: zoom di bawah 100%, cubit-zoom lebih stabil tanpa kedip.
+• Perbaikan keamanan dan performa lainnya.

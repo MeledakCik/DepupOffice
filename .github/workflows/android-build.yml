@@ -155,6 +155,48 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  play:
+    name: Upload ke Google Play (draft)
+    # Hanya dari tag rilis. Butuh secret PLAY_SERVICE_ACCOUNT_JSON (isi berkas JSON service account Google Play
+    # Developer API). Rilis dibuat sebagai DRAFT di jalur produksi: tidak ada yang dirilis ke pengguna
+    # sebelum dikirim untuk ditinjau dari Play Console.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (catatan rilis Play)
+        uses: actions/checkout@v4
+
+      - name: Check Play credentials
+        id: cred
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$PLAY_JSON" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"
+          else echo "::warning::Secret PLAY_SERVICE_ACCOUNT_JSON belum diisi: unggah ke Play dilewati."; echo "ok=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Download Android artifact
+        if: steps.cred.outputs.ok == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: DepupOffice_v*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload AAB to Google Play
+        if: steps.cred.outputs.ok == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: cloud.depup.office
+          releaseFiles: dist/*.aab
+          track: ${{ vars.PLAY_TRACK || 'production' }}
+          status: draft
+          releaseName: ${{ github.ref_name }}
+          whatsNewDirectory: distribution/whatsnew
+
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
