@@ -1465,8 +1465,8 @@ class DocEditorActivity : AppCompatActivity() {
         autoZoomForEdit()
     }
 
-    /** Zoom saat mengedit: teks yang diketuk diperbesar ke 120% (bila sedang lebih kecil), berpusat di titik ketukan. */
-    private val editZoom = 1.2f
+    /** Zoom saat mengedit: teks yang diketuk diperbesar ke 200% (bila sedang lebih kecil), berpusat di titik ketukan. */
+    private val editZoom = 2.0f
 
     private fun autoZoomForEdit() {
         val sc = scroll as? EditorScroll ?: return

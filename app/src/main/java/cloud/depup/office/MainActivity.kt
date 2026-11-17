@@ -106,6 +106,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         tab = savedInstanceState?.getInt("tab") ?: 0
         docsMode = savedInstanceState?.getInt("docsMode") ?: 0
+        // Tombol Kembali di tab selain Beranda: pulang ke Beranda dulu; baru di Beranda tombol Kembali keluar aplikasi.
+        onBackPressedDispatcher.addCallback(this, backToHome)
         prefetchSizes()
         restoreY = savedInstanceState?.getInt("scrollY", 0) ?: 0
         val mainView = LinearLayout(this).apply {
@@ -555,7 +557,13 @@ class MainActivity : AppCompatActivity() {
         return nav
     }
 
+    /** Aktif hanya saat tab bukan Beranda (lihat [select]); di Beranda tombol Kembali ditangani sistem (keluar). */
+    private val backToHome = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() { select(0) }
+    }
+
     private fun select(i: Int) {
+        backToHome.isEnabled = i != 0
         val changed = i != tab
         if (changed && ::content.isInitialized) content.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
         tab = i
