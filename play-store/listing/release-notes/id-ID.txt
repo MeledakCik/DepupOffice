@@ -1,0 +1,3 @@
+• Zoom cubit PDF kini lebih mulus dan menjaga fokus pada area yang diperbesar.
+• Mengatasi refresh visual antarhalaman saat zoom serta efek pantulan ketika menggulir.
+• Perbaikan stabilitas dan kenyamanan saat membaca dan mengedit dokumen.

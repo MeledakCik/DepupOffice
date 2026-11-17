@@ -1,36 +1,39 @@
-# Depup Office v2.2.2 - Play Store Checklist
+# Depup Office 4.0.1 — Play production checklist
 
-## Build
-    cp keystore.properties.example keystore.properties   # isi kredensial upload key
-    ./gradlew clean bundleRelease
-    -> app/build/outputs/bundle/release/DepupOffice_v2.2.2-release.aab
-Pastikan versionCode (6) > versionCode terakhir yang pernah di-upload (versionCode 5 sudah terpakai = v2.2.1).
+## Release artifact
 
-## Data Safety (isi di Play Console)
-- Does your app collect or share any required user data types? -> **No**
-- Data collected: none | Data shared: none
-- Data encrypted in transit: n/a (tidak ada transmisi)
-- Deletion request: n/a
-- Permission: hanya CAMERA (scan dokumen/QR, diproses on-device). INTERNET di-strip via tools:node="remove".
-- Privacy policy URL: WAJIB isi URL publik (policy in-app di assets/privacy.html saja tidak cukup).
+- Package: `cloud.depup.office`
+- Version: `4.0.1` (`versionCode` `40001`)
+- Target SDK: 36; min SDK: 29.
+- Local AAB: `app/build/outputs/bundle/release/DepupOffice_v4.0.1-release.aab`
+- Play API confirmed alpha already uses `40000`; production track is empty.
+- AAB upload was accepted by Play during an edit, but the production track update returned `400 Precondition check failed`. The edit was discarded; there is no committed production draft and no rollout.
+- The service account's Play Console screen shows app access **Admin (all permissions)**, so a missing app permission is not the current finding.
+- Play Console reports an account owner transfer in progress to this service account. A retry still got `400 Precondition check failed`; no production draft was committed. Resolve/cancel the pending owner transfer with the real human account owner, then retry the production draft upload.
+
+## Privacy and policy declarations
+
+- In-app privacy policy: `app/src/main/assets/privacy.html`.
+- Public policy URL verified accessible on 2026-11-17: <https://raw.githubusercontent.com/MeledakCik/DepupOffice/main/app/src/main/assets/privacy.html>.
+- Google Play Console still needs a human check of Data safety, content rating, target audience, and Ads declaration. The Publisher API used for this release attempt could not read those declarations.
+- Source has no ads SDK, removes the `INTERNET` permission from the merged manifest, requests camera for scanning, and uses ML Kit for OCR/barcode scanning. Confirm the Console declarations match the behavior and current policy text before rollout.
 
 ## Store listing
-- App icon 512x512 PNG: ic_launcher_playstore_512.png (full-square, Play yang kasih mask)
-- Feature graphic 1024x500: feature_graphic_1024x500.png (placeholder simpel, ganti kalau mau ada teks)
-- Screenshot: min 2 (phone), disarankan 4-8; tablet 7"/10" kalau mau tampil di tablet
-- Target audience/content rating questionnaire, Ads declaration: No ads
-- Pakai Play App Signing (default untuk AAB)
 
-## Policy flags (cek manual)
-- Link donasi Saweria di MainActivity: cek Payments policy; aman kalau cuma tip/donasi sukarela tanpa unlock fitur.
-- ViewerActivity intent-filter `*/*` + BROWSABLE: boleh, tapi review kalau Play bertanya.
+- Publisher API confirmed: 1 app icon, 1 feature graphic, and 4 phone screenshots are present in Indonesian listing assets. The four new workspace, Word, spreadsheet, and PDF mockups were uploaded and committed on 2026-11-17; their remote SHA-1 hashes match the PNGs in `play-store/listing/screenshots/`.
+- New phone screenshots are 1080 × 1920 RGB PNGs without alpha. Editable source captures, generator, and preview are in `play-store/listing/`.
+- Tablet screenshots are absent; add them only if tablet listing coverage is desired.
 
-## Library native (16 KB page size, wajib untuk target API 35+)
-- com.google.mlkit:text-recognition:16.0.1  -> sudah 16 KB
-- com.google.mlkit:barcode-scanning:17.3.0  -> sudah 16 KB (17.2.0 sebelumnya TIDAK)
-- Verifikasi di Android Studio: Build > Analyze APK > lib/arm64-v8a/*.so (alignment 16 KB), atau lihat warning saat build.
+## Verification completed
 
-## Uji manual sebelum upload (belum bisa diuji dari sisi AI)
-- Scan dokumen > Auto-crop AI / Luruskan / Teks (OCR) pada foto asli (meja gelap, meja terang, bayangan)
-- Ubah nama: (a) PDF dibuka dari file manager, (b) file hasil scan, (c) JPG di Pictures/Depup Office; cek nama di file manager berubah
-- Layar Kamera/Editor di Android 15/16 (edge-to-edge): konten tidak tertimpa status bar/nav bar
+- `./gradlew testDebugUnitTest --rerun-tasks`: 5 tests passed.
+- `./gradlew lint test bundleRelease assembleRelease`: successful.
+- Release APK signature verified; 16 KB alignment check passed for 64-bit native libraries.
+- Release installed on Android emulator and opened a one-page PDF; zoom buttons reached 200% without a crash. Scanner/crop screen launched on the emulator virtual camera, and exporting a scan to PDF succeeded. Android share sheet opened with the exported PDF attached.
+- Emulator OCR action completed; the virtual camera scene had no readable document text, so OCR accuracy was not validated against a text page.
+- Pinch zoom refresh behavior was previously checked on the user's phone and reported fixed. This pass only had Android emulators connected; physical-device regression is still needed for camera/OCR with real photos, DOCX/XLSX open and edit, and end-to-end import/export/share.
+
+## Remaining quality work
+
+- Release lint currently reports 301 warnings and zero Error/Fatal findings. Main groups are `UseKtx` (121), `SetTextI18n` (100), `ObsoleteSdkInt` (18), and `UnusedResources` (14). Do not suppress the report wholesale; address accessibility and localization warnings in focused changes.
+- No automated coverage yet for complete DOCX/XLSX editing, camera/OCR accuracy, and export flows.

@@ -72,7 +72,8 @@ object Files {
 
         return try {
             val name = nameOf(ctx, uri)
-            val ext = name.substringAfterLast('.', "tmp")
+            // nama dari penyedia konten pihak luar: buang karakter path (anti path traversal "a./../../x")
+            val ext = name.substringAfterLast('.', "tmp").replace(Regex("[^A-Za-z0-9]"), "").take(8).ifBlank { "tmp" }
             val cleanBase = baseName(name).replace(Regex("[^\\p{L}\\p{N}_.-]+"), "_")
             val tempFile = File(ctx.cacheDir, "open_${cleanBase}.$ext")
 
@@ -313,7 +314,7 @@ object Files {
 
     /** PDF dibuka di pembaca bawaan; format lain diserahkan ke aplikasi office di perangkat. */
     fun open(ctx: Context, uri: Uri, mime: String) {
-        ctx.startActivity(Intent(ctx, ViewerActivity::class.java).apply {
+        ctx.startActivity(Integrity.internal(Intent(ctx, ViewerActivity::class.java)).apply {
             data = uri
             putExtra("mime", mime)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

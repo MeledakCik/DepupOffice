@@ -12,3 +12,13 @@
 # Semua kelas aplikasi yang boleh diganti namanya dipindah ke satu paket pendek -> tabel string DEX lebih kecil.
 # (Kelas yang disebut di manifest & aturan keep pustaka tetap dipertahankan namanya.)
 -repackageclasses
+
+# ---- Keamanan ----
+# Honeypot: kelas umpan SENGAJA dipertahankan nama & isinya agar mudah "ditemukan" pembongkar APK.
+-keep class cloud.depup.office.MasterKeys { *; }
+# Log debug dibuang dari rilis (tidak membocorkan alur keamanan lewat logcat).
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+}

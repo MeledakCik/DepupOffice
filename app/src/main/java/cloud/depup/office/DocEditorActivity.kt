@@ -240,7 +240,7 @@ class DocEditorActivity : AppCompatActivity() {
             }
             .setNeutralButton("Lihat saja") { _, _ ->
                 intent.getStringExtra(EXTRA_URI)?.let { u ->
-                    startActivity(android.content.Intent(this, ViewerActivity::class.java).setData(Uri.parse(u)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                    startActivity(Integrity.internal(android.content.Intent(this, ViewerActivity::class.java)).setData(Uri.parse(u)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION))
                 }
                 finish()
             }
@@ -272,7 +272,7 @@ class DocEditorActivity : AppCompatActivity() {
         scroll = EditorScroll(this).apply {
             isFillViewport = true
             setBackgroundColor(C.CANVAS)
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
         // tata letak per lembar seperti Word (kertas asli, lembar demi lembar); zoom > 100% → bisa digeser mendatar
         val hsv = ZoomHScroll(this).apply { isFillViewport = true; isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
@@ -306,7 +306,8 @@ class DocEditorActivity : AppCompatActivity() {
         // Ketuk area kosong di bawah halaman -> kursor ke akhir dokumen
         pad.setOnClickListener { focusEnd() }
         docArea.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
-        installPerfHud(docArea)
+        // Diagnostic controls install global frame/looper listeners and must never ship to production.
+        if (BuildConfig.DEBUG) installPerfHud(docArea)
         root.add(docArea, h = 0, weight = 1f)
         root.add(statusBar().also { statusBarV = it })
         val screen = Glass.scaffold(root)

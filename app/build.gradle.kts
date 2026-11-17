@@ -9,13 +9,23 @@ android {
     namespace = "cloud.depup.office"
     compileSdk = 36
 
+    // Needed for debug-only diagnostics in the editor. Release builds expose DEBUG=false
+    // so the diagnostic HUD can be removed by R8 and never shipped to production.
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 36
-        // versionCode = mayor*10000 + minor*100 + patch (4.0.0 -> 40000): selalu naik, mudah dibaca.
-        versionCode = 40000
-        versionName = "4.0.0"
+        // versionCode = mayor*10000 + minor*100 + patch (4.1.0 -> 40100). 40000 sudah dipakai di alpha.
+        versionCode = 40100
+        versionName = "4.1.0"
+        // Sertifikat tambahan yang sah (mis. "App signing key" Play Console, SHA-256 dipisah koma). Opsional:
+        // tanpa ini, APK dari Play Store tetap diterima lewat pemeriksaan installer.
+        val extraCerts = (project.findProperty("DEPUP_EXTRA_CERTS") as String?) ?: System.getenv("DEPUP_EXTRA_CERTS") ?: ""
+        buildConfigField("String", "EXTRA_CERTS", "\"" + extraCerts.replace("\"", "") + "\"")
         // App hanya berbahasa Indonesia (values/ tunggal, tanpa values-xx). Tanpa baris ini, string
         // terjemahan dari AndroidX/Play Services/CameraX untuk puluhan bahasa lain tetap ikut terbundel.
         // (Sengaja TIDAK membatasi density: mipmap launcher sudah kecil, dan membatasi density
@@ -143,4 +153,6 @@ dependencies {
     // Memasang Baseline Profile (src/main/baseline-prof.txt) juga untuk APK yang dipasang di luar Play Store:
     // kode dikompilasi lebih dulu (AOT) -> buka aplikasi lebih cepat, gulir & animasi pertama tidak tersendat.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+
+    testImplementation("junit:junit:4.13.2")
 }

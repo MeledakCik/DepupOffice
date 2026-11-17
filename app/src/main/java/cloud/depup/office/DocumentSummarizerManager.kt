@@ -37,7 +37,8 @@ object DocumentSummarizerManager {
         val name = Files.nameOf(activity, uri)
 
         activity.work("Menganalisis & merangkum dokumen…", {
-            val text = readDocumentText(activity, uri, name)
+            // buang karakter tersembunyi (zero-width, bidi, Unicode TAG) yang dipakai menyelundupkan instruksi AI
+            val text = AiText.clean(readDocumentText(activity, uri, name))
             if (text.isBlank()) throw IllegalStateException("Tidak ada teks yang dapat dibaca di berkas ini")
 
             val points = extractKeyPoints(text)

@@ -2766,7 +2766,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         toast("Pilih \"Simpan sebagai PDF\" di dialog cetak")
-        startActivity(Intent(this, ViewerActivity::class.java).setData(uri)
+        startActivity(Integrity.internal(Intent(this, ViewerActivity::class.java)).setData(uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             .putExtra(ViewerActivity.EXTRA_AUTO_PRINT, true))
     }

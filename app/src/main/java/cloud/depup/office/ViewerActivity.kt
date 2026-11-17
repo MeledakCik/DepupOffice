@@ -33,14 +33,21 @@ import kotlin.math.roundToInt
 /** Pembungkus scroll horizontal + pinch-zoom + ketuk dua kali. Zoom memperbesar lebar halaman (tajam, bukan sekadar membesarkan gambar). */
 class PinchScroll(ctx: Context) : HorizontalScrollView(ctx) {
     var target: View? = null
-    var onCommit: ((factor: Float, focusX: Float) -> Unit)? = null
-    var onDouble: ((focusX: Float) -> Unit)? = null
+    var onCommit: ((factor: Float, focusX: Float, focusY: Float, finishVisual: () -> Unit) -> Unit)? = null
+    var onDouble: ((focusX: Float, focusY: Float) -> Unit)? = null
     private var live = 1f
     private var scaling = false
+    private var lastFocusX = 0f
+    private var lastFocusY = 0f
 
     private val sd = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-        override fun onScaleBegin(d: ScaleGestureDetector): Boolean { live = 1f; return true }
+        override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
+            live = 1f
+            lastFocusX = d.focusX; lastFocusY = d.focusY
+            return true
+        }
         override fun onScale(d: ScaleGestureDetector): Boolean {
+            lastFocusX = d.focusX; lastFocusY = d.focusY
             live = (live * d.scaleFactor).coerceIn(0.5f, 3f)
             target?.let {
                 it.pivotX = scrollX + d.focusX
@@ -51,16 +58,25 @@ class PinchScroll(ctx: Context) : HorizontalScrollView(ctx) {
             return true
         }
         override fun onScaleEnd(d: ScaleGestureDetector) {
-            target?.scaleX = 1f
-            target?.scaleY = 1f
             val f = live
             live = 1f
-            onCommit?.invoke(f, d.focusX)
+            val scaledView = target
+            var finished = false
+            val finishVisual = {
+                if (!finished) {
+                    finished = true
+                    scaledView?.scaleX = 1f
+                    scaledView?.scaleY = 1f
+                }
+            }
+            // On ACTION_POINTER_UP Android's detector focus moves to the remaining finger.
+            // Keep the last two-finger centroid and the live transform until the new layout is ready.
+            if (onCommit != null) onCommit?.invoke(f, lastFocusX, lastFocusY, finishVisual) else finishVisual()
         }
     })
 
     private val gd = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
-        override fun onDoubleTap(e: MotionEvent): Boolean { onDouble?.invoke(e.x); return true }
+        override fun onDoubleTap(e: MotionEvent): Boolean { onDouble?.invoke(e.x, e.y); return true }
     })
 
     override fun dispatchTouchEvent(e: MotionEvent): Boolean {
@@ -133,6 +149,13 @@ class ViewerActivity : AppCompatActivity() {
     private val guard = SecureGuard(this)
 
     override fun onPause() { super.onPause(); if (guard.on) guard.onPause() }
+
+    // Asisten AI / Assist API ("tanya tentang layar ini"): dokumen terkunci tidak diberikan sebagai konteks.
+    override fun onProvideAssistData(data: Bundle) { if (!secure) super.onProvideAssistData(data) else data.clear() }
+    override fun onProvideAssistContent(outContent: android.app.assist.AssistContent) {
+        if (secure) try { outContent.webUri = null; outContent.clipData = null; outContent.intent = null; outContent.structuredData = null } catch (_: Throwable) {}
+        else super.onProvideAssistContent(outContent)
+    }
     override fun onResume() { super.onResume(); if (guard.on) guard.onResume() }
     override fun onMultiWindowModeChanged(inMulti: Boolean, cfg: android.content.res.Configuration) {
         super.onMultiWindowModeChanged(inMulti, cfg); if (guard.on) guard.onMultiWindow()
@@ -169,6 +192,12 @@ class ViewerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         val rawUri = intent.data
         if (rawUri == null) { finish(); return }
+        // Anti intent-injection: aplikasi lain tidak boleh menyuruh pembaca membuka berkas privat DepUp
+        // (brankas, cache terdekripsi, setelan) lewat URI file://.
+        if (!Integrity.isInternal(intent) && Integrity.isPrivateFile(this, rawUri)) {
+            toast("Berkas tidak bisa dibuka dari aplikasi lain.")
+            finish(); return
+        }
         Perf.onTrim(trimHook)
         // Penyalinan ke cache bisa lama untuk berkas besar (mis. PDF 100 MB dari Drive/WhatsApp): jalankan di latar
         // dengan layar memuat, jangan di main thread (dulu bisa memicu "Aplikasi tidak merespons").
@@ -329,14 +358,14 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     private fun build(rawUri: android.net.Uri, uri: android.net.Uri, pdf: OpenedPdf) {
-        if (secure) guard.enable()
+        if (secure) { guard.enable(); AiShield.protect(this) }
 
         val name = nameOverride ?: Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
         val mime = if (nameOverride != null) PDF else intent.getStringExtra("mime") ?: Files.mimeOf(this, uri)
         mimeStr = mime
         paperTheme = PdfSettings.readerTheme(this)
         night = paperTheme == 1
-        zoom = PdfSettings.defaultZoom(this).coerceIn(1f, 2.5f)
+        zoom = PdfSettings.defaultZoom(this).coerceIn(0.5f, 2.5f)
 
         baseW = resources.displayMetrics.widthPixels
         uriStr = uri.toString()
@@ -511,6 +540,8 @@ class ViewerActivity : AppCompatActivity() {
                 layoutManager = lm
                 adapter = pageAdapter
                 setItemViewCacheSize(2)
+                // Android's edge stretch makes the document appear to bounce at scroll limits.
+                overScrollMode = View.OVER_SCROLL_NEVER
                 addOnScrollListener(object : RecyclerView.OnScrollListener() {
                     override fun onScrolled(r: RecyclerView, dx: Int, dy: Int) {
                         val p = lm.findFirstVisibleItemPosition()
@@ -527,8 +558,8 @@ class ViewerActivity : AppCompatActivity() {
             scroll = PinchScroll(this).apply {
                 isHorizontalScrollBarEnabled = false
                 target = rv
-                onCommit = { f, fx -> setZoom(zoom * f, fx) }
-                onDouble = { fx -> setZoom(if (zoom > 1.05f) 1f else 2f, fx) }
+                onCommit = { f, fx, fy, finish -> setZoom(zoom * f, fx, fy, finish) }
+                onDouble = { fx, fy -> setZoom(if (zoom > 1.05f) 1f else 2f, fx, fy) }
                 addView(rv, FrameLayout.LayoutParams(baseW, MATCH))
             }
             stage.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -560,12 +591,12 @@ class ViewerActivity : AppCompatActivity() {
                 setPadding(dp(10), dp(6), dp(6), dp(6))
             }
             tb.add(icon(R.drawable.ic_zoom_out, C.TEXT, 22).asButton("Perkecil").apply {
-                setOnClickListener { setZoom(zoom - 0.5f, baseW / 2f) }
+                setOnClickListener { setZoom(zoom - 0.5f, baseW / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             zoomLabel = tv("100%", 13f, C.TEXT, true).apply { gravity = Gravity.CENTER }
             tb.add(zoomLabel, w = dp(52))
             tb.add(icon(R.drawable.ic_zoom_in, C.TEXT, 22).asButton("Perbesar").apply {
-                setOnClickListener { setZoom(zoom + 0.5f, baseW / 2f) }
+                setOnClickListener { setZoom(zoom + 0.5f, baseW / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             if (!secure) tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
                 setOnClickListener { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } }
@@ -628,7 +659,7 @@ class ViewerActivity : AppCompatActivity() {
             baseW = w
             gen++
             cache.evictAll()
-            rv.layoutParams = FrameLayout.LayoutParams((baseW * zoom).toInt(), MATCH)
+            rv.layoutParams = FrameLayout.LayoutParams(max(baseW, (baseW * zoom).toInt()), MATCH)
             pageAdapter.notifyDataSetChanged()
             rv.post {
                 (rv.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(page, 0)
@@ -688,7 +719,7 @@ class ViewerActivity : AppCompatActivity() {
                 if (isFinishing || isDestroyed) { try { ready?.destroy() } catch (_: Throwable) {}; r.getOrNull()?.close(); return@runOnUiThread }
                 r.onSuccess { doc ->
                     officeDoc?.close(); officeDoc = doc
-                    val auto = intent.getBooleanExtra(EXTRA_AUTO_PRINT, false) && !secure
+                    val auto = intent.getBooleanExtra(EXTRA_AUTO_PRINT, false) && Integrity.isInternal(intent) && !secure
                     val wv = try {
                         Result.success(OfficeView.load(ready ?: OfficeView.newWebView(this, doc.kind), doc, if (!auto) null else {
                             { if (!isFinishing && !isDestroyed) officeWeb?.let { OfficeView.print(this, it, name) } }
@@ -700,7 +731,8 @@ class ViewerActivity : AppCompatActivity() {
                     } catch (e: Throwable) { Result.failure(e) }
                     wv.onSuccess {
                         officeWeb = it
-                        if (secure) lockWeb(it)
+                        it.overScrollMode = View.OVER_SCROLL_NEVER
+                        if (secure) { lockWeb(it); AiShield.apply(it) }
                         holder.removeAllViews()
                         holder.addView(it, FrameLayout.LayoutParams(MATCH, MATCH))
                         // garis kemajuan baca yang sama dengan PDF, mengikuti posisi gulir dokumen
@@ -1055,7 +1087,7 @@ class ViewerActivity : AppCompatActivity() {
                 setPadding(dp(10), dp(8), dp(10), dp(8))
                 gravity = Gravity.CENTER
                 setOnClickListener {
-                    setZoom(zoomVal[idx], baseW / 2f)
+                    setZoom(zoomVal[idx], baseW / 2f, scroll.height / 2f)
                     PdfSettings.setDefaultZoom(this@ViewerActivity, zoomVal[idx])
                     dismiss()
                 }
@@ -1117,22 +1149,60 @@ class ViewerActivity : AppCompatActivity() {
         zoomLabel.text = "${(zoom * 100).toInt()}%"
     }
 
-    private fun setZoom(z: Float, focusX: Float) {
-        val nz = z.coerceIn(1f, 2.5f)
-        if (abs(nz - zoom) < 0.05f) return
+    private fun setZoom(z: Float, focusX: Float, focusY: Float, finishVisual: (() -> Unit)? = null) {
+        // Allow zooming below 100% so the minus button and pinch-out actually shrink the page.
+        val nz = z.coerceIn(0.5f, 2.5f)
+        if (abs(nz - zoom) < 0.05f) { finishVisual?.invoke(); return }
         val ratio = nz / zoom
         val old = scroll.scrollX
         val lm = rv.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
         val firstPos = lm?.findFirstVisibleItemPosition() ?: 0
         val firstView = lm?.findViewByPosition(firstPos)
-        val topOffset = firstView?.top ?: 0
+        // Preserve the page point under the pinch focus vertically as well as horizontally.
+        val anchorView = (0 until rv.childCount).asSequence()
+            .map { rv.getChildAt(it) }
+            .firstOrNull { focusY >= it.top && focusY < it.bottom }
+        val anchorPos = anchorView?.let { rv.getChildAdapterPosition(it) }
+            ?.takeIf { it != RecyclerView.NO_POSITION } ?: firstPos
+        val anchorHeight = anchorView?.height?.takeIf { it > 0 } ?: firstView?.height ?: 1
+        val anchorFraction = anchorView?.let {
+            ((focusY - it.top) / it.height.coerceAtLeast(1)).coerceIn(0f, 1f)
+        } ?: 0f
 
         zoom = nz
         refreshMode()
-        rv.layoutParams = FrameLayout.LayoutParams((baseW * zoom).toInt(), MATCH)
+        // Keep the existing page rasters while changing the layout size. Evicting them here made every
+        // visible page render again in sequence, which looked like a refresh wave after each pinch.
+        // Cached bitmaps scale with their ImageViews; pages without a cached raster render at this zoom.
+        rv.layoutParams = FrameLayout.LayoutParams(max(baseW, (baseW * zoom).toInt()), MATCH)
         pageAdapter.notifyDataSetChanged()
-        lm?.scrollToPositionWithOffset(firstPos, topOffset)
-        scroll.post { scroll.scrollTo(((old + focusX) * ratio - focusX).toInt().coerceAtLeast(0), 0) }
+        val estimatedHeight = (anchorHeight * ratio).roundToInt().coerceAtLeast(1)
+        val expectedTop = (focusY - anchorFraction * estimatedHeight).roundToInt()
+        lm?.scrollToPositionWithOffset(anchorPos, expectedTop)
+        val targetX = ((old + focusX) * ratio - focusX).roundToInt().coerceAtLeast(0)
+
+        // Apply the final scroll correction and remove the temporary pinch transform just before draw.
+        // This avoids drawing the old-scale frame between the live pinch and the resized pages.
+        val observer = object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (rv.viewTreeObserver.isAlive) rv.viewTreeObserver.removeOnPreDrawListener(this)
+                val page = lm?.findViewByPosition(anchorPos)
+                if (page != null) {
+                    val wantedTop = (focusY - anchorFraction * page.height).roundToInt()
+                    val drift = page.top - wantedTop
+                    if (drift != 0) rv.scrollBy(0, drift)
+                }
+                scroll.scrollTo(targetX, 0)
+                finishVisual?.invoke()
+                return true
+            }
+        }
+        rv.viewTreeObserver.addOnPreDrawListener(observer)
+        // A defensive fallback for a detached/hidden reader where a pre-draw may not run.
+        rv.postDelayed({
+            if (rv.viewTreeObserver.isAlive) rv.viewTreeObserver.removeOnPreDrawListener(observer)
+            finishVisual?.invoke()
+        }, 250L)
     }
 
     private var paperTheme = 0 // 0 = Siang, 1 = Malam, 2 = Sepia, 3 = Hijau Eye-Care
@@ -1158,7 +1228,12 @@ class ViewerActivity : AppCompatActivity() {
         val a = aspects.getOrNull(pos)?.takeIf { it > 0f } ?: aspect0
         val th = max(1, (tw * a).roundToInt())
         (iv.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
-            if (lp.width != tw || lp.height != th) { lp.width = tw; lp.height = th; iv.layoutParams = lp }
+            val side = max(dp(8), ((baseW - tw) / 2f).roundToInt())
+            if (lp.width != tw || lp.height != th || lp.leftMargin != side || lp.rightMargin != side) {
+                lp.width = tw; lp.height = th
+                lp.setMargins(side, lp.topMargin, side, lp.bottomMargin)
+                iv.layoutParams = lp
+            }
         }
     }
 

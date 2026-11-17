@@ -19,6 +19,16 @@ class DepupApp : Application() {
         // Berkas setelan yang dibaca saat aplikasi mulai: getSharedPreferences langsung memulai pemuatannya di thread
         // latar, jadi ketiganya dibaca dari disk BERSAMAAN — pembacaan pertama di bawah tidak lagi menunggu satu per satu.
         for (n in PREFS_AT_START) getSharedPreferences(n, MODE_PRIVATE)
+        Integrity.init(this)
+        // Salinan terdekripsi yang tertinggal (aplikasi ditutup paksa saat membaca dokumen terkunci) dihapus di latar.
+        val started = System.currentTimeMillis()
+        Thread {
+            try {
+                // hanya sisa sesi sebelumnya (lebih tua dari proses ini) — salinan yang sedang dibuka tidak tersentuh
+                java.io.File(cacheDir, "unlocked").listFiles()?.filter { it.lastModified() < started }?.forEach { it.deleteRecursively() }
+                cacheDir.listFiles()?.filter { it.name.startsWith("decrypted_") && it.lastModified() < started }?.forEach { it.delete() }
+            } catch (_: Throwable) {}
+        }.start()
         Perf.init(this)
         Fonts.warm(this)
         Glass.init(this)

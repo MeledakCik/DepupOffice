@@ -39,6 +39,7 @@ class SecureGuard(private val a: Activity) {
         if (on) return
         on = true
         a.window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        AiShield.protect(a)   // Assist/AI layar, Content Capture, aksesibilitas non-alat-bantu
         if (Build.VERSION.SDK_INT >= 33) try { a.setRecentsScreenshotEnabled(false) } catch (_: Throwable) {}
         if (Build.VERSION.SDK_INT >= 35) try {
             val cb = java.util.function.Consumer<Int> { st ->
