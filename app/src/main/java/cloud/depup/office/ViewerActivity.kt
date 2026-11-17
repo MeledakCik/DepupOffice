@@ -51,13 +51,11 @@ class PinchScroll(ctx: Context) : HorizontalScrollView(ctx) {
             return true
         }
         override fun onScaleEnd(d: ScaleGestureDetector) {
+            target?.scaleX = 1f
+            target?.scaleY = 1f
             val f = live
             live = 1f
-            target?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(160L)
-                ?.setInterpolator(Motion.STANDARD)
-                ?.withEndAction {
-                    onCommit?.invoke(f, d.focusX)
-                }?.start() ?: onCommit?.invoke(f, d.focusX)
+            onCommit?.invoke(f, d.focusX)
         }
     })
 
@@ -1121,8 +1119,6 @@ class ViewerActivity : AppCompatActivity() {
         val old = scroll.scrollX
         zoom = nz
         refreshMode()
-        gen++
-        cache.evictAll()
         rv.layoutParams = FrameLayout.LayoutParams((baseW * zoom).toInt(), MATCH)
         pageAdapter.notifyDataSetChanged()
         scroll.post { scroll.scrollTo(((old + focusX) * ratio - focusX).toInt().coerceAtLeast(0), 0) }
