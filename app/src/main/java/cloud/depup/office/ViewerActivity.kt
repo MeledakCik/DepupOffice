@@ -1105,7 +1105,12 @@ class ViewerActivity : AppCompatActivity() {
         night = !night
         paintMoon()
         refreshMode()
+        val lm = rv.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
+        val firstPos = lm?.findFirstVisibleItemPosition() ?: 0
+        val firstView = lm?.findViewByPosition(firstPos)
+        val topOffset = firstView?.top ?: 0
         pageAdapter.notifyDataSetChanged()
+        lm?.scrollToPositionWithOffset(firstPos, topOffset)
     }
 
     private fun refreshMode() {
@@ -1117,10 +1122,16 @@ class ViewerActivity : AppCompatActivity() {
         if (abs(nz - zoom) < 0.05f) return
         val ratio = nz / zoom
         val old = scroll.scrollX
+        val lm = rv.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
+        val firstPos = lm?.findFirstVisibleItemPosition() ?: 0
+        val firstView = lm?.findViewByPosition(firstPos)
+        val topOffset = firstView?.top ?: 0
+
         zoom = nz
         refreshMode()
         rv.layoutParams = FrameLayout.LayoutParams((baseW * zoom).toInt(), MATCH)
         pageAdapter.notifyDataSetChanged()
+        lm?.scrollToPositionWithOffset(firstPos, topOffset)
         scroll.post { scroll.scrollTo(((old + focusX) * ratio - focusX).toInt().coerceAtLeast(0), 0) }
     }
 
