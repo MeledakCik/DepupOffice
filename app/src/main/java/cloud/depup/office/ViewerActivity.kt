@@ -1189,14 +1189,14 @@ class ViewerActivity : AppCompatActivity() {
             }
             val tw = (baseW * zoom).toInt() - dp(16)
             sizePage(h.iv, pos, tw)
+            h.iv.alpha = 1f
             val c = cache.get(pos)
             if (c != null) { h.iv.setImageBitmap(c); return }
-            h.iv.setImageDrawable(null)
             val myGen = gen
             exec.execute {
                 // Saat di-scroll cepat, halaman yang sudah lewat tidak perlu dirender lagi.
                 if (myGen != gen || h.iv.tag != pos) return@execute
-                cache.get(pos)?.let { c -> runOnUiThread { if (h.iv.tag == pos && myGen == gen) h.iv.setImageBitmap(c) }; return@execute }
+                cache.get(pos)?.let { c -> runOnUiThread { if (h.iv.tag == pos && myGen == gen) { h.iv.alpha = 1f; h.iv.setImageBitmap(c) } }; return@execute }
                 fun once(maxPx: Int) = synchronized(lock) {
                     val r = renderer
                     if (r == null) null else Pdf.render(r, pos, 1f, tw, maxPx).also { rd ->
@@ -1221,9 +1221,8 @@ class ViewerActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (h.iv.tag == pos && myGen == gen) {
                             sizePage(h.iv, pos, tw)   // halaman berukuran lain dari perkiraan: tingginya dikoreksi
+                            h.iv.alpha = 1f
                             h.iv.setImageBitmap(bmp)
-                            // satu gambar → pudar tanpa lapisan offscreen (aman di dalam wadah kaca)
-                            if (Motion.on()) { h.iv.forceHasOverlappingRendering(false); h.iv.alpha = 0f; h.iv.animate().alpha(1f).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start() }
                         }
                     }
                 }
