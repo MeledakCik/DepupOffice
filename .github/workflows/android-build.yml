@@ -83,7 +83,7 @@ jobs:
       - name: Unit tests (QC)
         run: |
           chmod +x gradlew
-          ./gradlew testReleaseUnitTest --stacktrace
+          ./gradlew testDebugUnitTest --stacktrace
 
       - name: Build release APK & AAB
         env:
