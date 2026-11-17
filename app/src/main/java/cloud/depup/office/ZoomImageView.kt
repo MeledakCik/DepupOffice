@@ -21,7 +21,6 @@ class ZoomImageView @JvmOverloads constructor(
 ) : AppCompatImageView(ctx, attrs, defStyle) {
 
     private val imgMatrix = Matrix()
-    private val prevMatrix = Matrix()
     private var mode = NONE
 
     var zoomScale = 1f
@@ -29,8 +28,6 @@ class ZoomImageView @JvmOverloads constructor(
     private val minScale = 1f
     private val maxScale = 5f
 
-    private var startX = 0f
-    private var startY = 0f
     var onZoomChanged: ((Float) -> Unit)? = null
 
     private val scaleDetector = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -122,7 +119,10 @@ class ZoomImageView @JvmOverloads constructor(
         val vw = width.toFloat()
         val vh = height.toFloat()
 
-        if (dw <= 0f || dh <= 0f || vw <= 0f || vh <= 0f) return
+        if (dw <= 0f || dh <= 0f || vw <= 0f || vh <= 0f) {
+            post { if (width > 0 && height > 0) resetZoom() }
+            return
+        }
 
         val scaleX = vw / dw
         val scaleY = vh / dh
@@ -137,6 +137,9 @@ class ZoomImageView @JvmOverloads constructor(
         onZoomChanged?.invoke(zoomScale)
     }
 
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         gestureDetector.onTouchEvent(event)
@@ -147,24 +150,26 @@ class ZoomImageView @JvmOverloads constructor(
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                prevMatrix.set(imgMatrix)
-                startX = currentX
-                startY = currentY
+                lastTouchX = currentX
+                lastTouchY = currentY
                 mode = DRAG
                 parent?.requestDisallowInterceptTouchEvent(zoomScale > 1.05f)
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 mode = ZOOM
+                lastTouchX = currentX
+                lastTouchY = currentY
             }
             MotionEvent.ACTION_MOVE -> {
-                if (mode == DRAG && zoomScale > 1.05f) {
-                    val dx = currentX - startX
-                    val dy = currentY - startY
-                    imgMatrix.set(prevMatrix)
+                if (!scaleDetector.isInProgress && zoomScale > 1.05f) {
+                    val dx = currentX - lastTouchX
+                    val dy = currentY - lastTouchY
                     imgMatrix.postTranslate(dx, dy)
                     checkMatrixAndBounds()
                     parent?.requestDisallowInterceptTouchEvent(true)
                 }
+                lastTouchX = currentX
+                lastTouchY = currentY
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 mode = NONE
