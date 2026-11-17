@@ -386,6 +386,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                 }
                 .create()
 
+            dialog.inheritSecure(activity)
             dialog.show()
         }
 

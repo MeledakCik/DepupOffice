@@ -181,6 +181,72 @@ class ViewerActivity : AppCompatActivity() {
     private lateinit var pageBadge: TextView
     private lateinit var zoomLabel: TextView
     private var protectedBytes: ByteArray? = null
+    /** Proteksi Word ("hanya bisa diedit dengan password") — untuk memverifikasi password sebelum berbagi/ekspor. */
+    private var docxProt: DocxProtect.Prot? = null
+    /** Berkas yang dibuka pengguna (bukan salinan cache / terdekripsi). */
+    private var srcUri: android.net.Uri? = null
+    private var gateFails = 0
+    private var gateLockUntil = 0L
+
+    /**
+     * Berkas yang boleh DIBAGIKAN: untuk dokumen terkunci selalu bentuk ASLI yang masih terenkripsi/terkunci,
+     * tidak pernah salinan terdekripsi di cache (dulu Dokumen Terlindungi ikut terbagi dalam bentuk terbuka).
+     */
+    private fun shareTarget(viewUri: android.net.Uri): android.net.Uri = when {
+        protectedBytes != null -> srcUri ?: viewUri
+        lockedSource != null -> lockedSource!!
+        else -> viewUri
+    }
+
+    /** Password pemilik/guru benar? Dokumen Terlindungi: password edit guru; PDF terkunci: password PEMILIK; Word: password edit. */
+    private fun ownerPasswordOk(pw: String): Boolean {
+        if (pw.isEmpty()) return false
+        protectedBytes?.let { return ProtectedDoc.verifyEditPassword(it, pw) }
+        lockedSource?.let { src ->
+            return try {
+                val b = contentResolver.openInputStream(src)?.use { it.readBytes() } ?: return false
+                PdfFile.open(b, pw).ownerAuth
+            } catch (_: Throwable) { false }
+        }
+        docxProt?.let { return it.check(pw) }
+        return false
+    }
+
+    /**
+     * Gerbang untuk SEMUA fitur yang membagikan / mengekspor / menyimpan isi dokumen (bagikan, cetak, sedot foto,
+     * susun halaman, tanda tangan, ekspor asli). Dokumen biasa langsung lanjut; dokumen terkunci wajib password
+     * pemilik/guru. Salah 5× → dikunci 30 detik (menahan tebak-tebakan).
+     */
+    private fun requirePassword(what: String, action: () -> Unit) {
+        if (!secure) { action(); return }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now < gateLockUntil) { toast("Terlalu banyak percobaan. Coba lagi dalam ${(gateLockUntil - now) / 1000 + 1} detik."); return }
+        val pwField = field(when { protectedBytes != null -> "Password Edit Guru"; docxProt != null -> "Password Edit Dokumen"; else -> "Password Pemilik PDF" }, pin = false).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val d = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(what)
+            .setView(vbox(16).apply {
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                add(tv("Dokumen ini terlindungi. Masukkan password pemilik/guru untuk melanjutkan.", 13f, C.TEXT))
+                add(pwField, top = 8)
+            })
+            .setPositiveButton("Lanjut") { _, _ ->
+                val pw = pwField.text.toString()
+                work("Memeriksa password…", { ownerPasswordOk(pw) }) { r ->
+                    if (r.getOrDefault(false)) { gateFails = 0; action() }
+                    else {
+                        gateFails++
+                        if (gateFails >= 5) { gateFails = 0; gateLockUntil = android.os.SystemClock.elapsedRealtime() + 30_000L }
+                        toast("Password salah")
+                    }
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .create()
+        d.inheritSecure(this)
+        d.show()
+    }
     private val invert = ColorMatrixColorFilter(ColorMatrix(floatArrayOf(
         -1f, 0f, 0f, 0f, 255f,
         0f, -1f, 0f, 0f, 255f,
@@ -209,7 +275,7 @@ class ViewerActivity : AppCompatActivity() {
             } catch (_: Exception) {}
 
             var uri = Files.cacheCopy(this, rawUri)
-            if (uri.scheme == "file") secureDocx = uri.path?.let { DocxProtect.of(java.io.File(it)) }?.hasPassword == true
+            if (uri.scheme == "file") uri.path?.let { DocxProtect.of(java.io.File(it)) }?.takeIf { it.hasPassword }?.let { docxProt = it; secureDocx = true }
             if (ProtectedDoc.isProtected(rawBytes)) {
                 protectedBytes = rawBytes
                 try {
@@ -358,6 +424,7 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     private fun build(rawUri: android.net.Uri, uri: android.net.Uri, pdf: OpenedPdf) {
+        srcUri = rawUri
         if (secure) { guard.enable(); AiShield.protect(this) }
 
         val name = nameOverride ?: Files.nameOf(this, rawUri)   // nama berkas ASLI (bukan "open_xxx" dari salinan cache)
@@ -420,7 +487,7 @@ class ViewerActivity : AppCompatActivity() {
         // aksi dokumen Office (diaktifkan oleh renderOffice) — dulu di strip kedua yang memakan tinggi layar
         editBtn = barBtn(icon(R.drawable.ic_edit, C.ACCENT, 22).asButton("Edit dokumen")).apply { visibility = View.GONE }
         printBtn = barBtn(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak / simpan PDF").apply {
-            setOnClickListener { officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } ?: toast("Dokumen masih disiapkan") }
+            setOnClickListener { requirePassword("Cetak Dokumen") { officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } ?: toast("Dokumen masih disiapkan") } }
         }).apply { visibility = View.GONE }
         marked = Meta.isMarked(this, uriStr)
         markBtn = icon(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off, if (marked) C.ACCENT else C.TEXT, 22).asButton(if (marked) "Hapus tanda" else "Tandai dokumen").apply {
@@ -433,22 +500,24 @@ class ViewerActivity : AppCompatActivity() {
         }
         barBtn(markBtn)
         signBtn = barBtn(icon(R.drawable.ic_sign, C.ACCENT, 22).asButton("Tanda tangan & edit PDF").apply {
-            setOnClickListener { showPdfEditDialog(uri, name) }
-        }).apply { visibility = if (isPdfLoaded && lockedSource == null) View.VISIBLE else View.GONE }
+            setOnClickListener { requirePassword("Tanda Tangan & Edit PDF") { showPdfEditDialog(uri, name) } }
+        }).apply { visibility = if (isPdfLoaded && !secure) View.VISIBLE else View.GONE }
 
         barBtn(icon(R.drawable.ic_more, C.TEXT, 22).asButton("Opsi lain").apply {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 val office = officeWeb != null
-                pm.menu.add(0, 1, 0, "Bagikan")
-                if (!secure) pm.menu.add(0, 2, 1, "Cetak Dokumen")
+                // Dokumen terkunci: fitur bagikan/ekspor tetap ada tetapi meminta password pemilik/guru (lihat requirePassword).
+                val lockTag = if (secure) " 🔒" else ""
+                pm.menu.add(0, 1, 0, "Bagikan$lockTag")
+                pm.menu.add(0, 2, 1, "Cetak Dokumen$lockTag")
                 if (isPdfLoaded) pm.menu.add(0, 8, 2, "Bacakan Suara (Voice Reader)")
-                if (isPdfLoaded && lockedSource == null) pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF")
+                if (isPdfLoaded) pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF$lockTag")
                 if (!secure) pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
                 if (isPdfLoaded) pm.menu.add(0, 5, 5, "Lompat Halaman")
                 if (isPdfLoaded) pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
-                if (isPdfLoaded && lockedSource == null) pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar")
-                if (isPdfLoaded && lockedSource == null) pm.menu.add(0, 10, 8, "Susun & Putar Halaman")
+                if (isPdfLoaded) pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar$lockTag")
+                if (isPdfLoaded) pm.menu.add(0, 10, 8, "Susun & Putar Halaman$lockTag")
                 if (isPdfLoaded) pm.menu.add(0, 11, 9, "Mode Slideshow & Presentasi")
                 if (protectedBytes != null) {
                     pm.menu.add(0, 9, 10, "Ekspor PDF Asli (Password Guru)")
@@ -456,14 +525,14 @@ class ViewerActivity : AppCompatActivity() {
                 pm.setOnMenuItemClickListener { m ->
                     try {
                         when (m.itemId) {
-                            1 -> Files.share(this@ViewerActivity, lockedSource ?: uri, mime, false)
-                            2 -> if (office) officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } else PrintHelper.printPdf(this@ViewerActivity, uri, name)
+                            1 -> requirePassword("Bagikan Dokumen") { try { Files.share(this@ViewerActivity, shareTarget(uri), mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
+                            2 -> requirePassword("Cetak Dokumen") { if (office) officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } else PrintHelper.printPdf(this@ViewerActivity, uri, name) }
                             8 -> startVoiceReaderForPdf(uri, name)
-                            3 -> showPdfEditDialog(uri, name)
+                            3 -> requirePassword("Tanda Tangan & Edit PDF") { showPdfEditDialog(uri, name) }
                             4 -> showRenameDialog(rawUri, uri, name)
                             5 -> showJumpPageDialog()
                             6 -> showPdfSettingsSheet()
-                            7 -> {
+                            7 -> requirePassword("Sedot Foto / Ekstrak Gambar") {
                                 val base = Files.baseName(name)
                                 work("Menyedot semua gambar dari PDF…", {
                                     Pdf.extractImagesFromPdf(this@ViewerActivity, uri, base)
@@ -475,36 +544,20 @@ class ViewerActivity : AppCompatActivity() {
                             }
                             9 -> {
                                 val bytes = protectedBytes ?: return@setOnMenuItemClickListener true
-                                val pwField = field("Password Edit Guru", pin = false).apply {
-                                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-                                }
-                                androidx.appcompat.app.AlertDialog.Builder(this@ViewerActivity)
-                                    .setTitle("Ekspor PDF Asli")
-                                    .setView(vbox(16).apply {
-                                        setPadding(dp(16), dp(16), dp(16), dp(16))
-                                        add(tv("Masukkan password edit guru untuk mengekspor dokumen PDF asli:", 13f, C.TEXT))
-                                        add(pwField, top = 8)
-                                    })
-                                    .setPositiveButton("Ekspor") { _, _ ->
-                                        val pw = pwField.text.toString()
-                                        if (ProtectedDoc.verifyEditPassword(bytes, pw)) {
-                                            try {
-                                                val originalBytes = ProtectedDoc.openProtected(bytes)
-                                                val out = Files.namedOut(this@ViewerActivity, "Asli_" + Files.baseName(name), "pdf")
-                                                out.writeBytes(originalBytes)
-                                                toast("PDF asli diekstrak ke Documents/DepUp Office!")
-                                                Files.open(this@ViewerActivity, Files.uriFor(this@ViewerActivity, out), PDF)
-                                            } catch (e: Exception) {
-                                                toast("Gagal mengekstrak: ${e.message}")
-                                            }
-                                        } else {
-                                            toast("Password edit salah")
-                                        }
+                                requirePassword("Ekspor PDF Asli") {
+                                    work("Mengekspor PDF asli…", {
+                                        val out = Files.namedOut(this@ViewerActivity, "Asli_" + Files.baseName(name), "pdf")
+                                        out.writeBytes(ProtectedDoc.openProtected(bytes))
+                                        out
+                                    }) { r ->
+                                        r.onSuccess { out ->
+                                            toast("PDF asli diekspor ke Documents/DepUp Office!")
+                                            Files.open(this@ViewerActivity, Files.uriFor(this@ViewerActivity, out), PDF)
+                                        }.onFailure { toast("Gagal mengekspor: ${it.message}") }
                                     }
-                                    .setNegativeButton("Batal", null)
-                                    .show()
+                                }
                             }
-                            10 -> {
+                            10 -> requirePassword("Susun & Putar Halaman") {
                                 PdfTools.showOrganizeSheet(this@ViewerActivity, uri) { out ->
                                     toast("PDF baru disimpan ke Documents/DepUp Office!")
                                     Files.open(this@ViewerActivity, Files.uriFor(this@ViewerActivity, out), PDF)
@@ -599,13 +652,13 @@ class ViewerActivity : AppCompatActivity() {
                 setOnClickListener { setZoom(zoom + 0.5f, baseW / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             if (!secure) tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
-                setOnClickListener { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } }
+                setOnClickListener { requirePassword("Cetak Dokumen") { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } } }
             }, w = dp(48), h = dp(48), side = 4)
             tb.add(FrameLayout(this).apply {
                 contentDescription = "Bagikan"; isFocusable = true
                 background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(C.ACCENT) }
                 addView(icon(R.drawable.ic_upload, C.ON_PRIMARY, 22), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
-                setOnClickListener { try { Files.share(this@ViewerActivity, lockedSource ?: uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
+                setOnClickListener { requirePassword("Bagikan Dokumen") { try { Files.share(this@ViewerActivity, shareTarget(uri), mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } } }
             }, w = dp(44), h = dp(44), side = 4)
             stage.addView(tb, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(16) })
             floats.add(tb)
@@ -683,7 +736,7 @@ class ViewerActivity : AppCompatActivity() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // aksi Office kini di bilah atas yang sama dengan PDF (tanpa strip kedua)
         if (::subTv.isInitialized) subTv.text = when (kind) { "docx" -> "Dokumen Word"; "xlsx" -> "Lembar kerja Excel"; else -> "Presentasi PowerPoint" }
-        printBtn?.visibility = if (secure) View.GONE else View.VISIBLE
+        printBtn?.visibility = View.VISIBLE   // dokumen terkunci: dicetak hanya setelah password (requirePassword)
         editBtn?.let { b ->
             if (kind == "docx" || kind == "xlsx") {
                 b.visibility = View.VISIBLE
@@ -777,7 +830,7 @@ class ViewerActivity : AppCompatActivity() {
                 val banner = card(16, 16).apply { background = shape(C.SURFACE2, 16, C.LINE, 1) }
                 banner.add(tv("Program Windows (.exe)", 18f, C.TEXT, true))
                 banner.add(tv("Berkas .exe adalah program Windows dan tidak bisa dijalankan di HP. Bila berkas ini hasil \"PDF to EXE\", PDF di dalamnya biasanya bisa diambil otomatis — tetapi kali ini gagal:\n\n$exeError", 13f, C.MUTED), top = 6)
-                banner.add(btn("Bagikan ke aplikasi lain", true, C.ACCENT) { try { Files.share(this, uri, mime, false) } catch (_: Exception) {} }, top = 16)
+                banner.add(btn("Bagikan ke aplikasi lain", true, C.ACCENT) { requirePassword("Bagikan Dokumen") { try { Files.share(this, shareTarget(uri), mime, false) } catch (_: Exception) {} } }, top = 16)
                 banner.add(btn("Tutup Pembaca", false, C.ACCENT) { finish() }, top = 8)
                 paper.add(banner)
             }
@@ -897,7 +950,7 @@ class ViewerActivity : AppCompatActivity() {
                 banner.add(tv(if (kind == "legacy") "Format lama belum didukung" else "Presentasi tidak dapat dibuka", 18f, C.TEXT, true))
                 banner.add(tv(if (kind == "legacy") "Berkas .doc / .ppt (format Office 97–2003) belum bisa ditampilkan di pembaca ini. Buka di Word/PowerPoint lalu simpan ulang sebagai .docx / .pptx."
                     else "Berkas ini rusak atau dilindungi kata sandi.", 13f, C.MUTED), top = 6)
-                banner.add(btn("Bagikan ke aplikasi lain", true, C.ACCENT) { try { Files.share(this, uri, mime, false) } catch (_: Exception) {} }, top = 16)
+                banner.add(btn("Bagikan ke aplikasi lain", true, C.ACCENT) { requirePassword("Bagikan Dokumen") { try { Files.share(this, shareTarget(uri), mime, false) } catch (_: Exception) {} } }, top = 16)
                 paper.add(banner)
             }
             mime.startsWith("text/") || name.endsWith(".txt", ignoreCase = true) || name.endsWith(".md", ignoreCase = true) -> {

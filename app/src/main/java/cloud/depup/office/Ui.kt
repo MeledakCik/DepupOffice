@@ -962,6 +962,15 @@ fun Context.emptyState(iconRes: Int, title: String, msg: String, action: String?
         if (action != null && onAction != null) add(btn(action, false, C.ACCENT) { onAction() }, top = 14, w = WRAP)
     }
 
+/**
+ * Jendela dialog TIDAK mewarisi FLAG_SECURE dari activity: tanpa ini, lembar yang menampilkan isi dokumen terkunci
+ * (slideshow, susun halaman, pembaca suara) bisa ditangkap layar / direkam.
+ */
+fun Dialog.inheritSecure(owner: Activity) {
+    val secure = (owner.window?.attributes?.flags ?: 0) and WindowManager.LayoutParams.FLAG_SECURE != 0
+    if (secure) window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+}
+
 // ================= BOTTOM SHEET =================
 
 /** Dialog bergaya bottom sheet (sudut atas 24dp, handle, latar redup). */
@@ -994,6 +1003,7 @@ fun AppCompatActivity.sheet(build: (body: LinearLayout, dismiss: () -> Unit) -> 
         if (code == android.view.KeyEvent.KEYCODE_BACK && ev.action == android.view.KeyEvent.ACTION_UP) { close(); true } else false
     }
     d.setContentView(ScrollView(this).apply { addView(body) })
+    d.inheritSecure(this)
     d.window?.apply {
         setBackgroundDrawable(ColorDrawable(0))
         setGravity(Gravity.BOTTOM)

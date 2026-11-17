@@ -7,7 +7,6 @@ import android.widget.EditText
 import android.widget.ScrollView
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
-import java.util.UUID
 
 /**
  * Pengelola Dokumen Terlindungi (Protected Document Manager).
@@ -26,7 +25,6 @@ object ProtectedDocumentManager {
         val baseName = Files.baseName(name)
 
         var userPwEnabled = false
-        var teacherPwEnabled = false
 
         val fUserPw = activity.field("Password Pembuka PDF", pin = false).apply {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -36,7 +34,9 @@ object ProtectedDocumentManager {
         }
 
         val fTeacherPw = activity.field("Password Edit Guru / Pemilik", pin = false).apply {
-            setText("1234")
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val fTeacherPwConfirm = activity.field("Konfirmasi Password Guru", pin = false).apply {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
 
@@ -89,20 +89,19 @@ object ProtectedDocumentManager {
                 isChecked = true
             }
 
+            // Password guru WAJIB: dipakai untuk membuka batasan PDF dan untuk SEMUA fitur bagikan/ekspor/cetak
+            // dokumen terlindungi. Dulu bisa kosong → diam-diam memakai "1234" yang bisa ditebak siapa saja.
             val chkTeacherPw = CheckBox(activity).apply {
-                text = "Set Password Edit Guru / Pemilik (Master Password)"
+                text = "Password Edit Guru / Pemilik (wajib — diminta untuk bagikan, ekspor, cetak & sedot foto)"
                 setTextColor(C.TEXT)
                 isChecked = true
+                isEnabled = false
             }
 
             val teacherPwContainer = activity.vbox(6).apply {
                 add(activity.tv("Masukkan Password Edit Guru:", 12f, C.MUTED))
                 add(fTeacherPw)
-            }
-
-            chkTeacherPw.setOnCheckedChangeListener { _, isChecked ->
-                teacherPwEnabled = isChecked
-                teacherPwContainer.visibility = if (isChecked) View.VISIBLE else View.GONE
+                add(fTeacherPwConfirm, top = 4)
             }
 
             val formBox = activity.vbox(10).apply {
@@ -135,9 +134,21 @@ object ProtectedDocumentManager {
                         }
                     }
 
-                    val teacherPw = if (teacherPwEnabled) fTeacherPw.text.toString().trim() else "1234"
-                    if (teacherPwEnabled && teacherPw.length < 4) {
-                        activity.toast("Password edit guru minimal 4 karakter")
+                    val teacherPw = fTeacherPw.text.toString().trim()
+                    if (teacherPw.length < 6) {
+                        activity.toast("Password edit guru minimal 6 karakter")
+                        return@btn
+                    }
+                    if (teacherPw != fTeacherPwConfirm.text.toString().trim()) {
+                        activity.toast("Konfirmasi password guru tidak sama")
+                        return@btn
+                    }
+                    if (teacherPw == "1234" || teacherPw == "123456" || teacherPw.toSet().size == 1) {
+                        activity.toast("Password guru terlalu mudah ditebak")
+                        return@btn
+                    }
+                    if (userPwEnabled && teacherPw == userPw) {
+                        activity.toast("Password guru harus berbeda dari password pembuka")
                         return@btn
                     }
 
@@ -179,7 +190,8 @@ object ProtectedDocumentManager {
             val originalBytes = activity.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: throw IllegalStateException("Tidak dapat membaca file PDF")
 
-            val ownerPw = if (teacherPassword.isNotBlank()) teacherPassword else UUID.randomUUID().toString()
+            require(teacherPassword.isNotBlank()) { "Password guru wajib diisi" }
+            val ownerPw = teacherPassword
             val perms = PdfSave.Perms(print = canPrint, copy = canCopy, modify = canModify, annotate = canModify)
 
             // Step 1: Kunci Izin & Password Pembuka (AES-256)

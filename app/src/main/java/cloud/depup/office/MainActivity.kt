@@ -2739,8 +2739,8 @@ class MainActivity : AppCompatActivity() {
             .setView(box)
             .setPositiveButton("Lindungi") { _, _ ->
                 val editPw = pwField.text.toString().trim()
-                if (editPw.length < 4) {
-                    toast("Password edit minimal 4 karakter")
+                if (editPw.length < 6 || editPw == "123456" || editPw.toSet().size == 1) {
+                    toast("Password edit minimal 6 karakter dan tidak mudah ditebak")
                     return@setPositiveButton
                 }
                 val base = Files.baseName(Files.nameOf(this, uri))
