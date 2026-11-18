@@ -133,7 +133,7 @@ object LiquidGlass {
     }
 
     /** Urutan nilai uniform di [LiquidFx.update]. */
-    const val U = 28
+    const val U = 29
 
     /**
      * Shader AGSL. `content` = isi di belakang kaca yang SUDAH di-blur (efek blur dirantai lebih dulu).
@@ -156,6 +156,7 @@ uniform float spec;         // kekuatan highlight spekular
 uniform float px;           // 1 dp dalam px
 uniform float4 box;         // batas aman sampel = area kaca yang tampil (kiri, atas, kanan, bawah)
 uniform float2 band;        // pita kontras adaptif dari setelan transparansi: (min. kaca terang, maks. kaca gelap)
+uniform float mag;          // pembesaran lensa ke arah pusat bentuk (0 = datar; 0,15 ≈ isi tampak 1,18×)
 
 float sdRoundRect(float2 p, float2 b, float r) {
     float2 q = abs(p) - b + float2(r, r);
@@ -219,6 +220,8 @@ half4 main(float2 xy) {
         tf = touch.z * exp(-dot(dv, dv) / (2.0 * touch.w * touch.w));
         disp -= dv * (0.16 * tf);
     }
+    // 6c. lensa pembesar (lensa tab): seluruh isi di dalam bentuk ditarik ke pusat -> tampak membesar
+    if (mag > 0.0001) { disp -= (xy - origin - size * 0.5) * mag; }
     float2 lo = box.xy;
     float2 hi = box.zw;
 
@@ -295,7 +298,7 @@ internal class LiquidFx {
 
     /**
      * [u] berisi: origin(2) size(2) radius slab bezel refraction dispersion light(2) tint(4) dark touch(4) spec px
-     * box(4) band(2). Mengembalikan true bila efek baru dibuat (pasang ulang ke node / tampilan).
+     * box(4) band(2) mag. Mengembalikan true bila efek baru dibuat (pasang ulang ke node / tampilan).
      */
     fun update(u: FloatArray, blur: Float): Boolean {
         if (effect != null && blur == lastBlur && u.contentEquals(last)) return false
@@ -316,6 +319,7 @@ internal class LiquidFx {
         s.setFloatUniform("px", u[21])
         s.setFloatUniform("box", u[22], u[23], u[24], u[25])
         s.setFloatUniform("band", u[26], u[27])
+        s.setFloatUniform("mag", u[28])
         val glass = RenderEffect.createRuntimeShaderEffect(s, "content")
         effect = if (blur > 0f) RenderEffect.createChainEffect(glass, blurFx(blur)) else glass
         return true
@@ -379,6 +383,7 @@ internal class LensDrawable(
         s.setFloatUniform("px", density)
         s.setFloatUniform("box", b.left + 0.5f, b.top + 0.5f, b.right - 0.5f, b.bottom - 0.5f)
         s.setFloatUniform("band", Glass.toneFloor(), Glass.toneCap())
+        s.setFloatUniform("mag", 0f)
         paint.shader = s
     }
 

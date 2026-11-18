@@ -302,6 +302,7 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         u[22] = mx + 1.5f; u[23] = my + top + 1.5f; u[24] = mx + w - 1.5f; u[25] = my + height - 1.5f
         // pita kontras adaptif dari setelan transparansi (bening ↔ pekat)
         u[26] = Glass.toneFloor(); u[27] = Glass.toneCap()
+        u[28] = 0f   // bilah kaca datar (pembesaran hanya untuk lensa tab)
     }
 
     /** Android 10–11: gambar isi ke bitmap kecil + blur, dipanggil tepat sebelum tiap frame. */
