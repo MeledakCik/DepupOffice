@@ -11,8 +11,10 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.RenderNode
 import android.graphics.Shader
 import android.graphics.drawable.RippleDrawable
+import android.os.Build
 import android.view.Choreographer
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -145,40 +147,59 @@ class PillIndicator(private val host: View) {
         return now
     }
 
-    fun draw(c: Canvas) {
+    fun draw(c: Canvas) { drawFill(c); drawEdges(c, false) }
+
+    /** Isi pil: kapsul solid, memudar ke kaca bening ([glass]) sebanding seberapa terangkat. */
+    fun drawFill(c: Canvas) {
         val r = rect() ?: return
         val rad = r.height() / 2f
         val lf = lift
         if (lf < 0.01f) { c.drawRoundRect(r, rad, rad, paint); return }
-        // kapsul solid -> kaca bening sebanding seberapa terangkat
         fill.color = mixColor(paint.color, glass, lf)
         c.drawRoundRect(r, rad, rad, fill)
+    }
+
+    /**
+     * Tepi lensa, digambar DI ATAS isi & ikon: garis luar tipis, tepi pelangi (setelan Dispersi), dan — bila [real]
+     * false (tanpa shader kaca) — kilau & tepi terang tiruan. Dengan shader ([real] = true) kilau, cahaya tepi &
+     * refraksi sudah dihitung shader kaca cair yang sama dengan navigasi.
+     */
+    fun drawEdges(c: Canvas, real: Boolean) {
+        val lf = lift
+        if (lf < 0.01f) return
+        val r = rect() ?: return
+        val rad = r.height() / 2f
         // garis luar tipis supaya kaca bening tetap terlihat di atas bilah terang
         if (!C.dark) {
             rim.strokeWidth = 1f * dp
-            rim.color = Color.argb((34 * lf).roundToInt(), 0, 0, 0)
+            rim.color = Color.argb(((if (real) 26 else 34) * lf).roundToInt(), 0, 0, 0)
             c.drawRoundRect(r, rad, rad, rim)
         }
-        // kilau kaca: pantulan lembut di separuh atas
-        sheen.shader = LinearGradient(0f, r.top, 0f, r.centerY(),
-            Color.argb((64 * lf).roundToInt(), 255, 255, 255), 0, Shader.TileMode.CLAMP)
-        c.drawRoundRect(r, rad, rad, sheen)
+        if (!real) {
+            // kilau kaca tiruan: pantulan lembut di separuh atas
+            sheen.shader = LinearGradient(0f, r.top, 0f, r.centerY(),
+                Color.argb((64 * lf).roundToInt(), 255, 255, 255), 0, Shader.TileMode.CLAMP)
+            c.drawRoundRect(r, rad, rad, sheen)
+        }
         // dispersi: tepi pelangi tipis, bergeser searah gerak (lebih kuat saat melaju)
         if (LiquidGlass.DISPERSION && !Perf.low) {
+            val k = if (real) 0.8f else 1f
             val off = (1.2f + 2.4f * speed()) * dp * lf * dir
             rim.strokeWidth = 1.6f * dp
-            rim.color = Color.argb((120 * lf).roundToInt(), 255, 64, 160)
+            rim.color = Color.argb((120 * lf * k).roundToInt(), 255, 64, 160)
             c.drawRoundRect(r.left + off, r.top, r.right + off, r.bottom, rad, rad, rim)
-            rim.color = Color.argb((120 * lf).roundToInt(), 40, 200, 255)
+            rim.color = Color.argb((120 * lf * k).roundToInt(), 40, 200, 255)
             c.drawRoundRect(r.left - off, r.top, r.right - off, r.bottom, rad, rad, rim)
-            rim.color = Color.argb((90 * lf).roundToInt(), 255, 220, 60)
+            rim.color = Color.argb((90 * lf * k).roundToInt(), 255, 220, 60)
             c.drawRoundRect(r.left + off * 0.35f, r.top - 0.6f * dp * lf, r.right + off * 0.35f, r.bottom - 0.6f * dp * lf, rad, rad, rim)
         }
-        // tepi kaca terang
-        rim.strokeWidth = 1.2f * dp
-        rim.color = Color.argb((150 * lf).roundToInt(), 255, 255, 255)
-        tmp.set(r); tmp.inset(0.6f * dp, 0.6f * dp)
-        c.drawRoundRect(tmp, rad, rad, rim)
+        if (!real) {
+            // tepi kaca terang tiruan
+            rim.strokeWidth = 1.2f * dp
+            rim.color = Color.argb((150 * lf).roundToInt(), 255, 255, 255)
+            tmp.set(r); tmp.inset(0.6f * dp, 0.6f * dp)
+            c.drawRoundRect(tmp, rad, rad, rim)
+        }
     }
 
     /** Pindah ke [v]. Tanpa animasi bila [animate] false / belum ada posisi awal / animasi HP dimatikan. */
@@ -308,7 +329,8 @@ internal fun View.squish(to: Float = 0.95f, onFrame: (() -> Unit)? = null) {
 /**
  * Bilah tab bawah.
  * - Satu pil tinta meluncur antar-tab dengan pegas (lihat [PillIndicator]); selama bergerak pil terangkat menjadi
- *   lensa kaca, ikon yang dilewatinya berubah warna & membesar mengikuti seberapa tertutup mereka.
+ *   lensa kaca — Android 13+: shader kaca cair yang sama dengan navigasi ([TabLensFx]), selain itu tiruan kanvas.
+ *   Ikon yang dilewatinya berubah warna & membesar mengikuti seberapa tertutup mereka; diam = kapsul solid lagi.
  * - Seret mendatar di atas bilah: lensa mengikuti jari (getar halus tiap melewati tab); saat dilepas, tab di
  *   bawahnya terpilih dan lensa menempel ke sana.
  * - Nama tab terpilih membuka (lebar, jarak, transparansi) dan nama tab lama menutup bersamaan dengan gerak pil;
@@ -555,7 +577,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
             val ci = mixColor(C.MUTED, onLens, cov)
             if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
             // pembesaran lensa: ikon di bawah lensa yang terangkat tampak membesar
-            val sc = 1f + 0.18f * lift * cov
+            val sc = if (realGlass) 1f else 1f + 0.18f * lift * cov   // shader membesarkan sendiri
             if (abs(t.icon.scaleX - sc) > 0.002f) { t.icon.scaleX = sc; t.icon.scaleY = sc }
             if (onLens != t.labelColor) { t.labelColor = onLens; t.label.setTextColor(onLens) }
             val lw = t.label.width
@@ -571,9 +593,88 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         tint()
     }
 
+    /** Lensa kaca shader (Android 13+); null = belum dibuat / tidak tersedia (lensa kanvas). */
+    private var lensFx: TabLensFx? = null
+    /** true bila frame terakhir memakai kaca shader (pembesaran ikon dilakukan shader, bukan skala tampilan). */
+    private var realGlass = false
+
+    private fun drawKids(c: Canvas) = super.dispatchDraw(c)
+
     override fun dispatchDraw(canvas: Canvas) {
-        ind.draw(canvas)
+        ind.drawFill(canvas)
         super.dispatchDraw(canvas)
+        val lf = ind.lift
+        val r = if (lf > 0.01f) ind.rect()?.let { RectF(it) } else null
+        var real = false
+        if (r != null && Build.VERSION.SDK_INT >= 33 && LiquidGlass.active() && canvas.isHardwareAccelerated) {
+            val fx = lensFx ?: try { TabLensFx().also { lensFx = it } } catch (_: Throwable) { LiquidGlass.fail(); null }
+            if (fx != null) {
+                real = try {
+                    // isi di balik lensa = permukaan bilah + ikon & nama tab (yang baru saja digambar)
+                    fx.draw(canvas, this, r, lf) { rc -> rc.drawColor(C.SURFACE); drawKids(rc) }
+                    true
+                } catch (_: Throwable) { LiquidGlass.fail(); lensFx = null; false }
+            }
+        }
+        if (real != realGlass) { realGlass = real; tint() }
+        ind.drawEdges(canvas, real)
+    }
+}
+
+/**
+ * Lensa tab dengan shader kaca cair yang SAMA dengan navigasi ([LiquidGlass.SRC]): isi bilah direkam ke satu
+ * RenderNode tiap frame, lalu digambar ulang di posisi lensa lewat shader — refraksi tepi, kilau spekular mengikuti
+ * kemiringan HP, cahaya & bayangan dalam, dispersi kromatik asli, dan pembesaran lensa (uniform `mag`): ikon yang
+ * baru sebagian tertutup lensa tampak membesar HANYA di bagian yang tertutup, seperti lensa iOS. Tanpa blur (lensa
+ * bening). Kelas terpisah agar kelas Android 13 tidak disentuh di HP yang lebih lama.
+ */
+@android.annotation.TargetApi(33)
+private class TabLensFx {
+    private val fx = LiquidFx()   // galat kompilasi shader → dilempar ke pemanggil
+    private val content = RenderNode("tabLensContent")
+    private val lens = RenderNode("tabLens")
+    private val u = FloatArray(LiquidGlass.U)
+
+    fun draw(canvas: Canvas, host: View, r: RectF, lift: Float, record: (Canvas) -> Unit) {
+        val w = host.width
+        val h = host.height
+        if (w <= 0 || h <= 0) return
+        content.setPosition(0, 0, w, h)
+        val rc = content.beginRecording(w, h)
+        try { record(rc) } finally { content.endRecording() }
+
+        val d = host.resources.displayMetrics.density
+        val hh = r.height()
+        val bezel = min(16f * d, hh * 0.42f)
+        // semburat tipis yang sedikit berbeda dari bilah: kilau putih & bayangan dalam tetap terbaca di bilah polos
+        val base = if (C.dark) 0xFF4A4A46.toInt() else C.SURFACE2
+        u[0] = r.left; u[1] = r.top; u[2] = r.width(); u[3] = hh
+        u[4] = hh / 2f
+        u[5] = 0f
+        u[6] = bezel
+        u[7] = bezel * 0.5f
+        u[8] = LiquidGlass.dispersionAmount() * 1.6f        // lensa kecil: dispersi lebih terasa, seperti iOS
+        u[9] = GlassLight.x; u[10] = GlassLight.y
+        u[11] = Color.red(base) / 255f; u[12] = Color.green(base) / 255f; u[13] = Color.blue(base) / 255f
+        u[14] = 0.12f                                       // kaca bening: tint tipis
+        u[15] = if (C.dark) 1f else 0f
+        u[16] = 0f; u[17] = 0f; u[18] = 0f; u[19] = 1f
+        u[20] = if (C.dark) 0.9f else 1.1f
+        u[21] = d
+        u[22] = max(r.left, 0f) + 1.5f; u[23] = max(r.top, 0f) + 1.5f
+        u[24] = min(r.right, w.toFloat()) - 1.5f; u[25] = min(r.bottom, h.toFloat()) - 1.5f
+        // tanpa pita kontras adaptif: ikon di bawah lensa harus tetap tajam & berwarna, bukan dipudarkan ke pita
+        u[26] = -1f; u[27] = 2f
+        u[28] = 0.15f * lift                                // pembesaran ±1,18× saat terangkat penuh
+        if (fx.update(u, 0f)) lens.setRenderEffect(fx.effect)
+        lens.setPosition(0, 0, w, h)
+        lens.setAlpha(lift)   // kapsul solid di bawahnya memudar bersamaan → peralihan solid ↔ kaca mulus
+        val lc = lens.beginRecording(w, h)
+        try { lc.drawRenderNode(content) } finally { lens.endRecording() }
+        canvas.save()
+        canvas.clipRect(r)
+        canvas.drawRenderNode(lens)
+        canvas.restore()
     }
 }
 
