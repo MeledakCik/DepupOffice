@@ -8,6 +8,7 @@ import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.text.TextPaint
+import android.text.TextUtils
 import android.view.Gravity
 import android.widget.EditText
 import android.widget.ImageView
@@ -32,6 +33,12 @@ data class InvoiceItem(
  * Formulir kuitansi/nota dengan nomor otomatis, hitung total, dan penempelan stempel toko dari Pustaka.
  */
 object InvoiceMakerManager {
+
+    /**
+     * Angka rupiah/qty dari isian bebas: "15.000", "Rp 15.000", "15,000" → 15000. Dulu toLongOrNull() menolak titik
+     * ribuan sehingga harga yang ditulis wajar menjadi Rp0 di nota.
+     */
+    internal fun digits(s: String): Long? = s.filter { it.isDigit() }.take(15).toLongOrNull()
 
     fun showDialog(activity: AppCompatActivity, onPickImage: ((cb: (Uri) -> Unit) -> Unit)? = null) {
         val todayStr = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(Date())
@@ -149,8 +156,8 @@ object InvoiceMakerManager {
 
                     val items = itemRows.mapNotNull { (fName, fQty, fPrc) ->
                         val n = fName.text.toString().trim()
-                        val q = fQty.text.toString().trim().toIntOrNull() ?: 0
-                        val p = fPrc.text.toString().trim().toLongOrNull() ?: 0L
+                        val q = digits(fQty.text.toString())?.toInt() ?: 0
+                        val p = digits(fPrc.text.toString()) ?: 0L
                         if (n.isBlank() || q <= 0) null else InvoiceItem(n, q, p)
                     }
 
@@ -179,11 +186,14 @@ object InvoiceMakerManager {
                     var grandTotal = 0L
                     itemRows.forEach { (fName, fQty, fPrc) ->
                         val n = fName.text.toString().trim()
-                        val q = fQty.text.toString().trim().toIntOrNull() ?: 0
-                        val p = fPrc.text.toString().trim().toLongOrNull() ?: 0L
-                        val tot = q * p
-                        grandTotal += tot
-                        if (n.isNotBlank()) grid.add(listOf(n, q.toString(), p.toString(), tot.toString()))
+                        val q = digits(fQty.text.toString())?.toInt() ?: 0
+                        val p = digits(fPrc.text.toString()) ?: 0L
+                        // baris tanpa nama / qty 0 dilewati — SAMA dengan versi PDF (dulu tetap ikut grand total)
+                        if (n.isNotBlank() && q > 0) {
+                            val tot = q * p
+                            grandTotal += tot
+                            grid.add(listOf(n, q.toString(), p.toString(), tot.toString()))
+                        }
                     }
                     grid.add(listOf("", "", "GRAND TOTAL:", grandTotal.toString()))
 
@@ -214,8 +224,9 @@ object InvoiceMakerManager {
         activity.work("Membuat PDF Kuitansi…", {
             val doc = PdfDocument()
             val pw = 595; val ph = 842 // A4
-            val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, 1).create())
-            val c = page.canvas
+            var pageNo = 1
+            var page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+            var c = page.canvas
             c.drawColor(Color.WHITE)
 
             val pText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF111111.toInt(); textSize = 14f }
@@ -238,31 +249,55 @@ object InvoiceMakerManager {
             y += 30f
 
             val bgHeader = Paint().apply { color = 0xFFE8EEFF.toInt() }
-            c.drawRect(40f, y, pw - 40f, y + 28f, bgHeader)
             val pTableHead = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1652F6.toInt(); textSize = 12f; isFakeBoldText = true }
 
-            c.drawText("Nama Barang / Jasa", 50f, y + 18f, pTableHead)
-            c.drawText("Qty", 320f, y + 18f, pTableHead)
-            c.drawText("Harga Satuan", 380f, y + 18f, pTableHead)
-            c.drawText("Total", 480f, y + 18f, pTableHead)
-            y += 36f
+            // nominal rata kanan di kolomnya: angka jutaan tidak lagi melewati tepi kanan kertas
+            val pMoney = TextPaint(pText).apply { textAlign = Paint.Align.RIGHT }
+            val pHeadR = TextPaint(pTableHead).apply { textAlign = Paint.Align.RIGHT }
+            val xPrice = 455f
+            val xTotal = pw - 48f
+            fun tableHeader() {
+                c.drawRect(40f, y, pw - 40f, y + 28f, bgHeader)
+                c.drawText("Nama Barang / Jasa", 50f, y + 18f, pTableHead)
+                c.drawText("Qty", 300f, y + 18f, pTableHead)
+                c.drawText("Harga Satuan", xPrice, y + 18f, pHeadR)
+                c.drawText("Total", xTotal, y + 18f, pHeadR)
+                y += 36f
+            }
+            /** Halaman baru bila sisa ruang kurang dari [need] (dulu barang ke-25 dst. tergambar di luar kertas). */
+            fun ensure(need: Float, header: Boolean) {
+                if (y + need <= ph - 40f) return
+                doc.finishPage(page)
+                pageNo++
+                page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+                c = page.canvas
+                c.drawColor(Color.WHITE)
+                y = 50f
+                c.drawText("$shop · $invNo (lanjutan)", 40f, y, pSub)
+                y += 20f
+                if (header) tableHeader()
+            }
+            tableHeader()
 
             val fmt = NumberFormat.getCurrencyInstance(Locale("id", "ID"))
             var grandTotal = 0L
 
             items.forEach { item ->
+                ensure(22f, true)
                 grandTotal += item.total
-                c.drawText(item.name.take(30), 50f, y, pText)
-                c.drawText(item.qty.toString(), 320f, y, pText)
-                c.drawText(fmt.format(item.price), 380f, y, pText)
-                c.drawText(fmt.format(item.total), 480f, y, pText)
+                c.drawText(TextUtils.ellipsize(item.name, pText, 240f, TextUtils.TruncateAt.END).toString(), 50f, y, pText)
+                c.drawText(item.qty.toString(), 300f, y, pText)
+                c.drawText(fmt.format(item.price), xPrice, y, pMoney)
+                c.drawText(fmt.format(item.total), xTotal, y, pMoney)
                 y += 22f
                 c.drawLine(40f, y - 10f, pw - 40f, y - 10f, pLine)
             }
 
+            // total + tanda tangan/stempel selalu utuh di satu halaman
+            ensure(170f, false)
             y += 16f
-            val pTotal = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1652F6.toInt(); textSize = 16f; isFakeBoldText = true }
-            c.drawText("GRAND TOTAL: ${fmt.format(grandTotal)}", pw - 280f, y, pTotal)
+            val pTotal = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1652F6.toInt(); textSize = 16f; isFakeBoldText = true; textAlign = Paint.Align.RIGHT }
+            c.drawText("GRAND TOTAL: ${fmt.format(grandTotal)}", xTotal, y, pTotal)
 
             y += 60f
             c.drawText("Hormat Kami,", pw - 180f, y, pSub)

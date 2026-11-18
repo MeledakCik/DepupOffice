@@ -432,7 +432,8 @@ class DocxDocument private constructor(
                     }
                 }
             }
-            if (out.exists()) out.delete()
+            // rename menimpa berkas lama secara ATOMIK (dulu berkas lama dihapus dulu: bila aplikasi mati di antara
+            // hapus & ganti nama, dokumen hilang). Hapus+salin hanya cadangan bila rename gagal.
             if (!tmp.renameTo(out)) { tmp.copyTo(out, overwrite = true); tmp.delete() }
         } catch (t: Throwable) {
             tmp.delete(); throw t

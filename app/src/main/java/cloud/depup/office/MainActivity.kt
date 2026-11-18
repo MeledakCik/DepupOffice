@@ -1980,7 +1980,11 @@ class MainActivity : AppCompatActivity() {
             val files = list.toList()
             val out = Files.newOut(this, "gabung", "pdf")
             work("Menggabungkan campuran file ke PDF…", { UniversalMergeManager.merge(this, files, out) }) { r ->
-                r.onSuccess { showResult("File berhasil digabung ke PDF", out, PDF) }.onFailure { fail(it) }
+                r.onSuccess { skipped ->
+                    if (skipped.isEmpty()) showResult("File berhasil digabung ke PDF", out, PDF)
+                    else showResult("Sebagian file digabung", out, PDF,
+                        "Tidak ikut (terkunci/rusak): " + skipped.joinToString(", ").take(200))
+                }.onFailure { fail(it) }
             }
         }
     }

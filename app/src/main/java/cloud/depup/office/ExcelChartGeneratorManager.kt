@@ -74,12 +74,14 @@ object ExcelChartGeneratorManager {
         val series = ArrayList<ChartSeries>()
         if (rows.size < 2) return series
 
-        val dataRows = if (rows.firstOrNull()?.any { it.toDoubleOrNull() != null } == true) rows else rows.drop(1)
+        // angka bergaya Indonesia ("15.000", "Rp 1.250.000") dikenali — dulu toDoubleOrNull() menganggapnya bukan angka
+        fun num(s: String): Double? = XlsxWriter.parseNumber(s)
+        val dataRows = if (rows.firstOrNull()?.any { num(it) != null } == true) rows else rows.drop(1)
 
         dataRows.take(12).forEachIndexed { idx, row ->
             val label = row.firstOrNull()?.trim()?.ifBlank { "Data ${idx + 1}" } ?: "Data ${idx + 1}"
-            val numVal = row.drop(1).mapNotNull { it.toDoubleOrNull()?.toFloat() }.firstOrNull()
-                ?: row.mapNotNull { it.toDoubleOrNull()?.toFloat() }.firstOrNull() ?: 0f
+            val numVal = row.drop(1).mapNotNull { num(it)?.toFloat() }.firstOrNull()
+                ?: row.mapNotNull { num(it)?.toFloat() }.firstOrNull() ?: 0f
 
             if (numVal > 0f) {
                 val color = CHART_COLORS[idx % CHART_COLORS.size]

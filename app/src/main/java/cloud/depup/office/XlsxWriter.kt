@@ -13,6 +13,16 @@ object XlsxWriter {
 
     private const val XML = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
 
+    /** Satu lembar kerja untuk [writeBook]. */
+    class Sheet(
+        val name: String,
+        val rows: List<List<String>>,
+        val boldRows: Set<Int> = setOf(0),
+        val columnCount: Int = rows.maxOfOrNull { it.size } ?: 0,
+        /** Rumus sel (r, c) → (rumus tanpa "=", nilai hasil). Ditulis sebagai rumus Excel asli, bukan angka mati. */
+        val formulas: (Int, Int) -> Pair<String, Double?>? = { _, _ -> null }
+    )
+
     fun write(
         out: File,
         sheetName: String,
@@ -21,10 +31,19 @@ object XlsxWriter {
         columnCount: Int = rows.maxOfOrNull { it.size } ?: 0,
         /** Rumus sel (r, c) → (rumus tanpa "=", nilai hasil). Ditulis sebagai rumus Excel asli, bukan angka mati. */
         formulas: (Int, Int) -> Pair<String, Double?>? = { _, _ -> null }
-    ) {
-        val safeName = sheetName.ifBlank { "Sheet1" }.take(31)
-            .replace(Regex("[\\\\/*?\\[\\]:]"), "_")
-        val cols = columnCount.coerceAtLeast(1)
+    ) = writeBook(out, listOf(Sheet(sheetName, rows, boldRows, columnCount, formulas)))
+
+    /** Buku kerja dengan beberapa lembar (urutan & nama sesuai [sheets]). */
+    fun writeBook(out: File, sheets: List<Sheet>) {
+        require(sheets.isNotEmpty()) { "Tidak ada sheet untuk disimpan" }
+        // nama sheet Excel: maks 31 karakter, tanpa \ / * ? [ ] :, unik (tanpa membedakan huruf besar/kecil)
+        val used = HashSet<String>()
+        val names = sheets.mapIndexed { i, sh ->
+            val base = sh.name.ifBlank { "Sheet${i + 1}" }.replace(Regex("[\\\\/*?\\[\\]:]"), "_").take(31)
+            var n = base; var k = 2
+            while (!used.add(n.lowercase())) { val suf = " ($k)"; n = base.take(31 - suf.length) + suf; k++ }
+            n
+        }
 
         ZipOutputStream(FileOutputStream(out).buffered()).use { zip ->
             fun put(name: String, text: String) {
@@ -33,21 +52,23 @@ object XlsxWriter {
                 zip.closeEntry()
             }
 
-            put("[Content_Types].xml", contentTypes())
+            put("[Content_Types].xml", contentTypes(sheets.size))
             put("_rels/.rels", rootRels())
-            put("xl/workbook.xml", workbook(safeName))
-            put("xl/_rels/workbook.xml.rels", workbookRels())
+            put("xl/workbook.xml", workbook(names))
+            put("xl/_rels/workbook.xml.rels", workbookRels(sheets.size))
             put("xl/styles.xml", styles())
-            put("xl/worksheets/sheet1.xml", worksheet(rows, boldRows, cols, formulas))
+            sheets.forEachIndexed { i, sh ->
+                put("xl/worksheets/sheet${i + 1}.xml", worksheet(sh.rows, sh.boldRows, sh.columnCount.coerceAtLeast(1), sh.formulas))
+            }
         }
     }
 
-    private fun contentTypes() = XML +
+    private fun contentTypes(n: Int) = XML +
         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
         "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>" +
         "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
         "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>" +
-        "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>" +
+        (1..n).joinToString("") { "<Override PartName=\"/xl/worksheets/sheet$it.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>" } +
         "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>" +
         "</Types>"
 
@@ -56,16 +77,17 @@ object XlsxWriter {
         "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>" +
         "</Relationships>"
 
-    private fun workbook(sheetName: String) = XML +
+    private fun workbook(names: List<String>) = XML +
         "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
         "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
-        "<sheets><sheet name=\"${esc(sheetName)}\" sheetId=\"1\" r:id=\"rId1\"/></sheets>" +
+        "<sheets>" + names.mapIndexed { i, n -> "<sheet name=\"${esc(n)}\" sheetId=\"${i + 1}\" r:id=\"rId${i + 1}\"/>" }.joinToString("") + "</sheets>" +
         "</workbook>"
 
-    private fun workbookRels() = XML +
+    // lembar = rId1..rIdN, gaya = rId(N+1)
+    private fun workbookRels(n: Int) = XML +
         "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
-        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>" +
-        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>" +
+        (1..n).joinToString("") { "<Relationship Id=\"rId$it\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet$it.xml\"/>" } +
+        "<Relationship Id=\"rId${n + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>" +
         "</Relationships>"
 
     private fun styles() = XML +
@@ -133,7 +155,8 @@ object XlsxWriter {
         return sb.toString()
     }
 
-    private fun parseNumber(raw: String): Double? {
+    /** Angka dari teks bergaya Indonesia/internasional ("Rp 15.000", "1.234,5", "1,234.5"); null bila bukan angka. */
+    internal fun parseNumber(raw: String): Double? {
         var s = raw.trim()
         if (s.isEmpty()) return null
         // Hanya buang simbol mata uang, JANGAN buang huruf lain (mis. "INV-001" harus tetap teks).

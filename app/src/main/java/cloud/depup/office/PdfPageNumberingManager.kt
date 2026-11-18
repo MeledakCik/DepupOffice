@@ -94,6 +94,10 @@ object PdfPageNumberingManager {
         val out = Files.newOut(activity, outName, "pdf")
 
         activity.work("Menambahkan nomor halaman PDF…", {
+            // Jalur utama: LOSSLESS — teks, font & vektor asli tetap (bisa dicari/disalin), ukuran hampir tidak berubah.
+            // Dulu setiap halaman dirender jadi gambar: teks hilang, hasil buram & berkas membengkak berkali lipat.
+            if (numberLossless(activity, uri, out, formatType, position, headerText, skipCover)) return@work out
+            // cadangan (PDF terkunci / berotasi / tidak terbaca pengurai): render ulang seperti sebelumnya
             val doc = PdfDocument()
             val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
             val pNum = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF555555.toInt(); textSize = 11f }
@@ -109,6 +113,7 @@ object PdfPageNumberingManager {
                 val h = pg.height
 
                 val bmp = Bitmap.createBitmap((w * 1.5f).toInt(), (h * 1.5f).toInt(), Bitmap.Config.ARGB_8888)
+                bmp.eraseColor(Color.WHITE)
                 pg.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 pg.close()
 
@@ -157,6 +162,98 @@ object PdfPageNumberingManager {
                 activity.toast("Nomor halaman berhasil ditambahkan!")
                 Files.open(activity, Files.uriFor(activity, out), PDF)
             }.onFailure { activity.fail(it) }
+        }
+    }
+
+    private fun label(formatType: Int, n: Int, total: Int) = when (formatType) {
+        0 -> "Hal $n dari $total"
+        1 -> "Halaman $n"
+        else -> "$n"
+    }
+
+    /** Teks → string literal PDF (WinAnsi/Latin-1; karakter di luarnya menjadi "?"). */
+    private fun pdfStr(t: String): String {
+        val sb = StringBuilder("(")
+        for (ch in t) {
+            when {
+                ch == '(' || ch == ')' || ch == '\\' -> sb.append('\\').append(ch)
+                ch.code in 32..126 || ch.code in 160..255 -> sb.append(ch)
+                else -> sb.append('?')
+            }
+        }
+        return sb.append(')').toString()
+    }
+
+    /**
+     * Tambah nomor halaman & header TANPA merender ulang: tiap halaman diberi stream isi tambahan (teks Helvetica)
+     * — isi asli dibungkus q/Q supaya keadaan grafisnya tidak memengaruhi teks kita. false = tidak bisa (terkunci,
+     * berotasi, rusak) → pemanggil memakai jalur render.
+     */
+    private fun numberLossless(
+        activity: AppCompatActivity, uri: Uri, out: File,
+        formatType: Int, position: Int, headerText: String, skipCover: Boolean
+    ): Boolean {
+        val f = try { PdfFile.open(Files.readOrNull(activity, uri) ?: return false) } catch (_: Throwable) { return false }
+        if (f.encrypted) return false   // jangan sampai salinan bernomor melepas password/izin dokumen asli
+        val pages = try { f.pages() } catch (_: Throwable) { return false }
+        if (pages.isEmpty() || pages.any { it.ref == null || it.rotate != 0 }) return false
+        val total = pages.size
+        val measure = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 11f; typeface = android.graphics.Typeface.SANS_SERIF }
+        val tmp = File(out.parentFile, out.name + ".part")
+        return try {
+            FileOutputStream(tmp).buffered().use { os ->
+                PdfSave.write(f, os) { ctx ->
+                    val font = ctx.add(PDict().also {
+                        it["Type"] = PName("Font"); it["Subtype"] = PName("Type1")
+                        it["BaseFont"] = PName("Helvetica"); it["Encoding"] = PName("WinAnsiEncoding")
+                    })
+                    val fontB = ctx.add(PDict().also {
+                        it["Type"] = PName("Font"); it["Subtype"] = PName("Type1")
+                        it["BaseFont"] = PName("Helvetica-Bold"); it["Encoding"] = PName("WinAnsiEncoding")
+                    })
+                    pages.forEachIndexed { i, p ->
+                        val n = i + 1
+                        if (skipCover && n == 1) return@forEachIndexed
+                        val x0 = p.box[0]; val y0 = p.box[1]; val w = p.box[2] - p.box[0]; val h = p.box[3] - p.box[1]
+                        val margin = w * 0.05f
+                        val ops = StringBuilder("Q\n")
+                        val num = label(formatType, n, total)
+                        val tw = measure.measureText(num)
+                        val nx = x0 + when (position) { 0 -> (w - tw) / 2f; 1 -> w - margin - tw; else -> margin }
+                        val ny = y0 + h * 0.03f
+                        ops.append("BT /DpNum 11 Tf 0.333 g ${PdfSave.fmt(nx.toDouble())} ${PdfSave.fmt(ny.toDouble())} Td ${pdfStr(num)} Tj ET\n")
+                        if (headerText.isNotBlank()) {
+                            val head = headerText.take(40)
+                            val hy = y0 + h - h * 0.04f
+                            ops.append("BT /DpNumB 10 Tf 0.533 g ${PdfSave.fmt((x0 + margin).toDouble())} ${PdfSave.fmt(hy.toDouble())} Td ${pdfStr(head)} Tj ET\n")
+                            val ly = y0 + h - h * 0.048f
+                            ops.append("0.8 G 1 w ${PdfSave.fmt((x0 + margin).toDouble())} ${PdfSave.fmt(ly.toDouble())} m " +
+                                "${PdfSave.fmt((x0 + w - margin).toDouble())} ${PdfSave.fmt(ly.toDouble())} l S\n")
+                        }
+                        val pre = ctx.add(PStream(PDict(), "q\n".toByteArray(Charsets.ISO_8859_1)))
+                        val post = ctx.add(PStream(PDict(), ops.toString().toByteArray(Charsets.ISO_8859_1)))
+                        val nd = PDict(LinkedHashMap(p.dict.m))
+                        val old = f.res(p.dict["Contents"])
+                        val oldList: List<Any?> = when {
+                            old is List<*> -> old
+                            p.dict["Contents"] != null -> listOf(p.dict["Contents"])
+                            else -> emptyList()
+                        }
+                        nd["Contents"] = ArrayList<Any?>().apply { add(pre); addAll(oldList); add(post) }
+                        // sumber daya efektif (termasuk warisan dari induk) disalin + font kita
+                        val r = PDict(LinkedHashMap(p.res.m))
+                        val fonts = PDict(LinkedHashMap((f.res(r["Font"]) as? PDict)?.m ?: LinkedHashMap()))
+                        fonts["DpNum"] = font; fonts["DpNumB"] = fontB
+                        r["Font"] = fonts
+                        nd["Resources"] = r
+                        ctx.put(p.ref!!, nd)
+                    }
+                }
+            }
+            if (!tmp.renameTo(out)) { tmp.copyTo(out, overwrite = true); tmp.delete() }
+            true
+        } catch (_: Throwable) {
+            tmp.delete(); false
         }
     }
 }
