@@ -156,6 +156,9 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
     private var fx: Any? = null     // LiquidFx (Android 13+)
     private val u = FloatArray(LiquidGlass.U)
     private var liquidNow = false
+    /** Latar kaca (node + tint) tergambar lengkap di frame terakhir — boleh dipakai ulang oleh [drawBackdrop]. */
+    private var backdropOk = false
+    private var backdropAlpha = 0
     private var rimKey = Long.MIN_VALUE
 
     // jalur perangkat lunak (Android 10–11)
@@ -390,6 +393,8 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         }
         val blurOn = Glass.BLUR && c != null && !blocked && width > 0 && height > 0 &&
             (try { val t0 = System.nanoTime(); (if (gpu) drawGpu(canvas, c) else drawSoft(canvas)).also { EdPerf.glassBarNs += System.nanoTime() - t0; EdPerf.glassBars++ } } catch (_: Throwable) { blocked = true; false })
+        backdropOk = blurOn && gpu
+        backdropAlpha = 0
         if (!liquidNow) {
             // jalur biasa: tint + tepi kaca, cahaya dalam & cahaya sentuh digambar kanvas (arah cahaya tetap dari [GlassLight])
             base?.let { b ->
@@ -397,10 +402,39 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
                 val a = if (!blurOn) 240 else Glass.toneAlpha(tintAlpha ?: if (corner > 0f) (if (dark) 120 else 128) else (if (dark) 146 else 152))
                 tint.color = Color.argb(a, Color.red(b), Color.green(b), Color.blue(b))
                 canvas.drawRect(0f, top, w, h, tint)
+                backdropAlpha = a
             }
             drawLight(canvas, top, dark)
         }
         super.dispatchDraw(canvas)
+    }
+
+    /**
+     * Gambar ulang LATAR kaca permukaan ini (tanpa anak-anaknya) ke [canvas], dalam koordinat permukaan — dipakai
+     * lensa tab ([TabBar]) supaya yang dibiaskan lensa adalah kaca yang benar-benar tampil di belakangnya (halaman
+     * buram + tint), bukan warna pekat. Node yang sama dengan frame ini digambar ulang, tidak direkam ulang.
+     * false = latar kaca tidak tersedia (blur mati / gagal) — pemanggil memakai warna pengganti.
+     */
+    internal fun drawBackdrop(canvas: Canvas): Boolean {
+        val n = node ?: return false
+        if (!backdropOk || blocked || !n.hasDisplayList()) return false
+        val top = revealTop().toFloat()
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val base = tintColor?.invoke()
+        canvas.save()
+        canvas.clipRect(0f, top, w, h)
+        if (base != null) {
+            tint.color = Color.argb(tintAlpha ?: 200, Color.red(base), Color.green(base), Color.blue(base))
+            canvas.drawRect(0f, top, w, h, tint)
+        }
+        canvas.drawRenderNode(n)
+        if (base != null && backdropAlpha > 0) {
+            tint.color = Color.argb(backdropAlpha, Color.red(base), Color.green(base), Color.blue(base))
+            canvas.drawRect(0f, top, w, h, tint)
+        }
+        canvas.restore()
+        return true
     }
 
     /** Tepi kaca, cahaya dalam & cahaya sentuh untuk HP tanpa shader (Android 12 ke bawah / kaca cair mati). */
