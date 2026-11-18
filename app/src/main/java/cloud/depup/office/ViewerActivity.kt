@@ -181,6 +181,11 @@ class ViewerActivity : AppCompatActivity() {
     private lateinit var pageBadge: TextView
     private lateinit var zoomLabel: TextView
     private var protectedBytes: ByteArray? = null
+    /**
+     * Salinan terdekripsi buatan layar INI. Hanya ini yang dihapus saat layar ditutup — dulu semua "decrypted_*" &
+     * "unlocked/" dihapus, sehingga menutup pembaca kedua merusak dokumen yang masih terbuka di pembaca pertama.
+     */
+    private val ownPlain = java.util.Collections.synchronizedList(ArrayList<java.io.File>())
     /** Proteksi Word ("hanya bisa diedit dengan password") — untuk memverifikasi password sebelum berbagi/ekspor. */
     private var docxProt: DocxProtect.Prot? = null
     /** Berkas yang dibuka pengguna (bukan salinan cache / terdekripsi). */
@@ -204,7 +209,7 @@ class ViewerActivity : AppCompatActivity() {
         protectedBytes?.let { return ProtectedDoc.verifyEditPassword(it, pw) }
         lockedSource?.let { src ->
             return try {
-                val b = contentResolver.openInputStream(src)?.use { it.readBytes() } ?: return false
+                val b = Files.readOrNull(this@ViewerActivity, src) ?: return false
                 PdfFile.open(b, pw).ownerAuth
             } catch (_: Throwable) { false }
         }
@@ -271,8 +276,10 @@ class ViewerActivity : AppCompatActivity() {
         Thread {
             var rawBytes = ByteArray(0)
             try {
-                rawBytes = contentResolver.openInputStream(rawUri)?.use { it.readBytes() } ?: ByteArray(0)
-            } catch (_: Exception) {}
+                // Hanya PDF yang bisa berupa Dokumen Terlindungi: Word/Excel/gambar tidak perlu dimuat utuh ke RAM
+                // (dulu SEMUA berkas dibaca penuh di sini — berkas besar memicu kehabisan memori & aplikasi tertutup).
+                if (looksPdf(rawUri)) rawBytes = Files.readOrNull(this@ViewerActivity, rawUri) ?: ByteArray(0)
+            } catch (_: Throwable) { rawBytes = ByteArray(0) }
 
             var uri = Files.cacheCopy(this, rawUri)
             if (uri.scheme == "file") uri.path?.let { DocxProtect.of(java.io.File(it)) }?.takeIf { it.hasPassword }?.let { docxProt = it; secureDocx = true }
@@ -281,6 +288,7 @@ class ViewerActivity : AppCompatActivity() {
                 try {
                     val decryptedBytes = ProtectedDoc.openProtected(rawBytes)
                     val cacheFile = java.io.File(cacheDir, "decrypted_${System.nanoTime()}.pdf")
+                    ownPlain.add(cacheFile)
                     cacheFile.writeBytes(decryptedBytes)
                     uri = android.net.Uri.fromFile(cacheFile)
                 } catch (e: Throwable) {
@@ -322,11 +330,12 @@ class ViewerActivity : AppCompatActivity() {
      * sendiri ([PdfFile] + [PdfSave]) karena PdfRenderer tidak bisa membuka PDF terkunci. Null bila password salah.
      */
     private fun decryptCopy(uri: android.net.Uri, pw: String): android.net.Uri? = try {
-        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException()
+        val bytes = Files.readOrNull(this@ViewerActivity, uri) ?: throw IllegalStateException()
         val f = PdfFile.open(bytes, pw)
         if (!f.encrypted) null else {
-            val dir = java.io.File(cacheDir, "unlocked").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+            val dir = java.io.File(cacheDir, "unlocked").apply { mkdirs() }
             val out = java.io.File(dir, "buka_${System.nanoTime()}.pdf")
+            ownPlain.add(out)
             java.io.FileOutputStream(out).use { PdfSave.write(f, it.buffered(1 shl 16)) }
             android.net.Uri.fromFile(out)
         }
@@ -368,11 +377,18 @@ class ViewerActivity : AppCompatActivity() {
         } catch (_: Exception) { false }
     }
 
+    /** 1 KB pertama berkas memuat penanda "%PDF-" (PDF boleh diawali sampah sebelum penandanya). */
+    private fun looksPdf(uri: android.net.Uri): Boolean = try {
+        contentResolver.openInputStream(uri)?.use { ins ->
+            val b = ByteArray(1024); var n = 0
+            while (n < b.size) { val r = ins.read(b, n, b.size - n); if (r <= 0) break; n += r }
+            String(b, 0, n, Charsets.ISO_8859_1).contains("%PDF-")
+        } ?: false
+    } catch (_: Exception) { false }
+
     /** Ambil PDF dari .exe ke cache; null (dan [exeError] terisi) bila gagal. Dijalankan di thread latar. */
     private fun exeAsPdf(uri: android.net.Uri, name: String): android.net.Uri? = try {
-        val size = Files.sizeOf(this, uri)
-        if (size > 400L shl 20) throw IllegalStateException("Berkas terlalu besar (maks. 400 MB)")
-        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+        val bytes = Files.readOrNull(this@ViewerActivity, uri) ?: throw IllegalStateException("Berkas tidak bisa dibaca")
         val r = ExeToPdf.extract(bytes)
         val dir = java.io.File(cacheDir, "exe_pdf").apply { mkdirs() }
         val out = java.io.File(dir, Files.baseName(name).ifBlank { "dokumen" } + ".pdf")
@@ -854,7 +870,7 @@ class ViewerActivity : AppCompatActivity() {
                 val maxDim = if (Perf.low) 2000 else 3200
                 Perf.io.execute {
                     val bmp = try { Pdf.decode(this, uri, maxDim) } catch (_: Throwable) { null } ?: try {
-                        contentResolver.openInputStream(uri)?.use { it.readBytes() }?.let { raw ->
+                        Files.readOrNull(this@ViewerActivity, uri)?.let { raw ->
                             Tiff.decode(raw, maxDim)?.let { r -> Bitmap.createBitmap(r.px, r.w, r.h, Bitmap.Config.ARGB_8888) }
                         }
                     } catch (_: Throwable) { null }
@@ -1373,8 +1389,7 @@ class ViewerActivity : AppCompatActivity() {
         guard.disable()
         // salinan terdekripsi (PDF terkunci / Dokumen Terlindungi) tidak boleh tertinggal di cache
         try {
-            java.io.File(cacheDir, "unlocked").deleteRecursively()
-            cacheDir.listFiles()?.filter { it.name.startsWith("decrypted_") }?.forEach { it.delete() }
+            synchronized(ownPlain) { ownPlain.forEach { it.delete() }; ownPlain.clear() }
         } catch (_: Exception) {}
         Perf.removeTrim(trimHook)
         if (::rv.isInitialized) rv.removeCallbacks(showFloats)

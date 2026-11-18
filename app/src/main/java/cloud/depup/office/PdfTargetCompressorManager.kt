@@ -2,13 +2,11 @@ package cloud.depup.office
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.widget.ScrollView
 import androidx.appcompat.app.AppCompatActivity
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileOutputStream
 
 /**
  * Kompresi PDF Target Ukuran Presisi (Precision Target PDF Compressor).
@@ -82,86 +80,66 @@ object PdfTargetCompressorManager {
         val out = Files.newOut(activity, outName, "pdf")
 
         activity.work("Mengompres PDF ke target presisi…", {
-            var quality = 85
-            var scaleFactor = 1.6f
-
-            // Iterasi kompresi hingga file <= targetBytes
-            var attempts = 0
-            while (attempts < 5) {
-                attempts++
-                compressPdfIteration(activity, uri, out, scaleFactor, quality)
-                val currentSize = out.length()
-
-                if (currentSize <= targetBytes || (quality <= 35 && scaleFactor <= 0.8f)) {
-                    break
-                }
-
-                // Turunkan kualitas/resolusi secara adaptif
-                quality = (quality - 15).coerceAtLeast(30)
-                scaleFactor = (scaleFactor * 0.85f).coerceAtLeast(0.7f)
+            // Tangga (skala render, kualitas JPEG) dari paling tajam ke paling kecil. Pencarian biner: hasil = langkah
+            // PALING TAJAM yang masih muat di target (±4 kali tulis, bukan mencoba satu per satu).
+            var best = -1
+            var written = -1
+            var lo = 0
+            var hi = STEPS.lastIndex
+            while (lo <= hi) {
+                val mid = (lo + hi) / 2
+                writeAt(activity, uri, out, STEPS[mid].first, STEPS[mid].second)
+                written = mid
+                if (out.length() <= targetBytes) { best = mid; hi = mid - 1 } else lo = mid + 1
             }
-
-            out
+            // berkas di disk = langkah terpilih; target tak tercapai → hasil terkecil yang mungkin
+            val pick = if (best >= 0) best else STEPS.lastIndex
+            if (written != pick) writeAt(activity, uri, out, STEPS[pick].first, STEPS[pick].second)
+            out to (best >= 0)
         }) { res ->
-            res.onSuccess { compressedFile ->
+            res.onSuccess { (compressedFile, reached) ->
                 val finalSize = compressedFile.length()
                 val finalSizeStr = Files.fmtSize(finalSize)
                 val origSizeStr = Files.fmtSize(originalSize)
-                val savedPct = if (originalSize > 0) ((originalSize - finalSize) * 100 / originalSize) else 0
-
-                activity.toast("PDF berhasil dikompres: $origSizeStr ➔ $finalSizeStr (Hemat $savedPct%)")
+                if (reached) {
+                    val savedPct = if (originalSize > finalSize && originalSize > 0) ((originalSize - finalSize) * 100 / originalSize) else 0
+                    activity.toast("PDF berhasil dikompres: $origSizeStr ➔ $finalSizeStr (Hemat $savedPct%)")
+                } else {
+                    // jujur: jangan menyebut "berhasil" bila batas tidak tercapai (mis. terlalu banyak halaman)
+                    activity.toast("Target ${Files.fmtSize(targetBytes)} tidak tercapai. Hasil terkecil: $finalSizeStr. " +
+                        "Coba kurangi jumlah halaman (Pisah PDF) lalu kompres lagi.")
+                }
                 Files.open(activity, Files.uriFor(activity, compressedFile), PDF)
             }.onFailure { activity.fail(it) }
         }
     }
 
-    private fun compressPdfIteration(
-        ctx: Context,
-        uri: Uri,
-        out: File,
-        scaleFactor: Float,
-        quality: Int
-    ) {
-        val doc = PdfDocument()
-        val bmpPaint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG or android.graphics.Paint.ANTI_ALIAS_FLAG)
+    /** (skala render terhadap ukuran halaman PDF, kualitas JPEG) — makin ke belakang makin kecil. */
+    private val STEPS = listOf(
+        1.6f to 80, 1.4f to 72, 1.25f to 64, 1.1f to 58, 1.0f to 52,
+        0.9f to 46, 0.8f to 40, 0.7f to 35, 0.6f to 30, 0.5f to 26
+    )
 
-        try {
-            val pfd = ctx.contentResolver.openFileDescriptor(uri, "r") ?: return
-            val renderer = android.graphics.pdf.PdfRenderer(pfd)
-            val n = renderer.pageCount
-
-            for (i in 0 until n) {
-                val pg = renderer.openPage(i)
-                val w = pg.width
-                val h = pg.height
-                val renderW = (w * scaleFactor).toInt().coerceAtLeast(100)
-                val renderH = (h * scaleFactor).toInt().coerceAtLeast(100)
-
-                val bmp = Bitmap.createBitmap(renderW, renderH, Bitmap.Config.ARGB_8888)
-                pg.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                pg.close()
-
-                // Compress bitmap
-                val baos = ByteArrayOutputStream()
-                bmp.compress(Bitmap.CompressFormat.JPEG, quality, baos)
-                val compressedJpeg = baos.toByteArray()
-                val compressedBmp = android.graphics.BitmapFactory.decodeByteArray(compressedJpeg, 0, compressedJpeg.size)
-
-                val pdfPg = doc.startPage(PdfDocument.PageInfo.Builder(w, h, i + 1).create())
-                val c = pdfPg.canvas
-                c.drawBitmap(compressedBmp, null, android.graphics.Rect(0, 0, w, h), bmpPaint)
-                doc.finishPage(pdfPg)
-
-                bmp.recycle()
-                compressedBmp.recycle()
-            }
-
-            renderer.close()
-            pfd.close()
-
-            FileOutputStream(out).use { doc.writeTo(it) }
-        } finally {
-            doc.close()
+    /**
+     * Tulis ulang PDF: tiap halaman dirender (latar putih) lalu disimpan sebagai JPEG ASLI di dalam PDF (DCTDecode,
+     * lewat [PdfWriter]). Dulu gambar JPEG di-decode lagi lalu digambar ke PdfDocument Android — yang menyimpan
+     * bitmap TANPA kompresi JPEG, sehingga hasilnya sering lebih besar dari aslinya; halaman transparan juga jadi hitam.
+     */
+    private fun writeAt(ctx: Context, uri: Uri, out: File, scale: Float, quality: Int) {
+        Src(ctx, uri).use { s ->
+            val n = s.r.pageCount
+            val w = PdfWriter(out, n, null)
+            try {
+                for (i in 0 until n) {
+                    val rd = Pdf.render(s.r, i, scale)
+                    try {
+                        val jpg = ByteArrayOutputStream().also { rd.bmp.compress(Bitmap.CompressFormat.JPEG, quality, it) }.toByteArray()
+                        w.addPage(jpg, rd.bmp.width, rd.bmp.height, rd.pw.toFloat(), rd.ph.toFloat(),
+                            0f, 0f, rd.pw.toFloat(), rd.ph.toFloat(), null)
+                    } finally { rd.bmp.recycle() }
+                }
+                w.finish()
+            } catch (t: Throwable) { w.abort(); throw t }
         }
     }
 }

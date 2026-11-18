@@ -91,7 +91,11 @@ object PdfProtectionManager {
             out
         }) { res ->
             res.onSuccess {
-                activity.toast("Proteksi Anti-Kopi & Anti-Cetak berhasil diterapkan!")
+                // sebutkan HANYA batasan yang benar-benar dipilih (dulu selalu "Anti-Kopi & Anti-Cetak")
+                val locked = listOfNotNull(if (!canCopy) "salin teks" else null, if (!canPrint) "cetak" else null,
+                    if (!canModify) "ubah" else null)
+                activity.toast(if (locked.isEmpty()) "PDF disalin tanpa batasan (semua izin dibiarkan)."
+                    else "Terkunci: ${locked.joinToString(", ")}. Berkas asli tidak diubah.")
                 Files.open(activity, Files.uriFor(activity, out), PDF)
             }.onFailure { activity.fail(it) }
         }

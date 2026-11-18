@@ -35,6 +35,39 @@ const val XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sh
 class Renamed(val uri: Uri, val name: String)
 
 object Files {
+    /** Berkas/bagian terlalu besar untuk diproses utuh di RAM HP ini (pesannya siap ditampilkan ke pengguna). */
+    class TooLargeException(cap: Long) : IOException("Berkas terlalu besar untuk diproses di HP ini (maks. ${cap shr 20} MB).")
+
+    /**
+     * Batas aman memuat SATU berkas / bagian zip utuh ke RAM: seperempat heap aplikasi (min. 32 MB). Di atas itu
+     * pembacaan dihentikan dengan [TooLargeException] — bukan OutOfMemoryError yang menutup seluruh aplikasi
+     * (OOM adalah Error, tidak tertangkap `catch (Exception)`). Juga penangkal "zip bomb": berkas kecil yang
+     * mengembang menjadi gigabita saat didekompresi.
+     */
+    fun ramCap(): Long = maxOf(32L shl 20, Perf.heap / 4)
+
+    /** Baca [ins] sampai habis, maksimal [cap] byte; lebih → [TooLargeException]. Tidak menutup [ins]. */
+    fun readCapped(ins: java.io.InputStream, cap: Long = ramCap()): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val r = ins.read(buf)
+            if (r < 0) break
+            total += r
+            if (total > cap) throw TooLargeException(cap)
+            out.write(buf, 0, r)
+        }
+        return out.toByteArray()
+    }
+
+    /** Isi [uri] utuh (maks. [cap]); null bila tidak bisa dibuka; terlalu besar → [TooLargeException]. */
+    fun readOrNull(ctx: Context, uri: Uri, cap: Long = ramCap()): ByteArray? {
+        val size = sizeOf(ctx, uri)
+        if (size > cap) throw TooLargeException(cap)
+        return ctx.contentResolver.openInputStream(uri)?.use { readCapped(it, cap) }
+    }
+
     fun nameOf(ctx: Context, uri: Uri): String {
         if (uri.scheme == "content") {
             try {

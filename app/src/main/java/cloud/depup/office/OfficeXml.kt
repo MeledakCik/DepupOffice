@@ -215,7 +215,8 @@ class OPackage private constructor(private val zip: ZipFile?, private val eager:
             val n = realName(p) ?: return null
             if (zip == null) return eager[n]
             val e = entries[n] ?: return null
-            return try { zip.getInputStream(e).use { it.readBytes() } } catch (_: Exception) { null }
+            // dibatasi: bagian zip yang mengembang tak wajar (zip bomb) ditolak, bukan menghabiskan RAM
+            return try { zip.getInputStream(e).use { Files.readCapped(it) } } catch (_: Exception) { null }
         }
         fun containsKey(p: String) = realName(p) != null
     }
@@ -245,10 +246,16 @@ class OPackage private constructor(private val zip: ZipFile?, private val eager:
     private companion object {
         fun unzipAll(bytes: ByteArray): Map<String, ByteArray> {
             val files = HashMap<String, ByteArray>()
+            // total isi terdekompresi dibatasi (zip bomb) → Files.TooLargeException, bukan kehabisan memori
+            var left = Files.ramCap()
             ZipInputStream(ByteArrayInputStream(bytes)).use { z ->
                 var e = z.nextEntry
                 while (e != null) {
-                    if (!e.isDirectory) files[e.name.trimStart('/')] = z.readBytes()
+                    if (!e.isDirectory) {
+                        val b = Files.readCapped(z, left)
+                        left -= b.size
+                        files[e.name.trimStart('/')] = b
+                    }
                     e = z.nextEntry
                 }
             }
@@ -364,6 +371,17 @@ class RenderedDoc(html: String, val res: DocRes, val title: String, val kind: St
 
 /** Utilitas warna & teks yang dipakai ketiga renderer. */
 object OxUtil {
+    /**
+     * Tautan dari dokumen hanya untuk skema aman (http/https/mailto/tel). Selain itu (javascript:, intent:, data:,
+     * file:, ...) tidak dijadikan tautan — "javascript:" dijalankan WebView langsung saat diketuk, tanpa lewat
+     * pemeriksaan shouldOverrideUrlLoading.
+     */
+    fun safeHref(h: String?): String? {
+        val t = h?.trim() ?: return null
+        val l = t.lowercase()
+        return if (l.startsWith("http://") || l.startsWith("https://") || l.startsWith("mailto:") || l.startsWith("tel:")) t else null
+    }
+
     /**
      * CSS tambahan dari aplikasi per jenis dokumen ("docx"/"pptx"/"xlsx"): warna kanvas & kontrol pembaca mengikuti
      * tema aplikasi (terang/gelap), sama dengan pembaca PDF & editor. Disisipkan SESUDAH CSS bawaan renderer, hanya

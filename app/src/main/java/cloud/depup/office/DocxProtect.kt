@@ -88,17 +88,23 @@ object DocxProtect {
         val hasPassword get() = attrs.containsKey("hash") || attrs.containsKey("hashValue")
 
         /** Cocokkan password (bentuk lama cryptAlgorithmSid & bentuk baru algorithmName). Tanpa hash = tanpa password. */
+        /**
+         * Jumlah putaran hash dari berkas, dibatasi 0..10 juta (batas spesifikasi ECMA-376). Tanpa batas, berkas jahat
+         * bisa menulis miliaran putaran — pemeriksaan password tidak pernah selesai.
+         */
+        private fun spins(v: String?): Int = (v?.toIntOrNull() ?: SPIN).coerceIn(0, 10_000_000)
+
         fun check(pw: String): Boolean = try {
             val d = Base64.getDecoder()
             when {
                 attrs.containsKey("hash") -> {
                     val salt = d.decode(attrs["salt"] ?: "")
-                    MessageDigest.isEqual(hash(pw, salt, attrs["cryptSpinCount"]?.toIntOrNull() ?: SPIN, algo(attrs["cryptAlgorithmSid"]?.toIntOrNull() ?: 4), true), d.decode(attrs["hash"]))
+                    MessageDigest.isEqual(hash(pw, salt, spins(attrs["cryptSpinCount"]), algo(attrs["cryptAlgorithmSid"]?.toIntOrNull() ?: 4), true), d.decode(attrs["hash"]))
                 }
                 attrs.containsKey("hashValue") -> {
                     val salt = d.decode(attrs["saltValue"] ?: "")
                     val alg = (attrs["algorithmName"] ?: "SHA-512").uppercase().let { if (it.startsWith("SHA") && !it.contains("-")) "SHA-" + it.removePrefix("SHA") else it }
-                    val spin = attrs["spinCount"]?.toIntOrNull() ?: SPIN
+                    val spin = spins(attrs["spinCount"])
                     val want = d.decode(attrs["hashValue"])
                     MessageDigest.isEqual(hash(pw, salt, spin, alg, true), want) || MessageDigest.isEqual(hash(pw, salt, spin, alg, false), want)
                 }

@@ -1170,8 +1170,19 @@ class SheetEditorActivity : AppCompatActivity() {
                 .filter { r -> matrix[r].any { it.isBold } }
                 .toSet()
             val cols = numCols
+            // rumus ikut disimpan sebagai rumus Excel (dulu hanya hasil tampilan berformat & dibulatkan 2 desimal)
+            val formulas = evaluating {
+                val m = HashMap<Long, Pair<String, Double?>>()
+                matrix.forEachIndexed { r, row ->
+                    row.forEachIndexed { c, cell ->
+                        val raw = cell.valStr.trim()
+                        if (raw.length > 1 && raw.startsWith("=")) m[r.toLong() * 100_000 + c] = raw to cellNumber(r, c)
+                    }
+                }
+                m
+            }
             work("Mengekspor Spreadsheet Excel…", {
-                XlsxWriter.write(xlsxFile, title, exportRows, boldRows, cols)
+                XlsxWriter.write(xlsxFile, title, exportRows, boldRows, cols) { r, c -> formulas[r.toLong() * 100_000 + c] }
 
                 val pdfText = "LAPORAN SPREADSHEET EXCEL\nJudul: $title\n\n" +
                     exportRows.joinToString("\n") { row -> row.joinToString(" | ") }

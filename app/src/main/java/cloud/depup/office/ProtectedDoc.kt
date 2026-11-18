@@ -81,8 +81,8 @@ object ProtectedDoc {
         return try {
             val f = PdfFile.open(bytes)
             f.catalog["DepupSecureData"] != null
-        } catch (_: Exception) {
-            false
+        } catch (_: Throwable) {
+            false   // termasuk Error dari PDF rusak/jahat: dipanggil untuk setiap PDF yang dibuka dari luar
         }
     }
 

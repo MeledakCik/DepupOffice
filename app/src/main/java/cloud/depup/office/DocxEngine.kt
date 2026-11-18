@@ -276,7 +276,7 @@ class DocxDocument private constructor(
     }
 
     private fun readPart(z: ZipFile, name: String?): String? =
-        name?.let { z.getEntry(it) }?.let { e -> z.getInputStream(e).use { val b = it.readBytes(); String(b, charsetOf(b)) } }
+        name?.let { z.getEntry(it) }?.let { e -> z.getInputStream(e).use { val b = Files.readCapped(it); String(b, charsetOf(b)) } }
 
     private fun relsPath() = (if (mainDir.isEmpty()) "" else "$mainDir/") + "_rels/" + mainPart.substringAfterLast('/') + ".rels"
 
@@ -308,7 +308,7 @@ class DocxDocument private constructor(
     fun imageBytes(rId: String): ByteArray? {
         val target = rels[rId] ?: return null
         val name = resolve(mainDir, target)
-        return try { ZipFile(src).use { z -> z.getEntry(name)?.let { e -> z.getInputStream(e).use { it.readBytes() } } } } catch (_: Exception) { null }
+        return try { ZipFile(src).use { z -> z.getEntry(name)?.let { e -> z.getInputStream(e).use { Files.readCapped(it) } } } } catch (_: Exception) { null }
     }
 
     /** id gaya untuk gaya bawaan; bila belum ada di dokumen, definisinya akan ditambahkan saat simpan. */

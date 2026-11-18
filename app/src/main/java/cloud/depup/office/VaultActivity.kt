@@ -47,18 +47,57 @@ object Vault {
     }
 
     private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
-    private fun hash(salt: String, pin: String) = hex(MessageDigest.getInstance("SHA-256").digest((salt + pin).toByteArray()))
+    /** Format lama (sebelum 4.1.1): SHA-256 sekali — hanya untuk memverifikasi & memindahkan PIN lama. */
+    private fun legacyHash(salt: String, pin: String) = hex(MessageDigest.getInstance("SHA-256").digest((salt + pin).toByteArray()))
+
+    /**
+     * PIN 4–6 digit hanya punya ≤ 1 juta kemungkinan: hash sekali bisa ditebak habis dalam hitungan detik bila setelan
+     * bocor. PBKDF2-HMAC-SHA256 dengan banyak putaran membuat tiap tebakan mahal.
+     */
+    private const val ITER = 60_000
+    private fun kdf(salt: String, pin: String): String {
+        val spec = javax.crypto.spec.PBEKeySpec(pin.toCharArray(), salt.toByteArray(), ITER, 256)
+        return try { hex(javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded) }
+        finally { spec.clearPassword() }
+    }
+
+    private fun same(a: String?, b: String?): Boolean =
+        a != null && b != null && MessageDigest.isEqual(a.toByteArray(), b.toByteArray())   // waktu-konstan
 
     fun hasPin(ctx: Context) = sp(ctx).contains("hash")
 
+    /** Lambat (PBKDF2): panggil dari thread latar. */
     fun setPin(ctx: Context, pin: String) {
         val salt = hex(ByteArray(16).also { SecureRandom().nextBytes(it) })
-        sp(ctx).edit().putString("salt", salt).putString("hash", hash(salt, pin)).apply()
+        sp(ctx).edit().putString("salt", salt).putString("hash", kdf(salt, pin)).putString("kdf", "pbkdf2")
+            .remove("fails").remove("lockUntil").apply()
     }
 
-    fun check(ctx: Context, pin: String): Boolean {
+    /** Sisa waktu terkunci (ms) setelah terlalu banyak PIN salah; 0 = boleh mencoba. */
+    fun lockRemainingMs(ctx: Context): Long =
+        (sp(ctx).getLong("lockUntil", 0L) - System.currentTimeMillis()).coerceAtLeast(0L)
+
+    /**
+     * Periksa PIN. Lambat (PBKDF2): panggil dari thread latar. Setelah 5 kali salah brankas terkunci 30 detik,
+     * lalu berlipat dua tiap salah berikutnya (maks. 15 menit) — PIN 4 digit tidak bisa ditebak beruntun.
+     */
+    fun check(ctx: Context, pin: String): Boolean = synchronized(this) {
+        if (lockRemainingMs(ctx) > 0) return false
         val s = sp(ctx)
-        return hash(s.getString("salt", "")!!, pin) == s.getString("hash", null)
+        val salt = s.getString("salt", "") ?: ""
+        val stored = s.getString("hash", null)
+        val pbk = s.getString("kdf", null) == "pbkdf2"
+        val ok = if (pbk) same(kdf(salt, pin), stored) else same(legacyHash(salt, pin), stored)
+        if (ok) {
+            if (!pbk) setPin(ctx, pin)    // pindahkan PIN lama ke format PBKDF2
+            else s.edit().remove("fails").remove("lockUntil").apply()
+        } else {
+            val fails = s.getInt("fails", 0) + 1
+            val e = s.edit().putInt("fails", fails)
+            if (fails >= 5) e.putLong("lockUntil", System.currentTimeMillis() + minOf(30_000L shl minOf(fails - 5, 5), 15 * 60_000L))
+            e.apply()
+        }
+        ok
     }
 
     fun dir(ctx: Context): File = File(ctx.filesDir, "vault").apply { mkdirs() }
@@ -135,9 +174,15 @@ class VaultActivity : AppCompatActivity() {
         holder.add(btn("Buat PIN") {
             val a = p1.text.toString()
             when {
-                a.length !in 4..6 -> toast("PIN harus 4–6 digit")
+                a.length !in 4..6 || !a.all { it in '0'..'9' } -> toast("PIN harus 4–6 digit angka")
                 a != p2.text.toString() -> toast("PIN tidak sama")
-                else -> { Vault.setPin(this, a); showList() }
+                else -> Thread {   // PBKDF2 sengaja lambat: jangan di thread UI
+                    val ok = try { Vault.setPin(this, a); true } catch (_: Exception) { false }
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (ok) showList() else toast("PIN gagal disimpan")
+                    }
+                }.start()
             }
         }, top = 16)
         holder.add(tv("Jangan lupa PIN ini. File di Brankas tidak bisa dibuka tanpa PIN, dan tidak ada fitur reset.", 12f, C.MUTED), top = 14)
@@ -170,8 +215,27 @@ class VaultActivity : AppCompatActivity() {
         val p = field("PIN", pin = true)
         holder.add(p, top = 24)
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var checking = false
         row.add(btn("Buka PIN") {
-            if (Vault.check(this, p.text.toString())) showList() else { toast("PIN salah"); p.setText("") }
+            val wait = Vault.lockRemainingMs(this)
+            if (wait > 0) toast("Terlalu banyak PIN salah. Coba lagi dalam ${(wait + 999) / 1000} detik.")
+            else if (!checking) {
+                checking = true
+                val pin = p.text.toString()
+                // PBKDF2 sengaja lambat: jangan di thread UI
+                Thread {
+                    val ok = try { Vault.check(this, pin) } catch (_: Exception) { false }
+                    runOnUiThread {
+                        checking = false
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (ok) showList() else {
+                            val w = Vault.lockRemainingMs(this)
+                            toast(if (w > 0) "PIN salah. Brankas dikunci ${(w + 999) / 1000} detik." else "PIN salah")
+                            p.setText("")
+                        }
+                    }
+                }.start()
+            }
         }, w = 0, weight = 1f)
         row.add(btn("Sidik Jari / Biometrik", true, C.ACCENT, R.drawable.ic_lock) {
             authenticateBiometric()

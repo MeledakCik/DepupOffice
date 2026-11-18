@@ -116,8 +116,15 @@ object Integrity {
         t != null && MessageDigest.isEqual(t.toByteArray(), token.toByteArray())
     } catch (_: Throwable) { false }
 
-    /** URI file:// yang menunjuk ke data privat aplikasi hanya boleh dibuka dari dalam aplikasi. */
+    /**
+     * URI yang menunjuk ke data privat aplikasi hanya boleh dibuka dari dalam aplikasi:
+     * - file:// ke folder data/cache/berkas eksternal milik aplikasi;
+     * - content:// lewat FileProvider aplikasi SENDIRI. Penyedia itu tidak diekspor, tetapi pembaca berjalan di
+     *   proses DepUp, jadi aplikasi lain bisa "meminjam" izin kita dengan mengirim URI tersebut (confused deputy) —
+     *   mis. untuk membuka salinan brankas/dokumen terdekripsi di cache.
+     */
     fun isPrivateFile(ctx: Context, uri: android.net.Uri): Boolean {
+        if (uri.scheme == "content") return uri.authority.equals(ctx.packageName + ".fileprovider", ignoreCase = true)
         if (uri.scheme != "file") return false
         val p = try { File(uri.path ?: return true).canonicalPath } catch (_: Throwable) { return true }
         val roots = listOfNotNull(ctx.applicationInfo.dataDir, ctx.filesDir.parent, ctx.cacheDir.parent)
