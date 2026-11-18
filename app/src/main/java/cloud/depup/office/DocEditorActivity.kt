@@ -2250,7 +2250,7 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun insertImageFrom(uri: Uri) {
         work("Menyiapkan gambar…", {
-            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Gambar tidak dapat dibaca")
+            val bytes = Files.readOrNull(this@DocEditorActivity, uri) ?: error("Gambar tidak dapat dibaca")
             prepareImage(bytes)
         }) { res ->
             res.onSuccess { img -> command { syncAll(); insertBlocksAfterCurrent(listOf(img)) } }.onFailure { fail(it) }

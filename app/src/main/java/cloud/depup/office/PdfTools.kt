@@ -154,11 +154,9 @@ object PdfTools {
 
     // ------------------------------------------------------------------ PDF ke Word
 
-    /** Isi berkas PDF (maks. 300 MB). */
+    /** Isi berkas PDF (maks. [Files.ramCap] — seperempat RAM aplikasi; lebih besar → pesan jelas, bukan crash). */
     private fun readPdf(ctx: Context, uri: Uri): ByteArray {
-        val size = Files.sizeOf(ctx, uri)
-        if (size > 300L shl 20) throw IllegalStateException("Berkas terlalu besar (maks. 300 MB)")
-        return ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+        return Files.readOrNull(ctx, uri) ?: throw IllegalStateException("Berkas tidak bisa dibaca")
     }
 
     /**

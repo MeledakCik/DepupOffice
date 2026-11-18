@@ -62,6 +62,8 @@ class PdfPasswordException(msg: String) : Exception(msg)
 
 class PdfLexer(val d: ByteArray, var p: Int = 0, val end: Int = d.size) {
     companion object {
+        /** Kedalaman array/kamus maksimum (PDF wajar < 30). */
+        const val MAX_NEST = 512
         fun ws(c: Int) = c == 0x20 || c == 0x0A || c == 0x0D || c == 0x09 || c == 0x0C || c == 0x00
         fun delim(c: Int) = c == '('.code || c == ')'.code || c == '<'.code || c == '>'.code || c == '['.code || c == ']'.code ||
             c == '{'.code || c == '}'.code || c == '/'.code || c == '%'.code
@@ -86,6 +88,17 @@ class PdfLexer(val d: ByteArray, var p: Int = 0, val end: Int = d.size) {
         return String(d, s, p - s, Charsets.ISO_8859_1)
     }
 
+    /**
+     * Kedalaman array/kamus yang sedang dibaca. PDF jahat bisa bersarang ratusan ribu tingkat ("[[[[…") → rekursi
+     * meluap (StackOverflowError — Error, lolos dari `catch (Exception)` & menutup aplikasi). Dibatasi [MAX_NEST].
+     */
+    private var nest = 0
+
+    private inline fun <T> nested(block: () -> T): T {
+        if (++nest > MAX_NEST) { nest--; throw IllegalStateException("Struktur PDF terlalu dalam") }
+        try { return block() } finally { nest-- }
+    }
+
     /** Baca satu objek. "n g R" dikenali bila [refs]. Mengembalikan kata kunci (mis. "obj", "stream") sebagai [Op]. */
     fun obj(refs: Boolean = true): Any? {
         skipWs()
@@ -94,20 +107,22 @@ class PdfLexer(val d: ByteArray, var p: Int = 0, val end: Int = d.size) {
         when {
             c == '/'.code -> { p++; return PName(nameBody()) }
             c == '('.code -> { p++; return PStr(literal()) }
-            c == '<'.code && at(p + 1) == '<'.code -> { p += 2; return dict() }
+            c == '<'.code && at(p + 1) == '<'.code -> { p += 2; return nested { dict() } }
             c == '<'.code -> { p++; return PStr(hexStr(), true) }
             c == '['.code -> {
                 p++
-                val a = ArrayList<Any?>()
-                while (true) {
-                    skipWs()
-                    if (p >= end) break
-                    if (at(p) == ']'.code) { p++; break }
-                    val o = obj(refs)
-                    if (o is Op) continue
-                    a.add(o)
+                return nested {
+                    val a = ArrayList<Any?>()
+                    while (true) {
+                        skipWs()
+                        if (p >= end) break
+                        if (at(p) == ']'.code) { p++; break }
+                        val o = obj(refs)
+                        if (o is Op) continue
+                        a.add(o)
+                    }
+                    a
                 }
-                return a
             }
             c == ']'.code || c == '>'.code || c == ')'.code || c == '}'.code || c == '{'.code -> { p++; return Op(String(charArrayOf(c.toChar()))) }
         }
@@ -551,19 +566,24 @@ class PdfFile private constructor(val data: ByteArray) {
     private fun inflate(b: ByteArray): ByteArray {
         val inf = Inflater()
         inf.setInput(b)
-        val o = ByteArrayOutputStream(b.size * 3 + 64)
+        val o = ByteArrayOutputStream(minOf(b.size.toLong() * 3 + 64, 64L shl 20).toInt())
         val buf = ByteArray(16384)
+        // hasil dekompresi dibatasi (flate bomb: stream kecil yang mengembang jadi gigabita)
+        val cap = Files.ramCap()
         try {
             while (!inf.finished()) {
                 val n = inf.inflate(buf)
                 if (n == 0) { if (inf.needsInput() || inf.needsDictionary()) break }
+                if (o.size().toLong() + n > cap) throw Files.TooLargeException(cap)
                 o.write(buf, 0, n)
             }
+        } catch (e: Files.TooLargeException) {
+            throw e
         } catch (_: Exception) {
             // data rusak: kembalikan yang sempat terbaca (banyak pembaca juga begini); coba tanpa header zlib
             if (o.size() == 0) {
                 val raw = Inflater(true)
-                try { raw.setInput(b, 2, maxOf(0, b.size - 2)); while (!raw.finished()) { val n = raw.inflate(buf); if (n == 0) break; o.write(buf, 0, n) } } catch (_: Exception) {} finally { raw.end() }
+                try { raw.setInput(b, 2, maxOf(0, b.size - 2)); while (!raw.finished()) { val n = raw.inflate(buf); if (n == 0) break; if (o.size().toLong() + n > cap) break; o.write(buf, 0, n) } } catch (_: Exception) {} finally { raw.end() }
             }
         } finally { inf.end() }
         return o.toByteArray()

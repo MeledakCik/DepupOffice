@@ -2231,9 +2231,7 @@ class MainActivity : AppCompatActivity() {
         val base = Files.baseName(name).ifBlank { "dokumen" }
         val out = Files.namedOut(this, base, "pdf")
         work("Mengambil PDF dari $name…", {
-            val size = Files.sizeOf(this, uri)
-            if (size > 400L shl 20) throw IllegalStateException("Berkas terlalu besar (maks. 400 MB)")
-            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+            val bytes = Files.readOrNull(this@MainActivity, uri) ?: throw IllegalStateException("Berkas tidak bisa dibaca")
             val r = ExeToPdf.extract(bytes)
             out.writeBytes(r.pdf)
             r
@@ -2761,7 +2759,7 @@ class MainActivity : AppCompatActivity() {
                 val base = Files.baseName(Files.nameOf(this, uri))
                 val out = Files.newOut(this, base + "_terlindungi", "pdf")
                 work("Melindungi dokumen…", {
-                    val originalBytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Tidak bisa membaca file")
+                    val originalBytes = Files.readOrNull(this@MainActivity, uri) ?: throw IllegalStateException("Tidak bisa membaca file")
                     ProtectedDoc.protect(originalBytes, editPw, out)
                 }) { res ->
                     res.onSuccess {

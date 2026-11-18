@@ -71,13 +71,13 @@ object DocumentSummarizerManager {
             pfd.close()
             sb.toString()
         } else if (name.endsWith(".docx", ignoreCase = true)) {
-            val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return ""
-            val zip = ZipInputStream(bytes.inputStream())
+            val input = ctx.contentResolver.openInputStream(uri) ?: return ""
+            val zip = ZipInputStream(input.buffered())
             var entry = zip.nextEntry
             var xml = ""
             while (entry != null) {
                 if (entry.name == "word/document.xml") {
-                    xml = zip.readBytes().toString(Charsets.UTF_8)
+                    xml = Files.readCapped(zip).toString(Charsets.UTF_8)
                     break
                 }
                 entry = zip.nextEntry

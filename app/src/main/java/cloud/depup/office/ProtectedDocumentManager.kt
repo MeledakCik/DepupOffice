@@ -187,7 +187,7 @@ object ProtectedDocumentManager {
         val out = Files.newOut(activity, outName, "pdf")
 
         activity.work("Menerapkan proteksi dokumen…", {
-            val originalBytes = activity.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            val originalBytes = Files.readOrNull(activity, uri)
                 ?: throw IllegalStateException("Tidak dapat membaca file PDF")
 
             require(teacherPassword.isNotBlank()) { "Password guru wajib diisi" }

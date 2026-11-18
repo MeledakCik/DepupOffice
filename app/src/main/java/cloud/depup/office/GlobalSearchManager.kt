@@ -155,13 +155,13 @@ object GlobalSearchManager {
 
     private fun searchInDocx(ctx: Context, uri: Uri, name: String, q: String, results: MutableList<GlobalSearchResult>) {
         try {
-            val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
-            val zip = ZipInputStream(bytes.inputStream())
+            val input = ctx.contentResolver.openInputStream(uri) ?: return
+            val zip = ZipInputStream(input.buffered())
             var entry = zip.nextEntry
             var docxXml = ""
             while (entry != null) {
                 if (entry.name == "word/document.xml") {
-                    docxXml = zip.readBytes().toString(Charsets.UTF_8)
+                    docxXml = Files.readCapped(zip).toString(Charsets.UTF_8)
                     break
                 }
                 entry = zip.nextEntry

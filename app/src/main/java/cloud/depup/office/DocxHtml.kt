@@ -757,7 +757,7 @@ object DocxHtml {
         for (k in kids) when (k.name) {
             "r" -> run(c, k, st, baseRP, fc, sect, reopen)
             "hyperlink" -> {
-                val href = k.attr("id")?.let { c.rels[it]?.target } ?: k.attr("anchor")?.let { "#$it" }
+                val href = k.attr("id")?.let { OxUtil.safeHref(c.rels[it]?.target) } ?: k.attr("anchor")?.let { "#$it" }
                 if (href != null && !href.startsWith("#")) out.append("<a href=\"").append(OxUtil.esc(href)).append("\">") else out.append("<a>")
                 inline(c, k.kids, st, baseRP, fc, sect, reopen, href)
                 out.append("</a>")

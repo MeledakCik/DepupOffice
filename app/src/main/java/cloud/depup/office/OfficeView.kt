@@ -99,7 +99,7 @@ object OfficeView {
                 } finally { if (!ok) pkg.close() }
             }
         }
-        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Berkas tidak bisa dibaca")
+        val bytes = Files.readOrNull(ctx, uri) ?: throw IllegalStateException("Berkas tidak bisa dibaca")
         if (bytes.size < 4 || bytes[0] != 'P'.code.toByte() || bytes[1] != 'K'.code.toByte())
             throw IllegalArgumentException("Bukan berkas Office modern (mungkin format lama atau terenkripsi)")
         return when (kind) {

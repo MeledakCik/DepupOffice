@@ -315,9 +315,12 @@ object OfficeReader {
                     while (entry != null) {
                         val name = entry.name.replace('\\', '/')
                         if (!entry.isDirectory && wanted(name) && entry.size < 12L * 1024 * 1024) {
-                            val data = zip.readBytes()
-                            total += data.size
-                            if (total <= 24L * 1024 * 1024) out[name] = data
+                            // ukuran di header zip bisa bohong / -1: batasi saat membaca (zip bomb), bagian kebesaran dilewati
+                            val data = try { Files.readCapped(zip, 12L * 1024 * 1024) } catch (_: Files.TooLargeException) { null }
+                            if (data != null) {
+                                total += data.size
+                                if (total <= 24L * 1024 * 1024) out[name] = data
+                            }
                         }
                         zip.closeEntry()
                         entry = zip.nextEntry

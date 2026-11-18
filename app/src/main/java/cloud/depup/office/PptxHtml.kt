@@ -458,7 +458,7 @@ object PptxHtml {
                 if (rn.name == "fld" && rn.attr("type") == "slidenum") txt = c.slideNo.toString()
                 if (txt.isEmpty()) continue
                 out.append("<span style=\"").append(runCss(rtp, scale)).append("\">")
-                val href = rn.child("rPr")?.child("hlinkClick")?.attr("id")?.let { c.rels[it]?.target }
+                val href = rn.child("rPr")?.child("hlinkClick")?.attr("id")?.let { OxUtil.safeHref(c.rels[it]?.target) }
                 if (href != null) out.append("<a href=\"").append(OxUtil.esc(href)).append("\">")
                 out.append(OxUtil.esc(txt))
                 if (href != null) out.append("</a>")
