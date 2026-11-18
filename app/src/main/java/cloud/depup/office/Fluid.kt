@@ -462,7 +462,8 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
             gravity = Gravity.CENTER
             isClickable = true; isFocusable = true
             contentDescription = label
-            background = context.rippleBg(100)
+            // tanpa riak: umpan balik tekan = mengecil + lensa (riak abu tertinggal sebagai "jejak" saat lensa pergi)
+            background = null
             minimumHeight = dp(48); minimumWidth = dp(48)
             addView(ic, LayoutParams(dp(22), dp(22)))
             addView(lb, LayoutParams(0, LayoutParams.WRAP_CONTENT))
@@ -600,6 +601,33 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
 
     private fun drawKids(c: Canvas) = super.dispatchDraw(c)
 
+    /**
+     * Isi di balik lensa = persis yang tampil di bilah: kaca navigasi di belakang (halaman buram + tint, lihat
+     * [GlassSurface.drawBackdrop]) + ikon & nama tab. Karena sama dengan layar, bagian di luar bentuk kapsul tidak
+     * pernah tampak sebagai sudut/kotak, dan lensa tembus pandang seperti navigasi.
+     */
+    private fun recordBehindLens(rc: Canvas) {
+        var ox = 0f
+        var oy = 0f
+        var v: View = this
+        var gs: GlassSurface? = null
+        while (true) {
+            if (v is GlassSurface) { gs = v; break }
+            ox += v.left + v.translationX
+            oy += v.top + v.translationY
+            v = v.parent as? View ?: break
+        }
+        var ok = false
+        if (gs != null) {
+            rc.save()
+            rc.translate(-ox, -oy)
+            ok = try { gs.drawBackdrop(rc) } catch (_: Throwable) { false }
+            rc.restore()
+        }
+        if (!ok) rc.drawColor(C.SURFACE)
+        drawKids(rc)
+    }
+
     override fun dispatchDraw(canvas: Canvas) {
         ind.drawFill(canvas)
         super.dispatchDraw(canvas)
@@ -610,8 +638,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
             val fx = lensFx ?: try { TabLensFx().also { lensFx = it } } catch (_: Throwable) { LiquidGlass.fail(); null }
             if (fx != null) {
                 real = try {
-                    // isi di balik lensa = permukaan bilah + ikon & nama tab (yang baru saja digambar)
-                    fx.draw(canvas, this, r, lf) { rc -> rc.drawColor(C.SURFACE); drawKids(rc) }
+                    fx.draw(canvas, this, r, lf) { rc -> recordBehindLens(rc) }
                     true
                 } catch (_: Throwable) { LiquidGlass.fail(); lensFx = null; false }
             }
@@ -646,7 +673,7 @@ private class TabLensFx {
         val d = host.resources.displayMetrics.density
         val hh = r.height()
         val bezel = min(16f * d, hh * 0.42f)
-        // semburat tipis yang sedikit berbeda dari bilah: kilau putih & bayangan dalam tetap terbaca di bilah polos
+        // semburat sangat tipis: kilau putih & bayangan dalam tetap terbaca di atas bilah yang polos
         val base = if (C.dark) 0xFF4A4A46.toInt() else C.SURFACE2
         u[0] = r.left; u[1] = r.top; u[2] = r.width(); u[3] = hh
         u[4] = hh / 2f
@@ -656,7 +683,7 @@ private class TabLensFx {
         u[8] = LiquidGlass.dispersionAmount() * 1.6f        // lensa kecil: dispersi lebih terasa, seperti iOS
         u[9] = GlassLight.x; u[10] = GlassLight.y
         u[11] = Color.red(base) / 255f; u[12] = Color.green(base) / 255f; u[13] = Color.blue(base) / 255f
-        u[14] = 0.12f                                       // kaca bening: tint tipis
+        u[14] = 0.06f                                       // kaca bening: isinya = kaca navigasi asli
         u[15] = if (C.dark) 1f else 0f
         u[16] = 0f; u[17] = 0f; u[18] = 0f; u[19] = 1f
         u[20] = if (C.dark) 0.9f else 1.1f
