@@ -56,9 +56,10 @@ internal fun cover(r: RectF, a: Float, b: Float): Float =
  * saat melambat. Selalu mengikuti ukuran & skala anak tujuan (ikut melebar saat label tab terbuka, ikut mengecil
  * saat ditekan). Dipakai bilah tab bawah, tab pita editor & kontrol segmen.
  *
- * [lens] = true (bilah tab bawah): saat bergerak/diseret pil "terangkat" menjadi lensa kaca — sedikit membesar,
- * berkilau, bertepi terang, dan (bila setelan Dispersi menyala) bertepi pelangi tipis. [lift] dipakai pemanggil untuk
- * memperbesar ikon yang sedang dilewati lensa.
+ * [lens] = true (bilah tab bawah): saat bergerak/diseret pil "terangkat" menjadi lensa KACA bening — isinya
+ * memudar dari warna solid ke [glass], sedikit membesar, berkilau, bertepi terang, dan (bila setelan Dispersi menyala)
+ * bertepi pelangi tipis. Saat melambat & diam, lensa kembali menjadi kapsul solid. [lift] dipakai pemanggil untuk
+ * memperbesar & mewarnai ulang ikon yang sedang dilewati lensa.
  */
 class PillIndicator(private val host: View) {
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -70,6 +71,8 @@ class PillIndicator(private val host: View) {
     var onFrame: (() -> Unit)? = null
     /** Tampilan lensa kaca saat bergerak (lihat kelas). */
     var lens = false
+    /** Warna isi lensa saat terangkat penuh (kaca bening, biasanya semi-transparan). */
+    var glass = 0x14000000
     /** 0..1: seberapa terangkat lensa saat ini (0 = diam di tempat). */
     val lift: Float get() = if (lens) l.coerceIn(0f, 1f) else 0f
 
@@ -97,6 +100,7 @@ class PillIndicator(private val host: View) {
 
     private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private fun bounds(v: View, out: RectF) {
         val cx = v.left + v.width / 2f + v.translationX
@@ -144,9 +148,17 @@ class PillIndicator(private val host: View) {
     fun draw(c: Canvas) {
         val r = rect() ?: return
         val rad = r.height() / 2f
-        c.drawRoundRect(r, rad, rad, paint)
         val lf = lift
-        if (lf < 0.01f) return
+        if (lf < 0.01f) { c.drawRoundRect(r, rad, rad, paint); return }
+        // kapsul solid -> kaca bening sebanding seberapa terangkat
+        fill.color = mixColor(paint.color, glass, lf)
+        c.drawRoundRect(r, rad, rad, fill)
+        // garis luar tipis supaya kaca bening tetap terlihat di atas bilah terang
+        if (!C.dark) {
+            rim.strokeWidth = 1f * dp
+            rim.color = Color.argb((34 * lf).roundToInt(), 0, 0, 0)
+            c.drawRoundRect(r, rad, rad, rim)
+        }
         // kilau kaca: pantulan lembut di separuh atas
         sheen.shader = LinearGradient(0f, r.top, 0f, r.centerY(),
             Color.argb((64 * lf).roundToInt(), 255, 255, 255), 0, Shader.TileMode.CLAMP)
@@ -274,7 +286,7 @@ class PillIndicator(private val host: View) {
         /** Rasio redaman < 1: pantulan kecil ±5% saat mendarat. */
         const val Z = 0.68f
         /** Pegas "terangkat"-nya lensa: lebih lunak & hampir tanpa pantulan. */
-        const val KL = 260f
+        const val KL = 380f
         const val ZL = 0.9f
     }
 }
@@ -309,6 +321,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         var open = 0f
         var openAlpha = 0f
         var iconColor = 0
+        var labelColor = 0
     }
 
     private val tabs = ArrayList<Tab>()
@@ -408,6 +421,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         ind.paint.color = C.PRIMARY
         ind.edge = context.dp(3).toFloat()
         ind.lens = true
+        ind.glass = if (C.dark) 0x26FFFFFF else 0x14000000
         ind.onFrame = { tint() }
     }
 
@@ -519,12 +533,14 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
 
     /**
      * Ikon berganti warna mengikuti seberapa tertutup lensa — tab mana pun yang sedang dilewati, seperti lensa iOS
-     * (berpindah halus, bukan saklar) — dan membesar sedikit selama lensa terangkat. Nama tab selalu putih di atas
-     * pil dan hanya tampak di bagian yang tertutup pil — tidak pernah muncul abu lalu berganti warna.
+     * (berpindah halus, bukan saklar) — dan membesar sedikit selama lensa terangkat. Di atas kapsul solid isi tab
+     * putih; di atas lensa kaca bening isi tab berwarna merek (biru), berpindah halus mengikuti [PillIndicator.lift].
+     * Nama tab hanya tampak di bagian yang tertutup pil — tidak pernah muncul abu lalu berganti warna.
      */
     private fun tint() {
         val r = ind.rect()
         val lift = ind.lift
+        val onLens = mixColor(C.ON_PRIMARY, C.PRIMARY, lift)
         for (t in tabs) {
             if (r == null) {
                 val ci = if (t.index == selected) C.ON_PRIMARY else C.MUTED
@@ -536,11 +552,12 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
             val il = px + t.icon.left
             val iw = t.icon.width.toFloat()
             val cov = cover(r, il + iw * 0.3f, il + iw * 0.7f)
-            val ci = mixColor(C.MUTED, C.ON_PRIMARY, cov)
+            val ci = mixColor(C.MUTED, onLens, cov)
             if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
             // pembesaran lensa: ikon di bawah lensa yang terangkat tampak membesar
             val sc = 1f + 0.18f * lift * cov
             if (abs(t.icon.scaleX - sc) > 0.002f) { t.icon.scaleX = sc; t.icon.scaleY = sc }
+            if (onLens != t.labelColor) { t.labelColor = onLens; t.label.setTextColor(onLens) }
             val lw = t.label.width
             if (lw > 0) {
                 val lc = cover(r, px + t.label.left, px + t.label.left + lw)
