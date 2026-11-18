@@ -375,7 +375,7 @@ fun View.floating(radiusDp: Int) {
         }
     }
     elevation = ctx.dp(10).toFloat()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) { outlineAmbientShadowColor = 0x22000000; outlineSpotShadowColor = 0x33000000 }
+    outlineAmbientShadowColor = 0x22000000; outlineSpotShadowColor = 0x33000000
 }
 
 /** Bayangan lembut (hanya terlihat di tema terang; tema gelap memakai garis tepi kartu). */
@@ -389,10 +389,8 @@ fun View.elevate(radiusDp: Int, elevationDp: Float = 3f, tint: Int = C.TEXT) {
     }
     clipToOutline = false
     elevation = 0f   // gaya rata: kedalaman lewat warna permukaan & kaca, bukan bayangan
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        outlineAmbientShadowColor = tint
-        outlineSpotShadowColor = tint
-    }
+    outlineAmbientShadowColor = tint
+    outlineSpotShadowColor = tint
 }
 
 /** Satu keluarga huruf (Funnel Display). Ukuran mengikuti setelan huruf sistem. */
@@ -440,7 +438,7 @@ fun Context.headingTv(t: String, sp: Float = 20f, color: Int = C.TEXT): TextView
     tv(t, sp, color, true).apply { markHeading() }
 
 fun View.markHeading() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isAccessibilityHeading = true
+    isAccessibilityHeading = true
 }
 
 /** Ikon dekoratif (diabaikan pembaca layar). Untuk ikon yang bisa diketuk, pakai [iconBtn]. */
@@ -477,7 +475,7 @@ fun Context.navCircle(res: Int, desc: String, tint: Int = C.TEXT, onClick: (View
         setColorFilter(tint)
         val p = dp(9); setPadding(p, p, p, p)
         contentDescription = desc
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) tooltipText = desc
+        tooltipText = desc
         isClickable = true; isFocusable = true
         background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
         setOnClickListener { onClick(it) }
@@ -498,7 +496,7 @@ fun Context.capsuleBtn(res: Int, desc: String, tint: Int = C.TEXT, padDp: Int = 
         setColorFilter(tint)
         val p = dp(padDp); setPadding(p, p, p, p)
         contentDescription = desc
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) tooltipText = desc
+        tooltipText = desc
         isClickable = true; isFocusable = true
         background = rippleBg(100)
         setOnClickListener { onClick(it) }
@@ -522,7 +520,7 @@ fun Context.iconBtn(res: Int, desc: String, tint: Int = C.TEXT, sizeDp: Int = 24
         val p = (dp(48) - dp(sizeDp)) / 2
         setPadding(p, p, p, p)
         contentDescription = desc
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) tooltipText = desc
+        tooltipText = desc
         isClickable = true
         isFocusable = true
         background = rippleBg()
@@ -1246,7 +1244,7 @@ fun ImageView.asButton(desc: String): ImageView = apply {
     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     isFocusable = true
     isClickable = true
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) tooltipText = desc
+    tooltipText = desc
     background = context.rippleBg()
     val p = context.dp(12)
     setPadding(p, p, p, p)

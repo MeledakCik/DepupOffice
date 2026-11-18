@@ -223,7 +223,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         // lalu garis bawah hasilnya terus menempel → tata letak dihitung ulang tanpa henti: editor patah-patah parah
         // bahkan untuk berkas ratusan KB. Saran keyboard tetap jalan normal saat paragraf difokuskan.
         setRawInputType(if (spellAll) BASE_TYPE else BASE_TYPE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
-        if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         if (android.os.Build.VERSION.SDK_INT >= 30) importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO
         // Android 13+: tiap kolom teks didaftarkan ke pelacak tulisan-tangan stylus dan posisinya diperbarui setiap
         // kali bergeser — ratusan paragraf/sel ⇒ kerja besar di thread UI pada SETIAP frame gulir. Tidak dipakai di sini.

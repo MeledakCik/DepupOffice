@@ -1935,7 +1935,7 @@ class MainActivity : AppCompatActivity() {
     private fun miniBtn(res: Int, desc: String, onClick: () -> Unit) = FrameLayout(this).apply {
         background = raised(C.SURFACE, 10, 2f)
         contentDescription = desc
-        if (android.os.Build.VERSION.SDK_INT >= 26) tooltipText = desc
+        tooltipText = desc
         addView(icon(res, C.ACCENT_SOFT, 18), FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER))
         setOnClickListener { onClick() }
     }

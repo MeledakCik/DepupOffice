@@ -727,7 +727,6 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
      * [busy] 0..1 diukur [GlassGuard] dari keragaman warna isi yang tampil.
      */
     fun setDepth(busy: Float) {
-        if (Build.VERSION.SDK_INT < 28) return
         val b = busy.coerceIn(0f, 1f)
         for (bar in listOf(bottomBar, miniBar)) if (bar.corner > 0f) {
             bar.outlineSpotShadowColor = Color.argb(shadowA(0x1C + (0x40 - 0x1C) * b), 0, 0, 0)
@@ -805,10 +804,8 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
         // bayangan lembut di bawah kapsul melayang (seperti referensi), bukan garis keras
         for (b in listOf(bottomBar, miniBar)) if (b.corner > 0f) {
             b.elevation = ctx.dp(8).toFloat()
-            if (Build.VERSION.SDK_INT >= 28) {
-                b.outlineAmbientShadowColor = Color.argb(shadowA(0x18.toFloat()), 0, 0, 0)
-                b.outlineSpotShadowColor = Color.argb(shadowA(0x2C.toFloat()), 0, 0, 0)
-            }
+            b.outlineAmbientShadowColor = Color.argb(shadowA(0x18.toFloat()), 0, 0, 0)
+            b.outlineSpotShadowColor = Color.argb(shadowA(0x2C.toFloat()), 0, 0, 0)
         }
         // sentuhan di area bilah tidak boleh tembus ke isi di bawahnya
         topBar.isClickable = true; bottomBar.isClickable = true
@@ -864,7 +861,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
     }
 
     private fun ripples(v: View): Boolean =
-        v.background is RippleDrawable || (Build.VERSION.SDK_INT >= 23 && v.foreground is RippleDrawable)
+        v.background is RippleDrawable || v.foreground is RippleDrawable
 
     private var fanning = false
 

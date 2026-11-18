@@ -1,12 +1,13 @@
-# Depup Office 4.0.1 — Play production checklist
+# Depup Office 4.1.0 — Play production checklist
 
 ## Release artifact
 
 - Package: `cloud.depup.office`
-- Version: `4.0.1` (`versionCode` `40001`)
+- Version: `4.1.0` (`versionCode` `40100`)
 - Target SDK: 36; min SDK: 29.
-- Local AAB: `app/build/outputs/bundle/release/DepupOffice_v4.0.1-release.aab`
+- Local AAB: `app/build/outputs/bundle/release/DepupOffice_v4.1.0-release.aab`
 - Play API confirmed alpha already uses `40000`; production track is empty.
+- The production-upload attempt and the verification notes below were recorded for 4.0.1. Re-run them for 4.1.0 before rollout.
 - AAB upload was accepted by Play during an edit, but the production track update returned `400 Precondition check failed`. The edit was discarded; there is no committed production draft and no rollout.
 - The service account's Play Console screen shows app access **Admin (all permissions)**, so a missing app permission is not the current finding.
 - Play Console reports an account owner transfer in progress to this service account. A retry still got `400 Precondition check failed`; no production draft was committed. Resolve/cancel the pending owner transfer with the real human account owner, then retry the production draft upload.
@@ -35,5 +36,5 @@
 
 ## Remaining quality work
 
-- Release lint currently reports 301 warnings and zero Error/Fatal findings. Main groups are `UseKtx` (121), `SetTextI18n` (100), `ObsoleteSdkInt` (18), and `UnusedResources` (14). Do not suppress the report wholesale; address accessibility and localization warnings in focused changes.
+- Release lint currently reports 301 warnings and zero Error/Fatal findings. Main groups are `UseKtx` (121), `SetTextI18n` (100), `ObsoleteSdkInt` (18), and `UnusedResources` (14). The 18 `ObsoleteSdkInt` findings (API checks below minSdk 29 and the `mipmap-anydpi-v26` folder) were removed on 2026-11-19; re-run lint to confirm the new total. Do not suppress the report wholesale; address accessibility and localization warnings in focused changes.
 - No automated coverage yet for complete DOCX/XLSX editing, camera/OCR accuracy, and export flows.

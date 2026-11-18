@@ -4,7 +4,6 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.graphics.Rect
-import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -49,7 +48,7 @@ object Motion {
     /** false saat render ulang yang tidak perlu dianimasikan (mis. kembali dari layar lain). */
     @Volatile var quiet = false
 
-    fun on(): Boolean = !quiet && (Build.VERSION.SDK_INT < 26 || ValueAnimator.areAnimatorsEnabled())
+    fun on(): Boolean = !quiet && ValueAnimator.areAnimatorsEnabled()
 
     /** Nomor gerak terakhir tiap tampilan: pengaman akhir gerak lama tidak memotong gerak yang lebih baru. */
     internal val gen = WeakHashMap<View, Int>()

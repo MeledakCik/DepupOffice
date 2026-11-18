@@ -289,7 +289,7 @@ class DocEditorActivity : AppCompatActivity() {
         }
         pageBox = PagedBox(this).apply {
             // ratusan kolom teks: jangan dilacak Autofill / Content Capture sistem tiap kali digulir
-            if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         pageCard.add(pageBox)
         pad.addView(pageCard, LinearLayout.LayoutParams(WRAP, WRAP))
@@ -362,17 +362,15 @@ class DocEditorActivity : AppCompatActivity() {
         host.addView(box, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(8), 0, dp(8), dp(64)) })
 
         // fase tiap frame dari sistem (termasuk kerja RenderThread/GPU yang tak terlihat di thread UI)
-        if (android.os.Build.VERSION.SDK_INT >= 24) {
-            window.addOnFrameMetricsAvailableListener({ _, fm, _ ->
-                fun g(id: Int) = fm.getMetric(id)
-                EdPerf.addFrame(
-                    g(android.view.FrameMetrics.UNKNOWN_DELAY_DURATION), g(android.view.FrameMetrics.INPUT_HANDLING_DURATION),
-                    g(android.view.FrameMetrics.ANIMATION_DURATION), g(android.view.FrameMetrics.LAYOUT_MEASURE_DURATION),
-                    g(android.view.FrameMetrics.DRAW_DURATION), g(android.view.FrameMetrics.SYNC_DURATION),
-                    g(android.view.FrameMetrics.COMMAND_ISSUE_DURATION), g(android.view.FrameMetrics.SWAP_BUFFERS_DURATION),
-                    g(android.view.FrameMetrics.TOTAL_DURATION))
-            }, android.os.Handler(android.os.Looper.getMainLooper()))
-        }
+        window.addOnFrameMetricsAvailableListener({ _, fm, _ ->
+            fun g(id: Int) = fm.getMetric(id)
+            EdPerf.addFrame(
+                g(android.view.FrameMetrics.UNKNOWN_DELAY_DURATION), g(android.view.FrameMetrics.INPUT_HANDLING_DURATION),
+                g(android.view.FrameMetrics.ANIMATION_DURATION), g(android.view.FrameMetrics.LAYOUT_MEASURE_DURATION),
+                g(android.view.FrameMetrics.DRAW_DURATION), g(android.view.FrameMetrics.SYNC_DURATION),
+                g(android.view.FrameMetrics.COMMAND_ISSUE_DURATION), g(android.view.FrameMetrics.SWAP_BUFFERS_DURATION),
+                g(android.view.FrameMetrics.TOTAL_DURATION))
+        }, android.os.Handler(android.os.Looper.getMainLooper()))
         // pesan thread UI yang paling lama (di luar penggambaran frame): pemeriksa ejaan, aksesibilitas, dsb.
         var msgStart = 0L; var msgName = ""
         android.os.Looper.getMainLooper().setMessageLogging { line ->
@@ -469,7 +467,7 @@ class DocEditorActivity : AppCompatActivity() {
         walk(window.decorView, 0)
         val hz = try { (if (android.os.Build.VERSION.SDK_INT >= 30) display else @Suppress("DEPRECATION") windowManager.defaultDisplay)?.refreshRate ?: 0f } catch (_: Exception) { 0f }
         val b = android.os.Build.VERSION.SDK_INT
-        val hw = if (b >= 26) window.decorView.isHardwareAccelerated else true
+        val hw = window.decorView.isHardwareAccelerated
         return "HP ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} (API $b) · %.0f Hz · HW $hw\n".format(hz) +
             "dokumen: ${doc.body.size} blok · ${rows.size} paragraf · view $views · EditText $edits (terpasang ${rows.values.count { it.editor.isAttachedToWindow }}) · kedalaman $depth\n" +
             "tinggi isi ${pageBox.height}px · layar ${scroll.height}px · densitas ${resources.displayMetrics.density}\n"
@@ -859,7 +857,7 @@ class DocEditorActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             contentDescription = label
-            if (android.os.Build.VERSION.SDK_INT >= 26) tooltipText = label
+            tooltipText = label
             setOnClickListener { onClick(); refreshTools() }
         }
         glyph.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -907,7 +905,7 @@ class DocEditorActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             contentDescription = label
-            if (android.os.Build.VERSION.SDK_INT >= 26) tooltipText = label
+            tooltipText = label
             background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
             setOnClickListener { onClick() }
         }
