@@ -9,6 +9,7 @@ import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.text.TextPaint
+import android.text.TextUtils
 import android.view.Gravity
 import android.widget.ImageView
 import android.widget.ScrollView
@@ -198,8 +199,9 @@ object CatalogMakerManager {
         activity.work("Membuat PDF Katalog Produk…", {
             val doc = PdfDocument()
             val pw = 595; val ph = 842 // A4
-            val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, 1).create())
-            val c = page.canvas
+            var pageNo = 1
+            var page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+            var c = page.canvas
             c.drawColor(Color.WHITE)
 
             val pTitle = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1652F6.toInt(); textSize = 22f; isFakeBoldText = true }
@@ -221,7 +223,21 @@ object CatalogMakerManager {
             val colW = (pw - 100f) / 2f
             val cardH = 140f
 
-            items.take(8).forEachIndexed { idx, item ->
+            val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+            val perPage = 8   // 4 baris × 2 kolom
+            // SEMUA produk (dulu hanya 8 pertama — sisanya dibuang tanpa peringatan): 8 per halaman
+            items.forEachIndexed { i, item ->
+                if (i > 0 && i % perPage == 0) {
+                    doc.finishPage(page)
+                    pageNo++
+                    page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+                    c = page.canvas
+                    c.drawColor(Color.WHITE)
+                    y = 50f
+                    c.drawText("$title (lanjutan)", 40f, y, pSub)
+                    y += 24f
+                }
+                val idx = i % perPage
                 val col = idx % 2
                 val row = idx / 2
                 val left = 40f + col * (colW + 20f)
@@ -230,18 +246,28 @@ object CatalogMakerManager {
                 // Draw Card
                 c.drawRoundRect(RectF(left, top, left + colW, top + cardH), 12f, 12f, pCardBg)
 
-                // Draw Image
-                if (item.imageBmp != null) {
+                // Foto: dipotong proporsional (tidak gepeng) agar mengisi kotaknya
+                val bmp = item.imageBmp
+                if (bmp != null && bmp.width > 0 && bmp.height > 0) {
                     val imgDst = RectF(left + 8f, top + 8f, left + 90f, top + cardH - 8f)
-                    c.drawBitmap(item.imageBmp, null, imgDst, Paint(Paint.FILTER_BITMAP_FLAG))
+                    val dstRatio = imgDst.width() / imgDst.height()
+                    val srcRatio = bmp.width.toFloat() / bmp.height
+                    val src = if (srcRatio > dstRatio) {
+                        val w = (bmp.height * dstRatio).toInt(); val x = (bmp.width - w) / 2
+                        android.graphics.Rect(x, 0, x + w, bmp.height)
+                    } else {
+                        val h = (bmp.width / dstRatio).toInt(); val yy = (bmp.height - h) / 2
+                        android.graphics.Rect(0, yy, bmp.width, yy + h)
+                    }
+                    c.drawBitmap(bmp, src, imgDst, imgPaint)
                 }
 
-                val textLeft = if (item.imageBmp != null) left + 100f else left + 12f
-                c.drawText(item.title.take(20), textLeft, top + 28f, pItemTitle)
-                c.drawText(item.priceOrSub, textLeft, top + 48f, pItemPrice)
-
-                val desc = item.description.take(45)
-                c.drawText(desc, textLeft, top + 68f, pItemDesc)
+                val textLeft = if (bmp != null) left + 100f else left + 12f
+                val textW = left + colW - 10f - textLeft
+                fun fit(t: String, p: TextPaint) = TextUtils.ellipsize(t, p, textW, TextUtils.TruncateAt.END).toString()
+                c.drawText(fit(item.title, pItemTitle), textLeft, top + 28f, pItemTitle)
+                c.drawText(fit(item.priceOrSub, pItemPrice), textLeft, top + 48f, pItemPrice)
+                c.drawText(fit(item.description, pItemDesc), textLeft, top + 68f, pItemDesc)
             }
 
             doc.finishPage(page)

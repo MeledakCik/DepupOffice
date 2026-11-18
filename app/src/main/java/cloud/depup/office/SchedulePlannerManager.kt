@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.text.TextPaint
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.widget.EditText
@@ -125,11 +126,12 @@ object SchedulePlannerManager {
                     grid.add(listOf("", "", "", ""))
                     grid.add(listOf("No", "Hari / Waktu", "Tugas / Kegiatan", "Catatan"))
 
-                    taskRows.forEachIndexed { idx, (fDay, fTask, fAssignee) ->
+                    var no = 0   // nomor urut tanpa lompatan (baris kosong tidak ikut)
+                    taskRows.forEach { (fDay, fTask, fAssignee) ->
                         val d = fDay.text.toString().trim()
                         val t = fTask.text.toString().trim()
                         val a = fAssignee.text.toString().trim()
-                        if (t.isNotBlank()) grid.add(listOf((idx + 1).toString(), d, t, a))
+                        if (t.isNotBlank()) grid.add(listOf((++no).toString(), d, t, a))
                     }
 
                     dismiss()
@@ -158,8 +160,9 @@ object SchedulePlannerManager {
         activity.work("Membuat PDF Jadwal…", {
             val doc = PdfDocument()
             val pw = 595; val ph = 842 // A4
-            val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, 1).create())
-            val c = page.canvas
+            var pageNo = 1
+            var page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+            var c = page.canvas
             c.drawColor(Color.WHITE)
 
             val pTitle = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1652F6.toInt(); textSize = 22f; isFakeBoldText = true }
@@ -176,18 +179,33 @@ object SchedulePlannerManager {
 
             // Tabel Header
             val bgHeader = Paint().apply { color = 0xFFE8EEFF.toInt() }
-            c.drawRect(40f, y, pw - 40f, y + 28f, bgHeader)
             val pTableHead = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1652F6.toInt(); textSize = 12f; isFakeBoldText = true }
-
-            c.drawText("Hari / Waktu", 50f, y + 18f, pTableHead)
-            c.drawText("Tugas / Kegiatan", 200f, y + 18f, pTableHead)
-            c.drawText("Catatan", 420f, y + 18f, pTableHead)
-            y += 36f
+            fun header() {
+                c.drawRect(40f, y, pw - 40f, y + 28f, bgHeader)
+                c.drawText("Hari / Waktu", 50f, y + 18f, pTableHead)
+                c.drawText("Tugas / Kegiatan", 200f, y + 18f, pTableHead)
+                c.drawText("Catatan", 420f, y + 18f, pTableHead)
+                y += 36f
+            }
+            header()
+            fun fit(t: String, w: Float) = TextUtils.ellipsize(t, pText, w, TextUtils.TruncateAt.END).toString()
 
             tasks.forEach { item ->
-                c.drawText(item.timeOrDay.take(18), 50f, y, pText)
-                c.drawText(item.taskName.take(30), 200f, y, pText)
-                c.drawText(item.assignee.take(20), 420f, y, pText)
+                // halaman baru bila penuh (dulu baris ke-±33 dst. tergambar di luar kertas)
+                if (y + 22f > ph - 40f) {
+                    doc.finishPage(page)
+                    pageNo++
+                    page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+                    c = page.canvas
+                    c.drawColor(Color.WHITE)
+                    y = 50f
+                    c.drawText("$title (lanjutan)", 40f, y, pSub)
+                    y += 20f
+                    header()
+                }
+                c.drawText(fit(item.timeOrDay, 140f), 50f, y, pText)
+                c.drawText(fit(item.taskName, 210f), 200f, y, pText)
+                c.drawText(fit(item.assignee, pw - 50f - 420f), 420f, y, pText)
                 y += 22f
                 c.drawLine(40f, y - 10f, pw - 40f, y - 10f, pLine)
             }

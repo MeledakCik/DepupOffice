@@ -26,11 +26,28 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
 
     var onProgressUpdate: ((paragraphIndex: Int, totalParagraphs: Int, paragraphText: String) -> Unit)? = null
     var onStateChange: ((isPlaying: Boolean, isPaused: Boolean) -> Unit)? = null
+    /** Pesan untuk pengguna (mesin suara tidak ada, bahasa belum terpasang). Dipanggil di thread UI. */
+    var onMessage: ((String) -> Unit)? = null
+    /** "Putar" ditekan sebelum mesin suara siap (inisialisasi asinkron): mulai begitu siap. Dulu tidak terjadi apa-apa. */
+    private var pending = false
+
+    private fun ui(block: () -> Unit) {
+        val a = context as? Activity
+        if (a != null) a.runOnUiThread(block) else block()
+    }
 
     override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
+        if (status != TextToSpeech.SUCCESS) {
+            pending = false
+            ui { onMessage?.invoke("Mesin suara (Text-to-Speech) tidak tersedia di HP ini."); onStateChange?.invoke(false, false) }
+            return
+        }
+        run {
             isInitialized = true
-            tts?.language = currentLocale
+            val lr = try { tts?.setLanguage(currentLocale) } catch (_: Exception) { null }
+            if (lr == TextToSpeech.LANG_MISSING_DATA || lr == TextToSpeech.LANG_NOT_SUPPORTED) ui {
+                onMessage?.invoke("Suara Bahasa Indonesia belum terpasang. Pasang lewat Setelan HP → Bahasa → Output text-to-speech.")
+            }
             tts?.setSpeechRate(speechRate)
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
@@ -46,22 +63,46 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
                     }
                 }
 
+                // paragraf gagal dibacakan: lanjut ke berikutnya (dulu pembacaan berhenti diam-diam)
                 @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) {}
+                override fun onError(utteranceId: String?) { onDone(utteranceId) }
+                override fun onError(utteranceId: String?, errorCode: Int) { onDone(utteranceId) }
             })
+            if (pending && paragraphs.isNotEmpty() && !isPaused) { pending = false; speakCurrentParagraph() }
         }
+    }
+
+    /**
+     * Pecah teks per paragraf; paragraf yang melebihi batas masukan TTS (±4000 karakter) dipotong di akhir kalimat —
+     * dulu paragraf sepanjang itu gagal dibacakan.
+     */
+    private fun chunks(text: String): List<String> {
+        val max = (try { TextToSpeech.getMaxSpeechInputLength() } catch (_: Throwable) { 4000 } - 100).coerceAtLeast(500)
+        val out = ArrayList<String>()
+        for (p in text.split("\n").map { it.trim() }.filter { it.isNotBlank() }) {
+            var rest = p
+            while (rest.length > max) {
+                val cut = rest.lastIndexOfAny(charArrayOf('.', '!', '?', ';'), max).takeIf { it > max / 2 }
+                    ?: rest.lastIndexOf(' ', max).takeIf { it > max / 2 } ?: max
+                out.add(rest.substring(0, cut + 1).trim())
+                rest = rest.substring(cut + 1).trim()
+            }
+            if (rest.isNotBlank()) out.add(rest)
+        }
+        return out
     }
 
     fun startReading(text: String, locale: Locale = Locale("id", "ID")) {
         if (text.isBlank()) return
         currentLocale = locale
         currentText = text
-        paragraphs = text.split("\n").filter { it.isNotBlank() }
-        if (paragraphs.isEmpty()) paragraphs = listOf(text)
+        paragraphs = chunks(text)
+        if (paragraphs.isEmpty()) paragraphs = listOf(text.take(3900))
         currentParagraphIndex = 0
         isPaused = false
 
-        if (isInitialized) {
+        if (!isInitialized) pending = true
+        else {
             tts?.language = currentLocale
             tts?.setSpeechRate(speechRate)
             speakCurrentParagraph()
@@ -132,6 +173,7 @@ class VoiceReaderManager(private val context: Context) : TextToSpeech.OnInitList
             var selectedLocale = Locale("id", "ID")
             var currentRate = 1.0f
             val reader = VoiceReaderManager(activity)
+            reader.onMessage = { m -> toast(activity, m) }
 
             val rootLayout = LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
