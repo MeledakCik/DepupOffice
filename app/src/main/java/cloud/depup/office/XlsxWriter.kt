@@ -18,7 +18,9 @@ object XlsxWriter {
         sheetName: String,
         rows: List<List<String>>,
         boldRows: Set<Int> = setOf(0),
-        columnCount: Int = rows.maxOfOrNull { it.size } ?: 0
+        columnCount: Int = rows.maxOfOrNull { it.size } ?: 0,
+        /** Rumus sel (r, c) → (rumus tanpa "=", nilai hasil). Ditulis sebagai rumus Excel asli, bukan angka mati. */
+        formulas: (Int, Int) -> Pair<String, Double?>? = { _, _ -> null }
     ) {
         val safeName = sheetName.ifBlank { "Sheet1" }.take(31)
             .replace(Regex("[\\\\/*?\\[\\]:]"), "_")
@@ -36,7 +38,7 @@ object XlsxWriter {
             put("xl/workbook.xml", workbook(safeName))
             put("xl/_rels/workbook.xml.rels", workbookRels())
             put("xl/styles.xml", styles())
-            put("xl/worksheets/sheet1.xml", worksheet(rows, boldRows, cols))
+            put("xl/worksheets/sheet1.xml", worksheet(rows, boldRows, cols, formulas))
         }
     }
 
@@ -85,7 +87,7 @@ object XlsxWriter {
         "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>" +
         "</styleSheet>"
 
-    private fun worksheet(rows: List<List<String>>, boldRows: Set<Int>, cols: Int): String {
+    private fun worksheet(rows: List<List<String>>, boldRows: Set<Int>, cols: Int, formulas: (Int, Int) -> Pair<String, Double?>?): String {
         val sb = StringBuilder()
         sb.append(XML)
             .append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
@@ -106,10 +108,18 @@ object XlsxWriter {
             sb.append("<row r=\"${r + 1}\">")
             val bold = r in boldRows
             for (c in 0 until cols) {
-                val raw = row.getOrNull(c).orEmpty().trim()
-                if (raw.isEmpty()) continue
                 val ref = "${columnName(c)}${r + 1}"
                 val style = if (bold) " s=\"1\"" else ""
+                val fx = formulas(r, c)
+                if (fx != null) {
+                    // rumus tetap rumus di Excel/Sheets; nilai tersimpan = hasil terakhir (presisi penuh)
+                    sb.append("<c r=\"$ref\"$style><f>").append(esc(excelFormula(fx.first))).append("</f>")
+                    fx.second?.takeIf { !it.isNaN() && !it.isInfinite() }?.let { sb.append("<v>").append(trimNumber(it)).append("</v>") }
+                    sb.append("</c>")
+                    continue
+                }
+                val raw = row.getOrNull(c).orEmpty().trim()
+                if (raw.isEmpty()) continue
                 val numeric = parseNumber(raw)
                 if (numeric != null) {
                     sb.append("<c r=\"$ref\"$style><v>${trimNumber(numeric)}</v></c>")
@@ -148,6 +158,16 @@ object XlsxWriter {
                 compact.toDoubleOrNull()
             else -> compact.replace(".", "").replace(",", "").toDoubleOrNull()
         }
+    }
+
+    /**
+     * Rumus editor → sintaks berkas Excel: tanpa "=", nama fungsi huruf besar, AVG → AVERAGE (AVG bukan fungsi Excel).
+     * Pemisah argumen editor sudah koma (= format berkas).
+     */
+    private fun excelFormula(f: String): String {
+        val e = f.trim().removePrefix("=").trim()
+        if (e.contains('"')) return e
+        return e.uppercase().replace(Regex("\\bAVG\\("), "AVERAGE(")
     }
 
     private fun trimNumber(v: Double): String =
