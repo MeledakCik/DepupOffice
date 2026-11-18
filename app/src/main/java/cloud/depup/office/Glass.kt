@@ -287,7 +287,7 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         val bezel = if (cap) min(18f * d, h * 0.42f) else 12f * d
         u[6] = bezel
         u[7] = bezel * 0.5f
-        u[8] = if (Perf.low) 0f else 0.22f   // HP kelas bawah: satu sampel saja (lebih ringan)
+        u[8] = LiquidGlass.dispersionAmount()   // mati / HP kelas bawah: satu sampel saja (lebih ringan)
         u[9] = GlassLight.x; u[10] = GlassLight.y
         val base = tintColor?.invoke() ?: (baseColor ?: C.BG)
         u[11] = Color.red(base) / 255f; u[12] = Color.green(base) / 255f; u[13] = Color.blue(base) / 255f
