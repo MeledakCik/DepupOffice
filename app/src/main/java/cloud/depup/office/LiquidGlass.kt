@@ -69,6 +69,12 @@ object LiquidGlass {
     /** Setelan pengguna "Kaca cair" (Saya → Tampilan). */
     @Volatile var ON = true
         private set
+    /**
+     * Setelan pengguna "Dispersi warna" (Saya → Tampilan): semburat pelangi tipis di tepi kaca cair & lensa tab.
+     * Mati = tepi kaca bening tanpa pelangi (juga sedikit lebih ringan: satu sampel, bukan tiga).
+     */
+    @Volatile var DISPERSION = true
+        private set
     /** true sekali setelah kaca cair dimatikan otomatis — layar berikutnya memberi tahu pengguna. */
     @Volatile var autoDisabled = false
     @Volatile private var failed = false
@@ -84,6 +90,7 @@ object LiquidGlass {
     fun init(ctx: Context) {
         val p = sp(ctx.applicationContext)
         ON = p.getBoolean("liquid", !Perf.low)
+        DISPERSION = p.getBoolean("dispersion", true)
         if (p.getBoolean("liquidAutoOff", false)) { autoDisabled = true; p.edit().remove("liquidAutoOff").apply() }
     }
 
@@ -91,6 +98,14 @@ object LiquidGlass {
         sp(ctx).edit().putBoolean("liquid", on).apply()
         ON = on
     }
+
+    fun setDispersion(ctx: Context, on: Boolean) {
+        sp(ctx).edit().putBoolean("dispersion", on).apply()
+        DISPERSION = on
+    }
+
+    /** Kekuatan dispersi untuk shader: 0 bila dimatikan pengguna atau HP kelas bawah (satu sampel, lebih ringan). */
+    internal fun dispersionAmount(): Float = if (Perf.low || !DISPERSION) 0f else 0.22f
 
     /** Penjaga/penangkap galat: kaca cair dimatikan lebih dulu — blur biasa tetap menyala. */
     fun disableAuto(ctx: Context) {
@@ -354,7 +369,7 @@ internal class LensDrawable(
         s.setFloatUniform("slab", 0f)
         s.setFloatUniform("bezel", bezel)
         s.setFloatUniform("refraction", bezel * 0.5f)
-        s.setFloatUniform("dispersion", if (Perf.low) 0f else 0.22f)
+        s.setFloatUniform("dispersion", LiquidGlass.dispersionAmount())
         s.setFloatUniform("light", GlassLight.x, GlassLight.y)
         s.setFloatUniform("tint", android.graphics.Color.red(tintColor) / 255f, android.graphics.Color.green(tintColor) / 255f,
             android.graphics.Color.blue(tintColor) / 255f, tintAmt)

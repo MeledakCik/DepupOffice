@@ -8,13 +8,17 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.drawable.RippleDrawable
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.animation.LinearInterpolator
 import android.widget.ImageView
@@ -22,10 +26,12 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /** Campur dua warna ARGB ([f] 0..1). */
 fun mixColor(a: Int, b: Int, f: Float): Int {
@@ -44,11 +50,15 @@ internal fun cover(r: RectF, a: Float, b: Float): Float =
     if (b <= a) 0f else ((min(r.right, b) - max(r.left, a)) / (b - a)).coerceIn(0f, 1f)
 
 /**
- * Pil penanda yang berpindah antar-anak sebuah baris seperti tetes cair, tetapi rapi: satu kurva
- * ([Motion.STANDARD], [Motion.SLOW]); di tengah perjalanan pil sedikit memanjang searah gerak & memipih (morph),
- * lalu kembali bulat TEPAT saat tiba — tanpa pantulan. Selalu mengikuti ukuran & skala anak tujuan secara langsung
- * (ikut melebar saat label tab terbuka, ikut mengecil saat ditekan). Dipakai bilah tab bawah, tab pita editor &
- * kontrol segmen.
+ * Pil penanda yang berpindah antar-anak sebuah baris seperti tetes air: digerakkan PEGAS (bukan durasi tetap), jadi
+ * geraknya mengikuti kecepatan, bisa disela/dibelokkan kapan saja tanpa patah, dan mendarat dengan pantulan kecil
+ * yang lembut (±5%). Saat melaju, pil memanjang searah gerak & memipih sebanding kecepatannya, lalu kembali bulat
+ * saat melambat. Selalu mengikuti ukuran & skala anak tujuan (ikut melebar saat label tab terbuka, ikut mengecil
+ * saat ditekan). Dipakai bilah tab bawah, tab pita editor & kontrol segmen.
+ *
+ * [lens] = true (bilah tab bawah): saat bergerak/diseret pil "terangkat" menjadi lensa kaca — sedikit membesar,
+ * berkilau, bertepi terang, dan (bila setelan Dispersi menyala) bertepi pelangi tipis. [lift] dipakai pemanggil untuk
+ * memperbesar ikon yang sedang dilewati lensa.
  */
 class PillIndicator(private val host: View) {
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -58,14 +68,35 @@ class PillIndicator(private val host: View) {
         private set
     /** Dipanggil tiap frame animasi — mis. mewarnai ulang ikon/teks yang sedang dilewati pil. */
     var onFrame: (() -> Unit)? = null
+    /** Tampilan lensa kaca saat bergerak (lihat kelas). */
+    var lens = false
+    /** 0..1: seberapa terangkat lensa saat ini (0 = diam di tempat). */
+    val lift: Float get() = if (lens) l.coerceIn(0f, 1f) else 0f
 
-    private val from = RectF()
+    private val dp = host.resources.displayMetrics.density
     private val to = RectF()
     private val now = RectF()
-    private var t = 1f
+    private val tmp = RectF()
+
+    // Keadaan pegas (koordinat host, px & px/detik). x = NaN: diam tepat di tujuan (tidak ada simulasi).
+    private var x = Float.NaN
+    private var vx = 0f
+    private var w = 0f
+    private var vw = 0f
+    private var l = 0f
+    private var vl = 0f
+    private var dir = 1f
+    /** Posisi jari saat lensa diseret (NaN = tidak diseret). */
+    private var dragX = Float.NaN
+    private var running = false
+    private var lastNs = 0L
+    private val frame = Choreographer.FrameCallback { step(it) }
+
     private var pulse = 0f
-    private var move: ValueAnimator? = null
     private var beat: ValueAnimator? = null
+
+    private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private fun bounds(v: View, out: RectF) {
         val cx = v.left + v.width / 2f + v.translationX
@@ -75,33 +106,37 @@ class PillIndicator(private val host: View) {
         out.set(cx - hw, cy - hh, cx + hw, cy + hh)
     }
 
+    /** 0..1: kecepatan mendatar relatif (untuk regangan & dispersi). */
+    private fun speed(): Float = min(abs(vx) / (1600f * dp), 1f)
+
     /** Bentuk pil saat ini (koordinat [host]); null bila tujuannya belum terukur. */
     fun rect(): RectF? {
         val v = target ?: return null
         if (v.width <= 0 || v.height <= 0) return null
         bounds(v, to)
-        if (t >= 1f) now.set(to) else {
-            // t sudah melalui kurva animator: keempat tepi berpindah serempak
-            now.left = from.left + (to.left - from.left) * t
-            now.right = from.right + (to.right - from.right) * t
-            now.top = from.top + (to.top - from.top) * t
-            now.bottom = from.bottom + (to.bottom - from.bottom) * t
-            // morph cair: memanjang searah gerak & sedikit memipih di tengah perjalanan, kembali bulat tepat saat tiba
-            // (amplop 4t(1−t): nol di awal & akhir — tidak ada pantulan)
-            val env = 4f * t * (1f - t)
-            val ext = min(abs(to.centerX() - from.centerX()) * 0.2f, now.height() * 0.6f) * env
+        now.set(to)
+        val h = to.height()
+        if (!x.isNaN()) {
+            now.left = x - w / 2f; now.right = x + w / 2f
+            // regangan cair: memanjang searah gerak & memipih sebanding kecepatan
+            val s = speed()
+            val ext = s * h * 0.5f
             now.left -= ext / 2f; now.right += ext / 2f
-            val sq = now.height() * 0.06f * env
+            val sq = s * h * 0.12f
             now.top += sq / 2f; now.bottom -= sq / 2f
         }
+        val lf = lift
+        if (lf > 0f) { val g = h * 0.11f * lf; now.inset(-g, -g) }   // lensa terangkat sedikit lebih besar
         if (pulse != 0f) {
             // denyut: membesar merata sedikit (bentuk tetap pil yang sama)
-            val dx = now.height() * 0.06f * pulse
+            val dx = h * 0.06f * pulse
             now.left -= dx; now.right += dx; now.top -= dx; now.bottom += dx
         }
         if (host.width > 0) {
             if (now.left < edge) now.left = edge
             if (now.right > host.width - edge) now.right = host.width - edge
+            if (now.top < 0f) now.top = 0f
+            if (now.bottom > host.height) now.bottom = host.height.toFloat()
         }
         return now
     }
@@ -110,32 +145,106 @@ class PillIndicator(private val host: View) {
         val r = rect() ?: return
         val rad = r.height() / 2f
         c.drawRoundRect(r, rad, rad, paint)
+        val lf = lift
+        if (lf < 0.01f) return
+        // kilau kaca: pantulan lembut di separuh atas
+        sheen.shader = LinearGradient(0f, r.top, 0f, r.centerY(),
+            Color.argb((64 * lf).roundToInt(), 255, 255, 255), 0, Shader.TileMode.CLAMP)
+        c.drawRoundRect(r, rad, rad, sheen)
+        // dispersi: tepi pelangi tipis, bergeser searah gerak (lebih kuat saat melaju)
+        if (LiquidGlass.DISPERSION && !Perf.low) {
+            val off = (1.2f + 2.4f * speed()) * dp * lf * dir
+            rim.strokeWidth = 1.6f * dp
+            rim.color = Color.argb((120 * lf).roundToInt(), 255, 64, 160)
+            c.drawRoundRect(r.left + off, r.top, r.right + off, r.bottom, rad, rad, rim)
+            rim.color = Color.argb((120 * lf).roundToInt(), 40, 200, 255)
+            c.drawRoundRect(r.left - off, r.top, r.right - off, r.bottom, rad, rad, rim)
+            rim.color = Color.argb((90 * lf).roundToInt(), 255, 220, 60)
+            c.drawRoundRect(r.left + off * 0.35f, r.top - 0.6f * dp * lf, r.right + off * 0.35f, r.bottom - 0.6f * dp * lf, rad, rad, rim)
+        }
+        // tepi kaca terang
+        rim.strokeWidth = 1.2f * dp
+        rim.color = Color.argb((150 * lf).roundToInt(), 255, 255, 255)
+        tmp.set(r); tmp.inset(0.6f * dp, 0.6f * dp)
+        c.drawRoundRect(tmp, rad, rad, rim)
     }
 
     /** Pindah ke [v]. Tanpa animasi bila [animate] false / belum ada posisi awal / animasi HP dimatikan. */
     fun moveTo(v: View, animate: Boolean) {
-        val cur = rect()?.let { RectF(it) }
+        val old = target
         target = v
-        val prev = move
-        move = null
-        prev?.cancel()
-        if (!animate || cur == null || cur.isEmpty || !Motion.on()) {
-            t = 1f; onFrame?.invoke(); host.invalidate(); return
+        dragX = Float.NaN
+        if (!animate || !Motion.on()) { rest(); onFrame?.invoke(); host.invalidate(); return }
+        if (x.isNaN()) {
+            // mulai dari posisi diam sebelumnya; kecepatan yang sedang berjalan (mis. sisa seretan) dipertahankan
+            if (old == null || old.width <= 0) { rest(); onFrame?.invoke(); host.invalidate(); return }
+            bounds(old, tmp)
+            x = tmp.centerX(); w = tmp.width(); vx = 0f; vw = 0f
         }
-        from.set(cur)
+        kick()
+    }
+
+    /** Lensa mengikuti jari di [px] (koordinat host, sudah dibatasi pemanggil). */
+    fun drag(px: Float) {
+        if (!Motion.on()) return
+        if (x.isNaN()) {
+            val v = target ?: return
+            if (v.width <= 0) return
+            bounds(v, tmp)
+            x = tmp.centerX(); w = tmp.width()
+        }
+        dragX = px
+        kick()
+    }
+
+    /** Jari dilepas: lensa kembali ke tujuan ([moveTo] berikutnya bisa langsung membelokkannya). */
+    fun release() {
+        dragX = Float.NaN
+        if (!x.isNaN()) kick()
+    }
+
+    private fun rest() { x = Float.NaN; vx = 0f; vw = 0f; l = 0f; vl = 0f }
+
+    private fun kick() {
+        if (running) return
+        running = true; lastNs = 0L
+        Choreographer.getInstance().postFrameCallback(frame)
+    }
+
+    private fun step(ns: Long) {
+        val v = target
+        if (v == null || x.isNaN() || !host.isAttachedToWindow) { running = false; rest(); return }
+        val dt = (if (lastNs == 0L) 1f / 60f else (ns - lastNs) / 1e9f).coerceIn(0f, 1f / 24f)
+        lastNs = ns
         bounds(v, to)
-        t = 0f
-        val a = ValueAnimator.ofFloat(0f, 1f)
-        a.duration = Motion.SLOW
-        a.interpolator = Motion.STANDARD
-        a.addUpdateListener { t = it.animatedValue as Float; onFrame?.invoke(); host.invalidate() }
-        a.addListener(object : AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: Animator) {
-                if (move === animation) { t = 1f; onFrame?.invoke(); host.invalidate() }
-            }
-        })
-        move = a
-        a.start()
+        val dragging = !dragX.isNaN()
+        val gx = if (dragging) dragX else to.centerX()
+        val gw = to.width()
+        val kx = if (dragging) K_DRAG else K
+        val cx = 2f * Z * sqrt(kx)
+        val cw = 2f * Z * sqrt(K)
+        val cl = 2f * ZL * sqrt(KL)
+        // sub-langkah kecil (≤ 4 ms): stabil di layar 60–144 Hz maupun saat frame terlambat
+        val n = ceil(dt / 0.004f).toInt().coerceAtLeast(1)
+        val h = dt / n
+        repeat(n) {
+            vx += (kx * (gx - x) - cx * vx) * h; x += vx * h
+            vw += (K * (gw - w) - cw * vw) * h; w += vw * h
+            // lensa terangkat selama diseret / masih jauh dari tujuan, turun lembut saat mendekat
+            val lt = if (dragging) 1f else min(abs(gx - x) / (28f * dp), 1f)
+            vl += (KL * (lt - l) - cl * vl) * h; l += vl * h
+        }
+        if (abs(vx) > 20f * dp) dir = if (vx > 0f) 1f else -1f
+        val lGoal = if (dragging) 1f else 0f
+        val still = abs(gx - x) < 0.4f && abs(vx) < 4f * dp && abs(gw - w) < 0.4f && abs(vw) < 4f * dp &&
+            abs(lGoal - l) < 0.004f && abs(vl) < 0.02f
+        if (still) {
+            running = false
+            if (!dragging) rest() else { x = gx; vx = 0f; l = 1f; vl = 0f }
+        } else {
+            Choreographer.getInstance().postFrameCallback(frame)
+        }
+        onFrame?.invoke(); host.invalidate()
     }
 
     /** Denyut tunggal (tab aktif diketuk lagi): membesar sedikit lalu kembali — satu kali, tanpa getar. */
@@ -146,8 +255,8 @@ class PillIndicator(private val host: View) {
         a.duration = Motion.SLOW
         a.interpolator = LinearInterpolator()
         a.addUpdateListener {
-            val x = it.animatedValue as Float
-            pulse = sin(PI.toFloat() * x)     // naik lalu turun mulus, sekali
+            val p = it.animatedValue as Float
+            pulse = sin(PI.toFloat() * p)     // naik lalu turun mulus, sekali
             onFrame?.invoke(); host.invalidate()
         }
         a.addListener(object : AnimatorListenerAdapter() {
@@ -155,6 +264,18 @@ class PillIndicator(private val host: View) {
         })
         beat = a
         a.start()
+    }
+
+    private companion object {
+        /** Kekakuan pegas posisi & lebar (ω ≈ 22 rad/s → tiba ± 0,3 s). */
+        const val K = 480f
+        /** Saat diseret lebih kaku: lensa menempel di jari tapi tetap terasa cair. */
+        const val K_DRAG = 900f
+        /** Rasio redaman < 1: pantulan kecil ±5% saat mendarat. */
+        const val Z = 0.68f
+        /** Pegas "terangkat"-nya lensa: lebih lunak & hampir tanpa pantulan. */
+        const val KL = 260f
+        const val ZL = 0.9f
     }
 }
 
@@ -174,10 +295,12 @@ internal fun View.squish(to: Float = 0.95f, onFrame: (() -> Unit)? = null) {
 
 /**
  * Bilah tab bawah.
- * - Satu pil tinta meluncur antar-tab (lihat [PillIndicator]); ikon & teks tab asal/tujuan berubah warna
- *   mengikuti seberapa tertutup mereka — seperti lensa yang lewat di atasnya.
- * - Nama tab terpilih membuka (lebar, jarak, transparansi) dan nama tab lama menutup SERENTAK dengan gerak pil:
- *   kurva & durasi yang sama, jadi pil, label, dan tab lain yang bergeser tiba bersamaan.
+ * - Satu pil tinta meluncur antar-tab dengan pegas (lihat [PillIndicator]); selama bergerak pil terangkat menjadi
+ *   lensa kaca, ikon yang dilewatinya berubah warna & membesar mengikuti seberapa tertutup mereka.
+ * - Seret mendatar di atas bilah: lensa mengikuti jari (getar halus tiap melewati tab); saat dilepas, tab di
+ *   bawahnya terpilih dan lensa menempel ke sana.
+ * - Nama tab terpilih membuka (lebar, jarak, transparansi) dan nama tab lama menutup bersamaan dengan gerak pil;
+ *   pegas lebar pil mengikuti lebar tab yang berubah, jadi pil & label tiba bersama.
  * - Tiap tombol mengecil sedikit saat ditekan & kembali mulus; tab aktif yang diketuk lagi membuat pil berdenyut sekali.
  */
 @SuppressLint("ViewConstructor")
@@ -193,42 +316,87 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
     private var opening: ValueAnimator? = null
     var selected = -1
         private set
-    /** Tab yang sedang ditinggalkan — hanya tab asal & tujuan yang berganti warna (tab yang dilewati tidak berkedip). */
-    private var leaving = -1
 
     var onTabSelected: ((Int) -> Unit)? = null
 
+    private val slop = ViewConfiguration.get(ctx).scaledTouchSlop
+    private var downX = 0f
+    private var dragging = false
+    /** Tab yang sedang di bawah lensa saat diseret (getar halus tiap berganti). */
+    private var hover = -1
+
+    private fun centerOf(t: Tab): Float = t.pill.left + t.pill.translationX + t.pill.width / 2f
+
+    /** Tab yang diketuk di [x] (toleransi 10 dp di kiri-kanan pil). */
     private fun findTabAtX(x: Float): Tab? {
-        for (t in tabs) {
-            val p = t.pill
-            if (x >= p.left - context.dp(10) && x <= p.right + context.dp(10)) {
-                return t
-            }
-        }
-        return null
+        val tol = context.dp(10)
+        return tabs.firstOrNull { x >= it.pill.left - tol && x <= it.pill.right + tol }
     }
 
-    private fun updateSelectionFromTouch(x: Float) {
-        val target = findTabAtX(x) ?: return
-        if (target.index >= 0 && target.index != selected) {
-            onTabSelected?.invoke(target.index)
-        }
+    /** Tab yang pusatnya paling dekat [x]. */
+    private fun nearest(x: Float): Tab? = tabs.minByOrNull { abs(centerOf(it) - x) }
+
+    private fun canDrag() = selected >= 0 && tabs.size > 1 && Motion.on()
+
+    private fun startDrag(x: Float) {
+        dragging = true
+        hover = selected
+        parent?.requestDisallowInterceptTouchEvent(true)
+        dragTo(x)
     }
 
+    /** Lensa mengikuti jari, dibatasi antara tab pertama & terakhir. */
+    private fun dragTo(x: Float) {
+        if (tabs.isEmpty()) return
+        val lo = centerOf(tabs.first())
+        val hi = centerOf(tabs.last())
+        ind.drag(x.coerceIn(min(lo, hi), max(lo, hi)))
+        val t = nearest(x) ?: return
+        if (t.index != hover) { hover = t.index; performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
+    }
+
+    /** Jari dilepas: tab di bawah lensa terpilih (halaman berganti sekarang), lensa meluncur & menempel ke sana. */
+    private fun endDrag(x: Float) {
+        dragging = false
+        ind.release()
+        val t = nearest(x)
+        if (t != null && t.index != selected) onTabSelected?.invoke(t.index)
+        // tab tidak berganti (atau pemanggil menolak): lensa kembali ke tab aktif
+        tabs.firstOrNull { it.index == selected }?.let { if (ind.target === it.pill) ind.moveTo(it.pill, true) }
+        hover = -1
+    }
+
+    private fun cancelDrag() {
+        dragging = false
+        ind.release()
+        tabs.firstOrNull { it.index == selected }?.let { ind.moveTo(it.pill, true) }
+        hover = -1
+    }
+
+    /** Seret mendatar di atas bilah = menggeser lensa (iOS); ketukan biasa tetap sampai ke tombol tab. */
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.actionMasked == MotionEvent.ACTION_MOVE) {
-            updateSelectionFromTouch(ev.x)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { downX = ev.x; dragging = false }
+            MotionEvent.ACTION_MOVE -> if (!dragging && canDrag() && abs(ev.x - downX) > slop) { startDrag(ev.x); return true }
         }
-        return super.onInterceptTouchEvent(ev)
+        return dragging
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                updateSelectionFromTouch(ev.x)
+            MotionEvent.ACTION_DOWN -> { downX = ev.x; dragging = false; return true }
+            MotionEvent.ACTION_MOVE -> {
+                if (!dragging && canDrag() && abs(ev.x - downX) > slop) startDrag(ev.x)
+                else if (dragging) dragTo(ev.x)
                 return true
             }
+            MotionEvent.ACTION_UP -> {
+                if (dragging) endDrag(ev.x)
+                else findTabAtX(ev.x)?.let { if (it.index != selected) onTabSelected?.invoke(it.index) }
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> { if (dragging) cancelDrag(); return true }
         }
         return super.onTouchEvent(ev)
     }
@@ -239,6 +407,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         setWillNotDraw(false)
         ind.paint.color = C.PRIMARY
         ind.edge = context.dp(3).toFloat()
+        ind.lens = true
         ind.onFrame = { tint() }
     }
 
@@ -287,7 +456,6 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
     fun select(i: Int, animate: Boolean) {
         val t = tabs.firstOrNull { it.index == i } ?: return
         val anim = animate && selected >= 0 && selected != i && Motion.on()
-        leaving = if (anim) selected else -1
         selected = i
         for (x in tabs) x.pill.isSelected = x.index == i
         ind.moveTo(t.pill, anim)
@@ -314,7 +482,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         a.duration = Motion.SLOW
         a.interpolator = Motion.STANDARD
         a.addListener(object : AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: Animator) { if (opening === animation) { leaving = -1; tint() } }
+            override fun onAnimationEnd(animation: Animator) { if (opening === animation) tint() }
         })
         a.addUpdateListener {
             val c = it.animatedValue as Float
@@ -350,24 +518,29 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
     }
 
     /**
-     * Ikon tab asal & tujuan berganti warna mengikuti seberapa tertutup pil tinta (berpindah halus, bukan saklar).
-     * Nama tab selalu putih di atas pil dan hanya tampak di bagian yang tertutup pil — tidak pernah muncul abu lalu
-     * berganti warna. Tab yang sekadar dilewati pil tetap abu (tidak berkedip).
+     * Ikon berganti warna mengikuti seberapa tertutup lensa — tab mana pun yang sedang dilewati, seperti lensa iOS
+     * (berpindah halus, bukan saklar) — dan membesar sedikit selama lensa terangkat. Nama tab selalu putih di atas
+     * pil dan hanya tampak di bagian yang tertutup pil — tidak pernah muncul abu lalu berganti warna.
      */
     private fun tint() {
         val r = ind.rect()
+        val lift = ind.lift
         for (t in tabs) {
-            val active = t.index == selected || t.index == leaving
-            if (r == null || !active) {
-                val ci = if (r == null && t.index == selected) C.ON_PRIMARY else C.MUTED
+            if (r == null) {
+                val ci = if (t.index == selected) C.ON_PRIMARY else C.MUTED
                 if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
+                if (t.icon.scaleX != 1f) { t.icon.scaleX = 1f; t.icon.scaleY = 1f }
                 continue
             }
             val px = t.pill.left + t.pill.translationX
             val il = px + t.icon.left
             val iw = t.icon.width.toFloat()
-            val ci = mixColor(C.MUTED, C.ON_PRIMARY, cover(r, il + iw * 0.3f, il + iw * 0.7f))
+            val cov = cover(r, il + iw * 0.3f, il + iw * 0.7f)
+            val ci = mixColor(C.MUTED, C.ON_PRIMARY, cov)
             if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
+            // pembesaran lensa: ikon di bawah lensa yang terangkat tampak membesar
+            val sc = 1f + 0.18f * lift * cov
+            if (abs(t.icon.scaleX - sc) > 0.002f) { t.icon.scaleX = sc; t.icon.scaleY = sc }
             val lw = t.label.width
             if (lw > 0) {
                 val lc = cover(r, px + t.label.left, px + t.label.left + lw)

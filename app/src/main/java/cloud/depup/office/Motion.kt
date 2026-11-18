@@ -23,6 +23,8 @@ import kotlin.math.roundToInt
  *   [SLOW] 350 ms (pindah tab, penanda, lembar, kapsul). Umpan balik tekan: [PRESS_DOWN] turun, [PRESS_UP] naik.
  * - Tanpa pantulan (overshoot) dan tanpa gelombang bertahap: elemen yang bergerak bersama mulai & berhenti
  *   bersamaan, ke satu arah, dengan jarak geser yang sama ([SHIFT_DP]).
+ * - Satu pengecualian: pil penanda / lensa tab ([PillIndicator]) digerakkan pegas fisika — mengikuti kecepatan &
+ *   jari, mendarat dengan pantulan kecil yang lembut, seperti tetes air.
  *
  * Aturan penting di dalam wadah kaca: animasi transparansi selalu TANPA lapisan offscreen ([noLayer]) —
  * lebih ringan, dan aman untuk blur waktu-nyata.

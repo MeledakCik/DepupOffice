@@ -1848,6 +1848,13 @@ class MainActivity : AppCompatActivity() {
                 content.postDelayed({ if (!isFinishing) recreate() }, 240L)
             }.apply { setPadding(0, dp(10), 0, 0) })
         }
+        // berlaku untuk lensa tab bawah (semua Android) dan tepi kaca cair (Android 13+)
+        tc.add(switchRow(R.drawable.ic_spark, "Dispersi warna",
+            "Semburat pelangi tipis di tepi kaca dan lensa tab saat bergerak. Matikan untuk tepi kaca yang bening.",
+            LiquidGlass.DISPERSION) { on ->
+            LiquidGlass.setDispersion(this, on)
+            content.postDelayed({ if (!isFinishing) recreate() }, 240L)
+        }.apply { setPadding(0, dp(10), 0, 0) })
         // transparansi & blur kaca yang bisa diatur bebas (hanya bermakna saat efek kaca menyala; tanpa blur kaca pekat)
         if (Glass.adjustable) {
             tc.add(View(this).apply { setBackgroundColor(C.LINE) }, top = 4, h = 1)
