@@ -539,8 +539,8 @@ class ViewerActivity : AppCompatActivity() {
                 if (!secure) pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
                 if (isPdfLoaded) pm.menu.add(0, 5, 5, "Lompat Halaman")
                 if (isPdfLoaded) pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
-                if (isPdfLoaded) pm.menu.add(0, 7, 7, "Sedot Foto / Ekstrak Gambar$lockTag")
-                if (isPdfLoaded) pm.menu.add(0, 10, 8, "Susun & Putar Halaman$lockTag")
+                if (isPdfLoaded) pm.menu.add(0, 7, 7, locked("Sedot Foto / Ekstrak Gambar"))
+                if (isPdfLoaded) pm.menu.add(0, 10, 8, locked("Susun & Putar Halaman"))
                 if (isPdfLoaded) pm.menu.add(0, 11, 9, "Mode Slideshow & Presentasi")
                 if (protectedBytes != null) {
                     pm.menu.add(0, 9, 10, "Ekspor PDF Asli (Password Guru)")
