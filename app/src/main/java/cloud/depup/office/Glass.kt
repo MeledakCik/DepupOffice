@@ -858,22 +858,36 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
         super.onDetachedFromWindow()
     }
 
+    /**
+     * Kaca melayang sementara (notifikasi kapsul): menumpang di scaffold ini, membaca isi yang SAMA secara real-time,
+     * dan ikut digambar ulang tiap kali isi di belakangnya berubah — persis seperti bilah atas/bawah.
+     */
+    private val floats = ArrayList<GlassSurface>()
+
+    fun addFloating(s: GlassSurface, lp: LayoutParams) {
+        s.content = wrap
+        floats.add(s)
+        addView(s, lp)
+    }
+
+    fun removeFloating(s: GlassSurface) {
+        floats.remove(s)
+        removeView(s)
+    }
+
+    private fun allGlass(): List<GlassSurface> = if (floats.isEmpty()) listOf(topBar, bottomBar, miniBar) else listOf(topBar, bottomBar, miniBar) + floats
+
     /** Gambar ulang semua kaca yang tampil secara UTUH. */
     fun wholeGlass() {
         val was = fanning
         fanning = true
         try {
-            if (topBar.visibility == View.VISIBLE) topBar.invalidate()
-            if (bottomBar.visibility == View.VISIBLE) bottomBar.invalidate()
-            if (miniBar.visibility == View.VISIBLE) miniBar.invalidate()
+            for (b in allGlass()) if (b.visibility == View.VISIBLE) b.invalidate()
         } finally { fanning = was }
     }
 
     /** Semua kaca yang tampil memang sudah akan digambar ulang di frame berikutnya. */
-    private fun glassDirty(): Boolean =
-        (topBar.visibility != View.VISIBLE || topBar.isDirty) &&
-            (bottomBar.visibility != View.VISIBLE || bottomBar.isDirty) &&
-            (miniBar.visibility != View.VISIBLE || miniBar.isDirty)
+    private fun glassDirty(): Boolean = allGlass().all { it.visibility != View.VISIBLE || it.isDirty }
 
     private val tmpRect = Rect()
     private val tmpLoc = IntArray(2)
@@ -888,7 +902,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
         r.offset(-tmpLoc[0], -tmpLoc[1])
         r.inset(-reach, -reach)
         var hit = false
-        for (b in arrayOf(topBar, bottomBar, miniBar)) {
+        for (b in allGlass()) {
             if (b.visibility != View.VISIBLE) continue
             val l = (b.left + b.translationX).toInt(); val t = (b.top + b.translationY).toInt()
             if (r.intersects(l, t, l + b.width, t + b.height)) { hit = true; b.invalidate() }

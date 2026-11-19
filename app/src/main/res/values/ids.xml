@@ -7,4 +7,7 @@
     <!-- Motion.showIf: animasi buka-lipat yang sedang berjalan & tinggi asli. -->
     <item name="reveal_anim" type="id" />
     <item name="reveal_h" type="id" />
+    <!-- Motion.swapContent: sisa isi lama yang sedang memudar & animatornya. -->
+    <item name="swap_ghosts" type="id" />
+    <item name="swap_anim" type="id" />
 </resources>

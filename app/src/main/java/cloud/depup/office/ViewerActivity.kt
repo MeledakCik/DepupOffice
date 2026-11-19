@@ -666,12 +666,12 @@ class ViewerActivity : AppCompatActivity() {
                 setPadding(dp(10), dp(6), dp(6), dp(6))
             }
             tb.add(icon(R.drawable.ic_zoom_out, C.TEXT, 22).asButton("Perkecil").apply {
-                setOnClickListener { animateZoom(zoom - 0.5f, scroll.width / 2f, scroll.height / 2f) }
+                setOnClickListener { animateZoom(zoomTarget - 0.5f, scroll.width / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             zoomLabel = tv("100%", 13f, C.TEXT, true).apply { gravity = Gravity.CENTER }
             tb.add(zoomLabel, w = dp(52))
             tb.add(icon(R.drawable.ic_zoom_in, C.TEXT, 22).asButton("Perbesar").apply {
-                setOnClickListener { animateZoom(zoom + 0.5f, scroll.width / 2f, scroll.height / 2f) }
+                setOnClickListener { animateZoom(zoomTarget + 0.5f, scroll.width / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             if (!secure) tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
                 setOnClickListener { requirePassword("Cetak Dokumen") { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } } }
@@ -1099,7 +1099,22 @@ class ViewerActivity : AppCompatActivity() {
 
     private fun goTo(p: Int) {
         val n = p.coerceIn(0, total - 1)
-        (rv.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(n, 0)
+        val lm = rv.layoutManager as LinearLayoutManager
+        rv.stopScroll()
+        val far = abs(n - curPage) > 3
+        if (!Motion.on() || far) {
+            // jauh: lompat langsung, lalu halaman tujuan meluncur masuk dari arahnya (tanpa menggulir puluhan halaman)
+            lm.scrollToPositionWithOffset(n, 0)
+            if (Motion.on() && n != curPage) rv.shiftIn(dyDp = if (n > curPage) 28 else -28, duration = Motion.SLOW)
+            return
+        }
+        // dekat: bergulir mulus dan berhenti tepat di tepi atas halaman
+        val s = object : androidx.recyclerview.widget.LinearSmoothScroller(this) {
+            override fun getVerticalSnapPreference() = SNAP_TO_START
+            override fun calculateSpeedPerPixel(dm: android.util.DisplayMetrics) = super.calculateSpeedPerPixel(dm) * 0.55f
+        }
+        s.targetPosition = n
+        lm.startSmoothScroll(s)
     }
 
     private fun showJumpPageDialog() {
@@ -1247,34 +1262,70 @@ class ViewerActivity : AppCompatActivity() {
      * pegas lembut, lalu tata letak final diterapkan tepat sebelum frame berikutnya — jalur yang sama dengan akhir
      * cubitan, jadi tanpa kedip. Dulu keduanya melompat langsung ke ukuran baru.
      */
+    /** Zoom tujuan yang sudah diminta (ketukan +/- beruntun menumpuk dari sini, bukan dari zoom yang sedang tampil). */
+    private var zoomTarget = 1f
+    private var zoomQueued: FloatArray? = null
+
     private fun animateZoom(z: Float, focusX: Float, focusY: Float) {
         val nz = z.coerceIn(0.5f, 2.5f)
-        if (zoomAnim?.isRunning == true) return            // ketukan beruntun: tunggu yang sedang berjalan
+        zoomTarget = nz
+        // ketukan beruntun: diantrekan (bukan diabaikan) — dijalankan begitu animasi sekarang selesai
+        if (zoomAnim?.isRunning == true || zoomBusy) { zoomQueued = floatArrayOf(nz, focusX, focusY); return }
         if (!Motion.on() || abs(nz - zoom) < 0.05f) { setZoom(nz, focusX, focusY); return }
         val ratio = nz / zoom
-        rv.pivotX = scroll.scrollX + focusX
-        rv.pivotY = focusY
-        val a = android.animation.ValueAnimator.ofFloat(1f, ratio)
-        a.duration = Motion.SPRING_SOFT_MS - 120L
-        a.interpolator = Motion.SPRING_SOFT
-        a.addUpdateListener { val s = it.animatedValue as Float; rv.scaleX = s; rv.scaleY = s }
-        a.addListener(object : android.animation.AnimatorListenerAdapter() {
-            private var cancelled = false
-            override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true; rv.scaleX = 1f; rv.scaleY = 1f }
-            override fun onAnimationEnd(animation: android.animation.Animator) {
-                if (cancelled) return
-                setZoom(nz, focusX, focusY) { rv.scaleX = 1f; rv.scaleY = 1f }
+        zoomBusy = true
+        val next = {
+            zoomBusy = false
+            zoomQueued?.let { q -> zoomQueued = null; if (abs(q[0] - zoom) >= 0.05f) animateZoom(q[0], q[1], q[2]) }
+        }
+        if (ratio > 1f) {
+            // MEMBESAR: perbesar gambar yang ada dulu (selalu menutupi layar), lalu tata ulang halaman di ukuran baru
+            rv.pivotX = scroll.scrollX + focusX
+            rv.pivotY = focusY
+            val a = android.animation.ValueAnimator.ofFloat(1f, ratio)
+            a.duration = Motion.SPRING_SOFT_MS - 120L
+            a.interpolator = Motion.SPRING_SOFT
+            a.addUpdateListener { val s = it.animatedValue as Float; rv.scaleX = s; rv.scaleY = s }
+            a.addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true; rv.scaleX = 1f; rv.scaleY = 1f; zoomBusy = false }
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (cancelled) return
+                    setZoom(nz, focusX, focusY) { rv.scaleX = 1f; rv.scaleY = 1f; next() }
+                }
+            })
+            zoomAnim = a
+            a.start()
+        } else {
+            // MENGECIL: tata ulang halaman di ukuran baru DULU (halaman di bawahnya ikut terisi), lalu tampilkan
+            // membesar dan susutkan ke ukuran asli — tidak pernah ada area kosong abu-abu selama animasi.
+            setZoom(nz, focusX, focusY) {
+                rv.pivotX = scroll.scrollX + focusX
+                rv.pivotY = focusY
+                val s0 = 1f / ratio
+                rv.scaleX = s0; rv.scaleY = s0
+                val a = android.animation.ValueAnimator.ofFloat(s0, 1f)
+                a.duration = Motion.SLOW
+                a.interpolator = Motion.ENTER        // tanpa pantulan: di bawah 1× akan memperlihatkan tepi kosong
+                a.addUpdateListener { val s = it.animatedValue as Float; rv.scaleX = s; rv.scaleY = s }
+                a.addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationCancel(animation: android.animation.Animator) { rv.scaleX = 1f; rv.scaleY = 1f; zoomBusy = false }
+                    override fun onAnimationEnd(animation: android.animation.Animator) { rv.scaleX = 1f; rv.scaleY = 1f; next() }
+                })
+                zoomAnim = a
+                a.start()
             }
-        })
-        zoomAnim = a
-        a.start()
+        }
     }
+
+    private var zoomBusy = false
 
     private fun setZoom(z: Float, focusX: Float, focusY: Float, finishVisual: (() -> Unit)? = null) {
         // Allow zooming below 100% so the minus button and pinch-out actually shrink the page.
         val nz = z.coerceIn(0.5f, 2.5f)
         if (abs(nz - zoom) < 0.05f) { finishVisual?.invoke(); return }
         val ratio = nz / zoom
+        zoomTarget = nz
         val old = scroll.scrollX
         val lm = rv.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
         val firstPos = lm?.findFirstVisibleItemPosition() ?: 0
@@ -1301,6 +1352,10 @@ class ViewerActivity : AppCompatActivity() {
         val expectedTop = (focusY - anchorFraction * estimatedHeight).roundToInt()
         lm?.scrollToPositionWithOffset(anchorPos, expectedTop)
         val targetX = ((old + focusX) * ratio - focusX).roundToInt().coerceAtLeast(0)
+        // dipanggil TEPAT sekali (dulu: sekali di pre-draw lalu lagi oleh pengaman 250 ms → animasi lanjutan
+        // terpotong/berulang, terasa macet)
+        var finished = false
+        val finishOnce = { if (!finished) { finished = true; finishVisual?.invoke() } }
 
         // Apply the final scroll correction and remove the temporary pinch transform just before draw.
         // This avoids drawing the old-scale frame between the live pinch and the resized pages.
@@ -1314,7 +1369,7 @@ class ViewerActivity : AppCompatActivity() {
                     if (drift != 0) rv.scrollBy(0, drift)
                 }
                 scroll.scrollTo(targetX, 0)
-                finishVisual?.invoke()
+                finishOnce()
                 return true
             }
         }
@@ -1322,7 +1377,8 @@ class ViewerActivity : AppCompatActivity() {
         // A defensive fallback for a detached/hidden reader where a pre-draw may not run.
         rv.postDelayed({
             if (rv.viewTreeObserver.isAlive) rv.viewTreeObserver.removeOnPreDrawListener(observer)
-            finishVisual?.invoke()
+            if (!finished) scroll.scrollTo(targetX, 0)
+            finishOnce()
         }, 250L)
     }
 
