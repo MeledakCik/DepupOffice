@@ -325,35 +325,75 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         showSelectionMenu()
     }
 
-    private var selMode: android.view.ActionMode? = null
+    // ---- menu kaca ----
+    private var sysMode: android.view.ActionMode? = null      // mode seleksi/sisip Android yang sedang hidup
+    private var manualGlass = false                            // menu dibuka sendiri (ketuk tiga kali)
+    private var glassSelAt = 0L
+    private val glassShow = Runnable { showGlass() }
 
-    /** Menu seleksi mengambang (Potong / Salin / Tempel / Pilih semua) untuk seleksi kalimat. */
+    private fun glassCallback(insertion: Boolean) = object : android.view.ActionMode.Callback {
+        override fun onCreateActionMode(m: android.view.ActionMode, menu: android.view.Menu): Boolean {
+            menu.clear(); sysMode = m
+            removeCallbacks(glassShow); postDelayed(glassShow, 40)
+            return true
+        }
+        override fun onPrepareActionMode(m: android.view.ActionMode, menu: android.view.Menu): Boolean { menu.clear(); return true }
+        override fun onActionItemClicked(m: android.view.ActionMode, item: android.view.MenuItem) = false
+        override fun onDestroyActionMode(m: android.view.ActionMode) {
+            if (sysMode === m) sysMode = null
+            if (!manualGlass) { removeCallbacks(glassShow); SelectionGlass.hide(this@ParaEdit) }
+        }
+    }
+
+    private fun canPaste(): Boolean = try {
+        (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).hasPrimaryClip()
+    } catch (_: Throwable) { false }
+
+    /** Tampilkan / pindahkan menu kaca ke seleksi (atau kursor) saat ini. */
+    private fun showGlass() {
+        if ((sysMode == null && !manualGlass) || !isFocused || !isAttachedToWindow) return
+        val l = layout ?: return
+        val n = text?.length ?: 0
+        val a = selectionStart.coerceIn(0, n); val b = selectionEnd.coerceIn(0, n)
+        val sel = a != b
+        val r = RectF()
+        if (sel) {
+            selPath.reset(); l.getSelectionPath(minOf(a, b), maxOf(a, b), selPath); selPath.computeBounds(r, true)
+        } else {
+            val line = l.getLineForOffset(a); val x = l.getPrimaryHorizontal(a)
+            r.set(x - 1f, l.getLineTop(line).toFloat(), x + 1f, l.getLineBottom(line).toFloat())
+        }
+        r.offset((totalPaddingLeft - scrollX).toFloat(), (totalPaddingTop - scrollY).toFloat())
+        val items = ArrayList<SelectionGlass.Item>()
+        fun act(id: Int, keep: Boolean = false): () -> Unit = {
+            onTextContextMenuItem(id)
+            if (!keep) { manualGlass = false; sysMode?.finish(); SelectionGlass.hide(this) }
+        }
+        if (sel && !host.secureMode) {
+            items.add(SelectionGlass.Item("Potong", act(android.R.id.cut)))
+            items.add(SelectionGlass.Item("Salin", act(android.R.id.copy)))
+        }
+        if (canPaste()) items.add(SelectionGlass.Item("Tempel", act(android.R.id.paste)))
+        if (!(a == 0 && b == n) && n > 0) items.add(SelectionGlass.Item("Pilih semua", act(android.R.id.selectAll, keep = true)))
+        SelectionGlass.reshow = { showGlass() }
+        SelectionGlass.show(this, r, items)
+    }
+
+    /** Menu kaca untuk seleksi yang dibuat sendiri (ketuk tiga kali). */
     private fun showSelectionMenu() {
-        selMode?.finish()
-        val ids = if (host.secureMode) listOf(android.R.id.paste to "Tempel", android.R.id.selectAll to "Pilih semua")
-            else listOf(android.R.id.cut to "Potong", android.R.id.copy to "Salin", android.R.id.paste to "Tempel", android.R.id.selectAll to "Pilih semua")
-        selMode = startActionMode(object : android.view.ActionMode.Callback2() {
-            override fun onCreateActionMode(m: android.view.ActionMode, menu: android.view.Menu): Boolean {
-                ids.forEachIndexed { i, (id, label) -> menu.add(0, id, i, label).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS) }
-                return true
-            }
-            override fun onPrepareActionMode(m: android.view.ActionMode, menu: android.view.Menu) = false
-            override fun onActionItemClicked(m: android.view.ActionMode, item: android.view.MenuItem): Boolean {
-                onTextContextMenuItem(item.itemId)
-                if (item.itemId != android.R.id.selectAll) m.finish()
-                return true
-            }
-            override fun onDestroyActionMode(m: android.view.ActionMode) { if (selMode === m) selMode = null }
-            override fun onGetContentRect(m: android.view.ActionMode, v: View, out: android.graphics.Rect) {
-                val l = layout ?: return super.onGetContentRect(m, v, out)
-                val a = selectionStart; val b = selectionEnd
-                val la = l.getLineForOffset(a); val lb = l.getLineForOffset(b)
-                val x1 = if (la == lb) l.getPrimaryHorizontal(a) else l.getLineLeft(la)
-                val x2 = if (la == lb) l.getPrimaryHorizontal(b) else l.getLineRight(lb)
-                out.set((totalPaddingLeft + minOf(x1, x2)).toInt(), totalPaddingTop + l.getLineTop(la),
-                    (totalPaddingLeft + maxOf(x1, x2)).toInt(), totalPaddingTop + l.getLineBottom(lb))
-            }
-        }, android.view.ActionMode.TYPE_FLOATING)
+        manualGlass = true
+        removeCallbacks(glassShow); post(glassShow)
+    }
+
+    /** Seleksi berubah: menu menyingkir selama pegangan digeser, lalu kembali ke posisi baru. */
+    private fun glassOnSelChanged(s: Int, e: Int) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val rapid = now - glassSelAt < 140
+        glassSelAt = now
+        if (manualGlass && s == e) { manualGlass = false; if (sysMode == null) { removeCallbacks(glassShow); SelectionGlass.hide(this); return } }
+        if (sysMode == null && !manualGlass) return
+        removeCallbacks(glassShow)
+        if (rapid) { SelectionGlass.hide(this); postDelayed(glassShow, 280) } else postDelayed(glassShow, 30)
     }
 
     override fun performLongClick(): Boolean {
@@ -411,20 +451,11 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
 
     init {
         background = null
-        // dokumen terkunci: menu seleksi tanpa Salin/Potong/Bagikan/Terjemahkan (aplikasi lain lewat PROCESS_TEXT)
-        if (host.secureMode) customSelectionActionModeCallback = object : android.view.ActionMode.Callback {
-            override fun onCreateActionMode(m: android.view.ActionMode, menu: android.view.Menu) = true
-            override fun onPrepareActionMode(m: android.view.ActionMode, menu: android.view.Menu): Boolean {
-                for (i in menu.size() - 1 downTo 0) {
-                    val it = menu.getItem(i)
-                    if (it.itemId == android.R.id.copy || it.itemId == android.R.id.cut || it.itemId == android.R.id.shareText ||
-                        it.itemId == android.R.id.textAssist || it.intent != null) menu.removeItem(it.itemId)
-                }
-                return true
-            }
-            override fun onActionItemClicked(m: android.view.ActionMode, item: android.view.MenuItem) = false
-            override fun onDestroyActionMode(m: android.view.ActionMode) {}
-        }
+        // Menu seleksi = kapsul KACA kita ([SelectionGlass]). Bilah mengambang bawaan dikosongkan (menu tanpa item
+        // tidak ditampilkan), sementara mode seleksi Android tetap hidup: pegangan, tahan-geser & kaca pembesar jalan.
+        // Dokumen terkunci: Salin/Potong tidak pernah ada di menu kaca (dan tetap ditolak di onTextContextMenuItem).
+        customSelectionActionModeCallback = glassCallback(false)
+        customInsertionActionModeCallback = glassCallback(true)
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         // lanskap: keyboard tidak mengambil alih layar penuh — dokumen tetap terlihat saat mengetik
         imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
@@ -548,7 +579,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
-        if (!suppress && !binding) selChangedAnim(selStart, selEnd) else { lastSelA = selStart; lastSelB = selEnd }
+        if (!suppress && !binding) { selChangedAnim(selStart, selEnd); glassOnSelChanged(selStart, selEnd) } else { lastSelA = selStart; lastSelB = selEnd }
         if (::para.isInitialized && !suppress) { lastChange = android.os.SystemClock.uptimeMillis(); host.onSel(this) }
     }
 
@@ -556,7 +587,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         // fokus: saran & ejaan keyboard aktif; lepas fokus: dimatikan lagi (lihat init) dan garis ejaannya dibuang
         setRawInputType(if (focused || spellAll) BASE_TYPE else BASE_TYPE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         if (!focused && !spellAll) text?.let { t -> for (sp in t.getSpans(0, t.length, android.text.style.SuggestionSpan::class.java)) t.removeSpan(sp) }
-        if (!focused) selMode?.finish()
+        if (!focused) { manualGlass = false; removeCallbacks(glassShow); SelectionGlass.hide(this) }
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
         // baru fokus: kini boleh mengaku editor → hidupkan pengendali seleksi (lihat armSelection)
         if (focused) armSelection()
@@ -774,6 +805,7 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
         super.onScrollChanged(l, t, oldl, oldt)
         lastMove = android.os.SystemClock.uptimeMillis()   // termasuk luncuran (fling) setelah jari lepas
+        if (t != oldt || l != oldl) SelectionGlass.scrolled(this)   // menu kaca menyingkir, kembali saat gulir berhenti
         if (t != oldt) Cull.scrolled()
     }
 
