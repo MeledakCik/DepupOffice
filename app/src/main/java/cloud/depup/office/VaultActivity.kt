@@ -176,8 +176,8 @@ class VaultActivity : AppCompatActivity() {
         holder.add(btn("Buat PIN") {
             val a = p1.text.toString()
             when {
-                a.length !in 4..6 || !a.all { it in '0'..'9' } -> toast("PIN harus 4–6 digit angka")
-                a != p2.text.toString() -> toast("PIN tidak sama")
+                a.length !in 4..6 || !a.all { it in '0'..'9' } -> { p1.shake(); toast("PIN harus 4–6 digit angka") }
+                a != p2.text.toString() -> { p2.shake(); toast("PIN tidak sama") }
                 else -> Thread {   // PBKDF2 sengaja lambat: jangan di thread UI
                     val ok = try { Vault.setPin(this, a); true } catch (_: Exception) { false }
                     runOnUiThread {
@@ -220,7 +220,7 @@ class VaultActivity : AppCompatActivity() {
         var checking = false
         row.add(btn("Buka PIN") {
             val wait = Vault.lockRemainingMs(this)
-            if (wait > 0) toast("Terlalu banyak PIN salah. Coba lagi dalam ${(wait + 999) / 1000} detik.")
+            if (wait > 0) { p.shake(); toast("Terlalu banyak PIN salah. Coba lagi dalam ${(wait + 999) / 1000} detik.") }
             else if (!checking) {
                 checking = true
                 val pin = p.text.toString()
@@ -232,6 +232,7 @@ class VaultActivity : AppCompatActivity() {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         if (ok) showList() else {
                             val w = Vault.lockRemainingMs(this)
+                            p.shake()          // kolom PIN menggeleng, seperti layar kunci iPhone
                             toast(if (w > 0) "PIN salah. Brankas dikunci ${(w + 999) / 1000} detik." else "PIN salah")
                             p.setText("")
                         }
@@ -243,18 +244,26 @@ class VaultActivity : AppCompatActivity() {
             authenticateBiometric()
         }, w = 0, weight = 1.2f, side = 8)
         holder.add(row, top = 14)
+        holder.cascadeIn(dyDp = 14, skip = 1)
     }
 
-    private fun showList() {
+    private val rowOf = HashMap<File, View>()
+
+    /** [enter] = isi brankas meluncur masuk satu per satu (sesudah terbuka / file ditambah). */
+    private fun showList(enter: Boolean = true) {
         header("Terenkripsi AES-256 · tersimpan hanya di perangkat ini")
         holder.add(btn("Tambah file", true, C.ACCENT, R.drawable.ic_plus) { picker.launch(arrayOf("*/*")) }, top = 18)
         val files = Vault.list(this)
         if (files.isEmpty()) {
             holder.add(tv("Brankas masih kosong.", 13f, C.MUTED), top = 20)
         }
+        rowOf.clear()
         files.forEach { f ->
-            holder.add(actionRow(R.drawable.ic_lock, Vault.displayName(f), Files.fmtSize(f.length()), C.AMBER, C.AMBER_BG, shadow = false) { fileMenu(f) }, top = 10)
+            val r = actionRow(R.drawable.ic_lock, Vault.displayName(f), Files.fmtSize(f.length()), C.AMBER, C.AMBER_BG, shadow = false) { fileMenu(f) }
+            rowOf[f] = r
+            holder.add(r, top = 10)
         }
+        if (enter) holder.cascadeIn(dyDp = 16, skip = 1)
     }
 
     private fun addFiles(list: List<Uri>) {
@@ -267,7 +276,11 @@ class VaultActivity : AppCompatActivity() {
         val items = arrayOf("Buka", "Kirim via WhatsApp", "Bagikan", "Ekspor ke DepUp Office", "Hapus dari Brankas")
         AlertDialog.Builder(this).setTitle(Vault.displayName(f)).setItems(items) { _, i ->
             if (i == 4) {
-                confirm("Hapus file?", "${Vault.displayName(f)} akan dihapus permanen dari Brankas.", "Hapus") { f.delete(); showList() }
+                confirm("Hapus file?", "${Vault.displayName(f)} akan dihapus permanen dari Brankas.", "Hapus") {
+                    // baris meluncur keluar & celahnya menutup, baru daftar disusun ulang (tanpa gelombang masuk lagi)
+                    val r = rowOf[f]
+                    if (r != null && Motion.on()) r.collapseOut { f.delete(); showList(false) } else { f.delete(); showList(false) }
+                }
                 return@setItems
             }
             val tmp = File(tmpDir(), Vault.displayName(f))

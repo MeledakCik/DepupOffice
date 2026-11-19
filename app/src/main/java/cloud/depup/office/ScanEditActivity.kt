@@ -1481,8 +1481,8 @@ class ScanEditActivity : AppCompatActivity() {
 
             fun updateVisibility() {
                 aspectSection.visibility = if (fmt == Export.F_WORD && opt == 0) View.GONE else View.VISIBLE
-                extraSection.visibility = if (fmt == Export.F_PDF) View.VISIBLE else View.GONE
-                passBox.visibility = if (lock) View.VISIBLE else View.GONE
+                extraSection.showIf(fmt == Export.F_PDF)
+                passBox.showIf(lock)
             }
 
             fun paintOpts() {

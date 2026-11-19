@@ -2,4 +2,9 @@
 <resources>
     <!-- Tag tampilan: animasi angka bergulir yang sedang berjalan (Motion.rollTo). -->
     <item name="roll_anim" type="id" />
+    <!-- Motion.shake: animasi geleng yang sedang berjalan. -->
+    <item name="shake_anim" type="id" />
+    <!-- Motion.showIf: animasi buka-lipat yang sedang berjalan & tinggi asli. -->
+    <item name="reveal_anim" type="id" />
+    <item name="reveal_h" type="id" />
 </resources>

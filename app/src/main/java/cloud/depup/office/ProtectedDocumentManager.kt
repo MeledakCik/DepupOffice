@@ -68,7 +68,7 @@ object ProtectedDocumentManager {
 
             chkUserPw.setOnCheckedChangeListener { _, isChecked ->
                 userPwEnabled = isChecked
-                userPwContainer.visibility = if (isChecked) View.VISIBLE else View.GONE
+                userPwContainer.showIf(isChecked)
             }
 
             val chkAntiCopy = CheckBox(activity).apply {

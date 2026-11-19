@@ -382,15 +382,24 @@ class PdfAnnotateActivity : AppCompatActivity() {
         if (intent.getBooleanExtra(EXTRA_SIGN, false)) signDialog()
     }
 
-    private fun refreshTools() {
+    /** [toolSwitched] = alat baru dipilih (chip aktif memantul, baris opsi berganti mulus); [pickedColor] = warna yang baru diketuk. */
+    private fun refreshTools(toolSwitched: Boolean = false, pickedColor: Int? = null) {
+        if (toolSwitched) colorRow.swapContent(dyDp = 6) { buildTools(true, null) } else buildTools(false, pickedColor)
+    }
+
+    private fun buildTools(toolSwitched: Boolean, pickedColor: Int?) {
         toolRow.removeAllViews()
         fun chip(t: MarkView.Tool, label: String, icon: Int) {
-            toolRow.add(filterChip(label, mv.tool == t, icon) {
+            val on = mv.tool == t
+            val v = filterChip(label, on, icon) {
+                val changed = mv.tool != t
                 mv.tool = t
                 if (t != MarkView.Tool.SIGN) mv.selected = null
                 if (t == MarkView.Tool.SIGN && marks[cur]?.items?.none { it is PageMarks.Stamp } != false) signDialog()
-                refreshTools(); mv.invalidate()
-            }, w = WRAP, side = 4)
+                refreshTools(toolSwitched = changed); mv.invalidate()
+            }
+            toolRow.add(v, w = WRAP, side = 4)
+            if (on && toolSwitched) v.boing(0.88f)
         }
         chip(MarkView.Tool.PEN, "Pena", R.drawable.ic_sign)
         chip(MarkView.Tool.HIGHLIGHT, "Stabilo", R.drawable.ic_bright)
@@ -405,13 +414,17 @@ class PdfAnnotateActivity : AppCompatActivity() {
                 val names = if (hl) hlNames else penNames
                 colors.forEachIndexed { i, c ->
                     val on = (if (hl) mv.hlColor else mv.penColor) == c
-                    colorRow.add(View(this).apply {
+                    val sw = View(this).apply {
                         background = shape(c, 100, if (on) C.TEXT else C.LINE, if (on) 3 else 1)
                         tappable("Warna ${names[i]}${if (on) ", terpilih" else ""}") {
+                            val prev = if (hl) mv.hlColor else mv.penColor
                             if (hl) mv.hlColor = c else mv.penColor = c
-                            refreshTools()
+                            refreshTools(pickedColor = if (prev != c) c else null)
                         }
-                    }, w = dp(36), h = dp(36), side = 5)
+                        springPress(0.86f)
+                    }
+                    colorRow.add(sw, w = dp(36), h = dp(36), side = 5)
+                    if (on && pickedColor == c) sw.boing(0.7f)     // warna terpilih "meletup" kecil
                 }
                 colorRow.add(tv(if (hl) "Sapukan di atas teks" else "Gambar dengan jari", 12f, C.MUTED), w = 0, weight = 1f, side = 12)
             }
@@ -430,7 +443,8 @@ class PdfAnnotateActivity : AppCompatActivity() {
                     sigInks.forEachIndexed { i, c ->
                         acts.add(View(this).apply {
                             background = shape(c, 100, C.LINE, 1)
-                            tappable("Tinta ${sigInkNames[i]}") { s.bmp = PdfTools.recolor(s.bmp, c); dirty = true; mv.invalidate() }
+                            tappable("Tinta ${sigInkNames[i]}") { s.bmp = PdfTools.recolor(s.bmp, c); dirty = true; mv.invalidate(); boing(0.7f) }
+                            springPress(0.86f)
                         }, w = dp(32), h = dp(32), side = 5)
                     }
                     acts.add(btn("Putar 90°", false) { s.rot = (s.rot + 90f) % 360f; dirty = true; mv.invalidate() }, w = WRAP, side = 6)
@@ -448,9 +462,11 @@ class PdfAnnotateActivity : AppCompatActivity() {
 
     private fun go(i: Int) {
         if (i < 0 || i >= total) return
+        val dir = if (i > cur) 1 else if (i < cur) -1 else 0
         cur = i
         if (::mv.isInitialized) mv.selected = null
-        counter.text = "Halaman ${i + 1} dari $total"
+        counter.morphText("Halaman ${i + 1} dari $total")
+        if (dir != 0 && ::mv.isInitialized) mv.shiftIn(dxDp = 18 * dir, dyDp = 0, duration = Motion.SLOW)   // halaman datang dari arah tujuan
         mv.marks = pageMarks(i)
         val gen = ++loadGen
         val targetW = min(resources.displayMetrics.widthPixels, Perf.pageMaxPx())
@@ -469,7 +485,7 @@ class PdfAnnotateActivity : AppCompatActivity() {
 
     private fun undo() {
         val m = marks[cur] ?: return
-        if (m.items.isEmpty()) { toast("Tidak ada coretan di halaman ini"); return }
+        if (m.items.isEmpty()) { mv.shake(6); toast("Tidak ada coretan di halaman ini"); return }
         m.items.removeAt(m.items.size - 1)
         dirty = marks.values.any { !it.isEmpty() }
         mv.invalidate()
