@@ -13,6 +13,8 @@ class PrivacyPolicyActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Kembali: pratinjau prediktif (Android 14+) — layar mengecil mengikuti ibu jari
+        onBackPressedDispatcher.addCallback(this, PreviewBack(this) { finish() })
         setContentView(R.layout.activity_privacy_policy)
 
         findViewById<ImageView>(R.id.btnBackPrivacy)?.setOnClickListener {

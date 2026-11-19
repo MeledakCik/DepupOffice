@@ -142,6 +142,8 @@ class VaultActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Kembali: pratinjau prediktif (Android 14+) — layar mengecil mengikuti ibu jari
+        onBackPressedDispatcher.addCallback(this, PreviewBack(this) { finish() })
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         tmpDir().deleteRecursively()
         holder = vbox(18)

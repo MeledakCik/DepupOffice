@@ -261,6 +261,8 @@ class ViewerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Kembali: pratinjau prediktif (Android 14+) — layar mengecil mengikuti ibu jari
+        onBackPressedDispatcher.addCallback(this, PreviewBack(this) { finish() })
         val rawUri = intent.data
         if (rawUri == null) { finish(); return }
         // Anti intent-injection: aplikasi lain tidak boleh menyuruh pembaca membuka berkas privat DepUp
@@ -614,7 +616,11 @@ class ViewerActivity : AppCompatActivity() {
                 addOnScrollListener(object : RecyclerView.OnScrollListener() {
                     override fun onScrolled(r: RecyclerView, dx: Int, dy: Int) {
                         val p = lm.findFirstVisibleItemPosition()
-                        if (p >= 0) { curPage = p; counter.text = "Hal ${p + 1} / $total"; pageBadge.text = "${p + 1}"; updateProgress(p) }
+                        if (p >= 0) {
+                            val turned = p != curPage
+                            curPage = p; counter.text = "Hal ${p + 1} / $total"; pageBadge.text = "${p + 1}"; updateProgress(p)
+                            if (turned) pageBadge.boing(0.8f)   // lencana halaman berdenyut tiap ganti halaman
+                        }
                     }
                     override fun onScrollStateChanged(r: RecyclerView, state: Int) {
                         // lanskap: layar pendek — kontrol melayang minggir selama halaman digulir, kembali saat berhenti
@@ -1221,7 +1227,17 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     private fun refreshMode() {
-        zoomLabel.text = "${(zoom * 100).toInt()}%"
+        zoomLabel.rollTo((zoom * 100).toInt(), "%")   // persentase bergulir mulus
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        LaunchFrom.record(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /** Layar DepUp yang dibuka dari ketukan (mis. Edit) tumbuh dari tombol yang diketuk ([LaunchFrom]). */
+    override fun startActivity(intent: android.content.Intent, options: android.os.Bundle?) {
+        super.startActivity(intent, options ?: LaunchFrom.options(this, intent))
     }
 
     private var zoomAnim: android.animation.ValueAnimator? = null

@@ -24,7 +24,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
@@ -690,9 +689,7 @@ class ScanEditActivity : AppCompatActivity() {
         root.add(foot)
 
         setContentView(Glass.scaffold(root))
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() { askDiscard() }
-        })
+        onBackPressedDispatcher.addCallback(this, PreviewBack(this) { askDiscard() })
         paintFilters()
         show()
         autoDetect(pages.toList(), crop = true, skew = true, announce = true)

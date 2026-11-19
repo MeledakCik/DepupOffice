@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tag tampilan: animasi angka bergulir yang sedang berjalan (Motion.rollTo). -->
+    <item name="roll_anim" type="id" />
+</resources>

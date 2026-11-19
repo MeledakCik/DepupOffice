@@ -145,6 +145,39 @@ fun ViewGroup.cascadeIn(dyDp: Int = 16, dxDp: Int = 0, fade: Boolean = false, de
     }
 }
 
+/**
+ * Baris pergi dari daftar: meluncur ke kiri sambil memudar, lalu tingginya (dan jarak atasnya) menyusut sehingga
+ * baris di bawahnya naik mulus mengisi tempatnya — baru setelah itu [then] (hapus data / bangun ulang daftar).
+ */
+fun View.collapseOut(then: () -> Unit) {
+    if (!Motion.on() || !isAttachedToWindow || height == 0) { then(); return }
+    isEnabled = false
+    val h0 = height
+    animate().cancel()
+    noLayer()
+    var done = false
+    val finish = { if (!done) { done = true; then() } }
+    animate().translationX(-width * 0.35f).alpha(0f).setStartDelay(0).setDuration(Motion.FAST + 70L).setInterpolator(Motion.EXIT)
+        .setUpdateListener(null).withEndAction {
+            val lp = layoutParams
+            if (lp == null) { finish(); return@withEndAction }
+            val m0 = (lp as? ViewGroup.MarginLayoutParams)?.topMargin ?: 0
+            val a = ValueAnimator.ofFloat(1f, 0f)
+            a.duration = Motion.MED
+            a.interpolator = Motion.STANDARD
+            a.addUpdateListener {
+                val f = it.animatedValue as Float
+                lp.height = (h0 * f).roundToInt()
+                (lp as? ViewGroup.MarginLayoutParams)?.topMargin = (m0 * f).roundToInt()
+                requestLayout()
+                glassAncestor()?.invalidate()
+            }
+            a.addListener(object : AnimatorListenerAdapter() { override fun onAnimationEnd(animation: Animator) = finish() })
+            a.start()
+        }.start()
+    postDelayed({ finish() }, Motion.FAST + 70L + Motion.MED + 300L)   // pengaman
+}
+
 /** Transparansi tanpa lapisan offscreen: alfa dikalikan langsung ke tiap gambar anak (ringan & aman di wadah kaca). */
 fun View.noLayer(): View { forceHasOverlappingRendering(false); return this }
 
@@ -253,6 +286,20 @@ fun View.wipeIn(delay: Long = 120L, duration: Long = 500L) {
     })
     a.start()
     postDelayed({ if (clipBounds != null) { a.cancel(); clipBounds = null; invalidate() } }, delay + duration + 150L)
+}
+
+/** Angka bergulir mulus dari nilai yang sedang tampil ke [to] (mis. "100%" → "150%"). Teks akhir selalu tepat. */
+fun TextView.rollTo(to: Int, suffix: String = "") {
+    val from = text.toString().removeSuffix(suffix).trim().toIntOrNull()
+    (getTag(R.id.roll_anim) as? ValueAnimator)?.cancel()
+    if (from == null || from == to || !Motion.on()) { text = "$to$suffix"; return }
+    val a = ValueAnimator.ofInt(from, to)
+    a.duration = Motion.MED + 60L
+    a.interpolator = Motion.STANDARD
+    a.addUpdateListener { text = "${it.animatedValue as Int}$suffix" }
+    a.addListener(object : AnimatorListenerAdapter() { override fun onAnimationEnd(animation: Animator) { text = "$to$suffix" } })
+    setTag(R.id.roll_anim, a)
+    a.start()
 }
 
 /** Angka menghitung naik ke [target] (ubin statistik). Teks akhir selalu tepat walau animasi mati. */

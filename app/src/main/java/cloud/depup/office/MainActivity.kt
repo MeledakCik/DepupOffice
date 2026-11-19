@@ -672,7 +672,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         lastTouch = android.os.SystemClock.uptimeMillis()
+        LaunchFrom.record(ev)
         return super.dispatchTouchEvent(ev)
+    }
+
+    /** Layar DepUp yang dibuka dari ketukan tumbuh dari elemen yang diketuk ([LaunchFrom]). */
+    override fun startActivity(intent: Intent, options: Bundle?) {
+        super.startActivity(intent, options ?: LaunchFrom.options(this, intent))
     }
 
     /** Pengguna sedang menyentuh/menggulir atau transisi berjalan → tunda pekerjaan berat. */
@@ -1021,7 +1027,7 @@ class MainActivity : AppCompatActivity() {
                     3 -> showRenameFileDialog(uriStr, e[1])
                     4 -> try { Files.share(this, Uri.parse(uriStr), e[2], false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
                     6 -> Files.showInFileManager(this, Uri.parse(uriStr))
-                    else -> { Recent.remove(this, uriStr); render() }
+                    else -> r.collapseOut { Recent.remove(this, uriStr); render() }
                 }
                 true
             }
@@ -1771,7 +1777,7 @@ class MainActivity : AppCompatActivity() {
                     5 -> try { Files.share(this, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
                     6 -> Files.showInFileManager(this, uri)
                     4 -> confirm("Hapus berkas?", "“${f.name}” akan dihapus dari HP dan tidak bisa dikembalikan.", "Hapus") {
-                        f.delete(); toast("Berkas dihapus"); onChanged()
+                        r.collapseOut { f.delete(); toast("Berkas dihapus"); onChanged() }
                     }
                     else -> {}
                 }
@@ -1999,7 +2005,7 @@ class MainActivity : AppCompatActivity() {
                 r.add(tv("${i + 1}. ${Files.nameOf(this, u)}", 13f).apply { maxLines = 2 }, w = 0, weight = 1f)
                 r.add(miniBtn(R.drawable.ic_up, "Naikkan") { if (i > 0) { list.add(i - 1, list.removeAt(i)); rebuild() } }, w = dp(36), h = dp(36), side = 2)
                 r.add(miniBtn(R.drawable.ic_down, "Turunkan") { if (i < list.size - 1) { list.add(i + 1, list.removeAt(i)); rebuild() } }, w = dp(36), h = dp(36), side = 2)
-                r.add(miniBtn(R.drawable.ic_close, "Hapus") { list.removeAt(i); rebuild() }, w = dp(36), h = dp(36), side = 2)
+                r.add(miniBtn(R.drawable.ic_close, "Hapus") { r.collapseOut { list.removeAt(i); rebuild() } }, w = dp(36), h = dp(36), side = 2)
                 rows.add(r, top = 6)
             }
         }

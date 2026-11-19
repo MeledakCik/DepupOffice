@@ -36,7 +36,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -360,9 +359,7 @@ class DocEditorActivity : AppCompatActivity() {
         pageCard.glide(0, Motion.SHIFT_DP + 2)
         pageCard.post { pageCard.requestFocus() }
 
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() { askClose() }
-        })
+        onBackPressedDispatcher.addCallback(this, PreviewBack(this) { askClose() })
 
         applyPageLook()
         renderAll()

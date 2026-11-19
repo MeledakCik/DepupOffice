@@ -193,9 +193,7 @@ class SheetEditorActivity : AppCompatActivity() {
         currentSeparator = SheetSettings.csvSeparator(this)
         currentAutoSum = SheetSettings.autoSum(this)
 
-        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = askClose()
-        })
+        onBackPressedDispatcher.addCallback(this, PreviewBack(this) { askClose() })
         // Pulihkan: proses dimatikan di latar (draf sesi ini) atau dari layar utama (EXTRA_DRAFT)
         val sid = savedInstanceState?.getString(STATE_DRAFT)
         val want = sid ?: intent.getStringExtra(EXTRA_DRAFT)
