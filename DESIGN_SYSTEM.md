@@ -89,6 +89,12 @@ Semua teks ≥ 4,5 : 1 (AA), kontrol non-teks ≥ 3 : 1.
 `tappable()`, `field` (cincin fokus 2dp), `card`, `listCard` (MainActivity), `actionRow`, `tile`, `segmented`,
 `filterChip`, `emptyState`, `sheet` + `sheetHeader` (tombol Tutup berlabel), `headingTv`.
 
+## Ikon (Depup Solid)
+Ikon 24dp bergaya **solid membulat**: bentuk penuh bersudut squircle, detail berupa lubang (bukan warna putih),
+ujung garis bulat, celah kecil antar-bagian; glyph garis (panah, tutup, plus, centang) bertebal 2,2–2,5.
+Warna selalu lewat tint di kode. Semua dibuat oleh `tools/icons/gen.py` — ubah/tambah ikon di sana, jangan edit
+XML-nya langsung. `ic_bookmark_off` sengaja garis (pasangan sakelar `ic_bookmark`).
+
 ## Aksesibilitas
 - Target sentuh minimal **48×48dp** untuk semua tombol, baris, chip (≥ 40dp + jarak), item navigasi 56dp.
 - Setiap tombol ikon punya `contentDescription` (dan tooltip saat ditekan lama). Ikon dekoratif disembunyikan dari pembaca layar.

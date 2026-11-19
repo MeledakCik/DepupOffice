@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Depup Line: ikon garis 24dp, tebal 1.75, ujung & sambungan membulat. Warna diatur lewat tint di kode. -->
+<!-- Depup Solid: ikon solid membulat 24dp — bentuk penuh bersudut squircle, detail berupa lubang, ujung garis
+     bulat, celah antar-bagian. Dibuat oleh tools/icons/gen.py; warna diatur lewat tint di kode. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:pathData="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" android:fillColor="#00000000" android:strokeColor="#FF111111" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:fillColor="#FF111111" android:fillType="evenOdd"
+        android:pathData="M8.81 4.28L9.38 3.98L9.68 3.41L9.68 2.99L9.51 2.59L9.02 2.18L8.60 2.10L3.20 2.10L2.59 2.29L2.18 2.78L2.10 3.20L2.10 8.60L2.29 9.21L2.78 9.62L3.41 9.68L3.81 9.51L4.22 9.02L4.30 8.60L4.30 4.30ZM19.72 8.81L20.02 9.38L20.59 9.68L21.01 9.68L21.41 9.51L21.82 9.02L21.90 8.60L21.90 3.20L21.71 2.59L21.41 2.29L20.80 2.10L15.40 2.10L14.79 2.29L14.38 2.78L14.32 3.41L14.49 3.81L14.98 4.22L15.40 4.30L19.70 4.30ZM4.28 15.19L3.98 14.62L3.41 14.32L2.78 14.38L2.42 14.62L2.18 14.98L2.10 15.40L2.10 20.80L2.29 21.41L2.59 21.71L3.20 21.90L8.60 21.90L9.21 21.71L9.62 21.22L9.68 20.59L9.51 20.19L9.02 19.78L8.60 19.70L4.30 19.70ZM15.19 19.72L14.62 20.02L14.32 20.59L14.32 21.01L14.49 21.41L14.98 21.82L15.40 21.90L20.80 21.90L21.41 21.71L21.71 21.41L21.90 20.80L21.90 15.40L21.71 14.79L21.22 14.38L20.59 14.32L20.19 14.49L19.78 14.98L19.70 15.40L19.70 19.70Z" />
 </vector>

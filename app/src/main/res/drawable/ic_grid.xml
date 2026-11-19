@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Depup Line: ikon garis 24dp, tebal 1.75, ujung & sambungan membulat. Warna diatur lewat tint di kode. -->
+<!-- Depup Solid: ikon solid membulat 24dp — bentuk penuh bersudut squircle, detail berupa lubang, ujung garis
+     bulat, celah antar-bagian. Dibuat oleh tools/icons/gen.py; warna diatur lewat tint di kode. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:pathData="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z" android:fillColor="#00000000" android:strokeColor="#FF111111" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" />
-    <path android:pathData="M4 9.5h16M4 14.5h16M9.5 4v16M14.5 4v16" android:fillColor="#00000000" android:strokeColor="#FF111111" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:fillColor="#FF111111" android:fillType="evenOdd"
+        android:pathData="M16.99 21.35L18.11 21.19L18.86 20.96L19.54 20.62L20.18 20.10L20.62 19.54L20.93 18.94L21.20 18.04L21.35 16.99L21.40 13.29L21.32 13.04L21.10 12.85L13.31 12.80L13.04 12.88L12.85 13.10L12.80 20.89L12.85 21.10L13.04 21.32L13.29 21.40ZM21.39 10.78L21.35 6.94L21.20 5.96L20.97 5.15L20.56 4.37L20.11 3.83L19.61 3.43L18.85 3.03L18.04 2.80L17.05 2.65L13.31 2.60L13.10 2.65L12.89 2.81L12.80 3.11L12.80 10.69L12.85 10.90L13.01 11.11L13.31 11.20L21.01 11.19L21.26 11.04ZM2.61 13.22L2.65 17.06L2.80 18.04L3.03 18.85L3.44 19.63L3.89 20.17L4.39 20.57L5.15 20.97L5.96 21.20L6.95 21.35L10.69 21.40L10.90 21.35L11.11 21.19L11.20 20.89L11.20 13.31L11.15 13.10L10.99 12.89L10.69 12.80L2.99 12.81L2.74 12.96ZM7.01 2.65L5.89 2.81L5.14 3.04L4.46 3.38L3.82 3.90L3.38 4.46L3.07 5.06L2.80 5.96L2.65 7.01L2.60 10.71L2.68 10.96L2.90 11.15L10.69 11.20L10.96 11.12L11.15 10.90L11.20 10.69L11.15 2.90L10.96 2.68L10.71 2.60Z" />
 </vector>
