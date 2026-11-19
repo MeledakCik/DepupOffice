@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -61,12 +62,21 @@ class GuideView(ctx: Context) : View(ctx) {
         color = 0x55FFFFFF; style = Paint.Style.STROKE; strokeWidth = ctx.dp(1).toFloat()
     }
 
-    override fun onDraw(c: Canvas) {
+    /** Bingkai saat ini (koordinat view ini) — juga titik awal foto yang "terbang" ke gambar kecil. */
+    fun frame(): android.graphics.RectF {
         val w = width.toFloat(); val h = height.toFloat()
         var fw = w * 0.86f
         var fh = fw / ratio
         if (fh > h * 0.92f) { fh = h * 0.92f; fw = fh * ratio }
-        val l = (w - fw) / 2f; val t = (h - fh) / 2f; val r = l + fw; val b = t + fh
+        val l = (w - fw) / 2f; val t = (h - fh) / 2f
+        return android.graphics.RectF(l, t, l + fw, t + fh)
+    }
+
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val fr = frame()
+        val fw = fr.width(); val fh = fr.height()
+        val l = fr.left; val t = fr.top; val r = fr.right; val b = fr.bottom
         c.drawRect(0f, 0f, w, t, dim); c.drawRect(0f, b, w, h, dim)
         c.drawRect(0f, t, l, b, dim); c.drawRect(r, t, w, b, dim)
         if (grid) for (i in 1..2) {
@@ -80,6 +90,34 @@ class GuideView(ctx: Context) : View(ctx) {
             l, b - L, l, b, l, b, l + L, b,
             r - L, b, r, b, r, b, r, b - L
         ), edge)
+    }
+}
+
+/** Cincin fokus: muncul di titik ketuk, mengerut berpegas, berdenyut saat fokus terkunci, lalu memudar. */
+class FocusRing(ctx: Context) : View(ctx) {
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = ctx.dp(2).toFloat() }
+    private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    init { alpha = 0f; isClickable = false; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
+    override fun onDraw(c: Canvas) {
+        val r = width / 2f - ring.strokeWidth
+        c.drawCircle(width / 2f, height / 2f, r, ring)
+        c.drawCircle(width / 2f, height / 2f, context.dp(3).toFloat(), dot)
+    }
+    fun show(x: Float, y: Float) {
+        translationX = x - width / 2f; translationY = y - height / 2f
+        removeCallbacks(hideRun)
+        if (!Motion.on()) { alpha = 1f; postDelayed(hideRun, 1100); return }
+        animate().cancel()
+        scaleX = 1.45f; scaleY = 1.45f; alpha = 0f
+        animate().scaleX(1f).scaleY(1f).alpha(1f).setStartDelay(0).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING)
+            .setUpdateListener(null).withEndAction(null).start()
+        postDelayed(hideRun, 1100)
+    }
+    /** Fokus terkunci: denyut kecil. */
+    fun locked() { if (alpha > 0f) boing(0.88f) }
+    private val hideRun = Runnable {
+        if (!Motion.on()) { alpha = 0f; return@Runnable }
+        animate().alpha(0f).scaleX(0.92f).scaleY(0.92f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
     }
 }
 
@@ -110,6 +148,15 @@ class CameraActivity : AppCompatActivity() {
     private val tabs = mutableListOf<TextView>()
     private lateinit var hintPill: TextView
     private lateinit var shutter: View
+    private lateinit var shutterRing: View
+    private lateinit var modePill: View
+    private lateinit var tabRow: LinearLayout
+    private lateinit var focusRing: FocusRing
+    private lateinit var zoomPill: TextView
+    private lateinit var bottomBar: View
+    private lateinit var wandIcon: View
+    private var pillAnim: ValueAnimator? = null
+    private var guideAnim: ValueAnimator? = null
     private lateinit var autoPill: TextView
 
     // ---- Pindai otomatis saat stabil ----
@@ -142,6 +189,8 @@ class CameraActivity : AppCompatActivity() {
         root.addView(previewView, FrameLayout.LayoutParams(MATCH, MATCH))
         guide = GuideView(this)
         root.addView(guide, FrameLayout.LayoutParams(MATCH, MATCH))
+        focusRing = FocusRing(this)
+        root.addView(focusRing, FrameLayout.LayoutParams(dp(72), dp(72), Gravity.TOP or Gravity.START))
 
         // ----- atas: tutup, flash, grid -----
         val top = LinearLayout(this).apply {
@@ -154,6 +203,7 @@ class CameraActivity : AppCompatActivity() {
             contentDescription = desc; isFocusable = true
             addView(icon(res, Color.WHITE, 22), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
             setOnClickListener { onClick() }
+            springPress(0.86f)
         }
         top.add(round(R.drawable.ic_close, "Tutup kamera") { cancel() }, w = dp(48), h = dp(48))
         top.add(View(this), w = 0, weight = 1f)
@@ -165,6 +215,7 @@ class CameraActivity : AppCompatActivity() {
             minimumHeight = dp(48)
             contentDescription = "Ganti mode lampu kilat"
             setOnClickListener { cycleFlash() }
+            springPress(0.94f)
         }
         fp.add(icon(R.drawable.ic_flash, Color.WHITE, 18), w = dp(18), h = dp(18))
         flashLabel = tv("Otomatis", 13f, CAM_ON_ACCENT, true).apply {
@@ -174,7 +225,7 @@ class CameraActivity : AppCompatActivity() {
         fp.add(flashLabel, w = WRAP, side = 8)
         top.add(fp, w = WRAP)
         top.add(View(this), w = 0, weight = 1f)
-        top.add(round(R.drawable.ic_grid, "Tampilkan atau sembunyikan garis bantu") { guide.grid = !guide.grid; guide.invalidate() }, w = dp(48), h = dp(48))
+        top.add(round(R.drawable.ic_grid, "Tampilkan atau sembunyikan garis bantu") { toggleGrid() }, w = dp(48), h = dp(48))
         root.addView(top, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
 
         hintPill = tv("Letakkan dokumen di dalam bingkai & permukaan kontras", 12f, Color.WHITE).apply {
@@ -187,7 +238,8 @@ class CameraActivity : AppCompatActivity() {
         autoPill = tv("", 12f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER
             setPadding(dp(14), dp(8), dp(14), dp(8))
-            setOnClickListener { autoScan = !autoScan; stableSince = 0L; armed = true; paintAuto() }
+            setOnClickListener { autoScan = !autoScan; stableSince = 0L; armed = true; paintAuto(true) }
+            springPress(0.94f)
         }
         root.addView(autoPill, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(112) })
         paintAuto()
@@ -198,7 +250,7 @@ class CameraActivity : AppCompatActivity() {
             setBackgroundColor(0xE60C0C0C.toInt())
             setPadding(dp(16), dp(12), dp(16), dp(14))
         }
-        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         listOf("Multi-Halaman", "KTP / ID Card", "Dokumen (PDF)").forEachIndexed { i, n ->
             val t = tv(n, 13f, 0xCCFFFFFF.toInt(), true).apply {
                 gravity = Gravity.CENTER
@@ -210,7 +262,13 @@ class CameraActivity : AppCompatActivity() {
             tabs.add(t)
             tabRow.add(t, w = WRAP)
         }
-        bottom.add(tabRow)
+        // kapsul putih yang MELUNCUR (dan sedikit melar) di antara mode — bukan latar yang berpindah tiba-tiba
+        val tabWrap = FrameLayout(this)
+        modePill = View(this).apply { background = shape(CAM_ACCENT, 100); alpha = 0f }
+        tabWrap.addView(modePill, FrameLayout.LayoutParams(0, 0))
+        tabWrap.addView(tabRow, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER_HORIZONTAL))
+        tabWrap.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> if (pillAnim?.isRunning != true) placePill(false) }
+        bottom.add(tabWrap)
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         // kiri: thumbnail
@@ -238,22 +296,14 @@ class CameraActivity : AppCompatActivity() {
 
         // tengah: shutter
         val outer = FrameLayout(this).apply {
+            shutterRing = this
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0); setStroke(dp(4), Color.WHITE) }
         }
         shutter = FrameLayout(this).apply {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
             contentDescription = "Ambil foto"
             setOnClickListener { snap() }
-            // tekan: rana mengecil sedikit; lepas: kembali mulus (tanpa pantulan)
-            setOnTouchListener { v, e ->
-                when (e.actionMasked) {
-                    android.view.MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.9f).scaleY(0.9f).setStartDelay(0)
-                        .setDuration(Motion.PRESS_DOWN).setInterpolator(Motion.STANDARD).start()
-                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL ->
-                        v.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.PRESS_UP).setInterpolator(Motion.STANDARD).start()
-                }
-                false
-            }
+            springPress(0.86f)      // tekan: rana mengecil; lepas: memantul kembali seperti jeli
         }
         outer.addView(shutter, FrameLayout.LayoutParams(dp(66), dp(66), Gravity.CENTER))
         actions.add(outer, w = dp(84), h = dp(84))
@@ -262,15 +312,28 @@ class CameraActivity : AppCompatActivity() {
         val right = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
         right.add(FrameLayout(this).apply {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x33FFFFFF) }
-            addView(icon(R.drawable.ic_wand, Color.WHITE, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+            wandIcon = icon(R.drawable.ic_wand, Color.WHITE, 24)
+            addView(wandIcon, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
             contentDescription = "Ganti filter warna"
-            setOnClickListener { filterIdx = (filterIdx + 1) % filters.size; filterLabel.text = filterNames[filterIdx] }
+            setOnClickListener { nextFilter() }
+            springPress(0.88f)
         }, w = dp(56), h = dp(56))
         filterLabel = tv(filterNames[0], 11f, Color.WHITE)
         right.add(filterLabel, top = 10, w = WRAP)
         actions.add(right, w = 0, weight = 1f)
         bottom.add(actions, top = 12)
         root.addView(bottom, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
+        bottomBar = bottom
+        thumb.springPress(0.92f)
+
+        // tingkat zoom saat mencubit: kapsul kecil di atas bilah bawah, muncul & hilang sendiri
+        zoomPill = tv("1.0×", 13f, Color.WHITE, true).apply {
+            background = shape(0x99000000.toInt(), 100)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            alpha = 0f
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        root.addView(zoomPill, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
 
         setContentView(root)
         setMode(2)
@@ -282,13 +345,77 @@ class CameraActivity : AppCompatActivity() {
         else askCam.launch(Manifest.permission.CAMERA)
     }
 
-    private fun paintAuto() {
-        autoPill.text = if (autoScan) "Pindai otomatis: AKTIF" else "Pindai otomatis: MATI"
-        autoPill.background = shape(if (autoScan) 0xE635754C.toInt() else 0x99000000.toInt(), 100)
+    private fun paintAuto(animate: Boolean = false) {
+        val t = if (autoScan) "Pindai otomatis: AKTIF" else "Pindai otomatis: MATI"
+        val to = if (autoScan) 0xE635754C.toInt() else 0x99000000.toInt()
+        val bg = (autoPill.background as? GradientDrawable) ?: shape(to, 100).also { autoPill.background = it }
+        if (!animate || !Motion.on()) { autoPill.text = t; bg.setColor(to); autoPill.tag = to; return }
+        // warna kapsul mengalir ke warna baru, teks bergulir, kapsul memantul kecil
+        val from = (autoPill.tag as? Int) ?: to
+        ValueAnimator.ofArgb(from, to).apply {
+            duration = Motion.MED; interpolator = Motion.STANDARD
+            addUpdateListener { bg.setColor(it.animatedValue as Int) }
+            start()
+        }
+        autoPill.tag = to
+        autoPill.morphText(t)
+        autoPill.boing(0.94f)
     }
 
     private fun hint(t: String) {
-        runOnUiThread { hintPill.text = t }
+        runOnUiThread { hintPill.morphText(t) }
+    }
+
+    private fun toggleGrid() {
+        guide.grid = !guide.grid
+        guide.invalidate()
+        if (Motion.on()) { guide.alpha = 0.6f; guide.animate().alpha(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start() }
+    }
+
+    private fun nextFilter() {
+        filterIdx = (filterIdx + 1) % filters.size
+        filterLabel.morphText(filterNames[filterIdx])
+        // tongkat sihir berayun lalu mengendap
+        if (Motion.on()) {
+            wandIcon.animate().cancel()
+            wandIcon.rotation = -28f
+            wandIcon.animate().rotation(0f).setStartDelay(0).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
+        }
+    }
+
+    /** Letakkan kapsul mode di bawah tab aktif; [animate] = meluncur berpegas & sedikit melar di tengah jalan. */
+    private fun placePill(animate: Boolean) {
+        val t = tabs.getOrNull(modeIdx) ?: return
+        if (t.width == 0) return
+        val x1 = (tabRow.left + t.left).toFloat(); val w1 = t.width.toFloat()
+        val top = tabRow.top + t.top; val h = t.height
+        val lp = modePill.layoutParams as FrameLayout.LayoutParams
+        fun apply(x: Float, w: Float) {
+            modePill.translationX = x
+            val wi = w.toInt()
+            // tata letak ulang HANYA bila ukurannya berubah (pendengar tata letak memanggil ini lagi → jangan berputar)
+            if (lp.width != wi || lp.height != h || lp.topMargin != top || lp.leftMargin != 0) {
+                lp.width = wi; lp.height = h; lp.topMargin = top; lp.leftMargin = 0
+                modePill.layoutParams = lp
+            }
+        }
+        pillAnim?.cancel()
+        if (!animate || !Motion.on() || modePill.alpha == 0f) { apply(x1, w1); modePill.alpha = 1f; return }
+        val x0 = modePill.translationX; val w0 = lp.width.toFloat()
+        val dist = abs(x1 - x0)
+        pillAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.SPRING_MS; interpolator = Motion.SPRING
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                val stretch = dist * 0.22f * kotlin.math.sin(Math.PI * f.coerceIn(0f, 1f)).toFloat()
+                val w = w0 + (w1 - w0) * f + stretch
+                apply(x0 + (x1 - x0) * f - stretch / 2f, w)
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { apply(x1, w1) }
+            })
+            start()
+        }
     }
 
     /**
@@ -363,20 +490,36 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun setMode(i: Int) {
+        val changed = i != modeIdx
         modeIdx = i
         tabs.forEachIndexed { k, t ->
             val on = k == i
             t.setTextColor(if (on) CAM_ON_ACCENT else 0xCCFFFFFF.toInt())
-            t.background = if (on) shape(CAM_ACCENT, 100) else null
+            t.background = null
             t.isSelected = on
         }
-        guide.ratio = if (i == 1) 1.586f else 0.707f
-        guide.invalidate()
-        hintPill.text = when (i) {
+        placePill(changed)
+        // bingkai panduan berubah bentuk (dokumen ↔ KTP) dengan pegas lembut, bukan melompat
+        val ratio = if (i == 1) 1.586f else 0.707f
+        guideAnim?.cancel()
+        if (!changed || !Motion.on() || guide.ratio == ratio) { guide.ratio = ratio; guide.invalidate() }
+        else {
+            // rasio diinterpolasi dalam skala log supaya lebar & tinggi berubah sama mulusnya
+            val a = kotlin.math.ln(guide.ratio); val b = kotlin.math.ln(ratio)
+            guideAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = Motion.SPRING_SOFT_MS; interpolator = Motion.SPRING_SOFT
+                addUpdateListener { guide.ratio = kotlin.math.exp(a + (b - a) * (it.animatedValue as Float)); guide.invalidate() }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(x: android.animation.Animator) { guide.ratio = ratio; guide.invalidate() }
+                })
+                start()
+            }
+        }
+        hintPill.morphText(when (i) {
             0 -> "Ambil beberapa halaman, lalu ketuk gambar kecil untuk lanjut"
             1 -> "Posisikan KTP / kartu di dalam bingkai"
             else -> "Letakkan dokumen di dalam bingkai & permukaan kontras"
-        }
+        })
     }
 
     private fun flashConst() = when (flash) {
@@ -387,7 +530,7 @@ class CameraActivity : AppCompatActivity() {
 
     private fun cycleFlash() {
         flash = (flash + 1) % 3
-        flashLabel.text = arrayOf("Otomatis", "Nyala", "Mati")[flash]
+        flashLabel.morphText(arrayOf("Otomatis", "Nyala", "Mati")[flash])
         capture?.flashMode = flashConst()
     }
 
@@ -460,6 +603,7 @@ class CameraActivity : AppCompatActivity() {
                 val z = cam.cameraInfo.zoomState.value ?: return true
                 val target = (z.zoomRatio * d.scaleFactor).coerceIn(z.minZoomRatio, minOf(z.maxZoomRatio, 6f))
                 cam.cameraControl.setZoomRatio(target)
+                showZoom(target)
                 return true
             }
         })
@@ -474,13 +618,34 @@ class CameraActivity : AppCompatActivity() {
         }
     }
 
+    private val hideZoom = Runnable {
+        if (Motion.on()) zoomPill.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
+        else zoomPill.alpha = 0f
+    }
+
+    private fun showZoom(z: Float) {
+        zoomPill.text = String.format(java.util.Locale.US, "%.1f×", z)
+        zoomPill.translationY = -(bottomBar.height + dp(14)).toFloat()
+        zoomPill.removeCallbacks(hideZoom)
+        if (zoomPill.alpha < 1f && Motion.on()) {
+            zoomPill.animate().cancel()
+            if (zoomPill.alpha == 0f) { zoomPill.scaleX = 0.85f; zoomPill.scaleY = 0.85f }
+            zoomPill.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
+        } else zoomPill.alpha = 1f
+        zoomPill.postDelayed(hideZoom, 800)
+    }
+
     /** Ketuk layar: fokus + ukur cahaya di titik itu (berguna untuk tulisan kecil / tabel). */
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
         val pt = previewView.meteringPointFactory.createPoint(x, y)
         val act = FocusMeteringAction.Builder(pt, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
             .setAutoCancelDuration(4, java.util.concurrent.TimeUnit.SECONDS).build()
-        cam.cameraControl.startFocusAndMetering(act)
+        focusRing.show(previewView.left + x, previewView.top + y)
+        val fut = cam.cameraControl.startFocusAndMetering(act)
+        fut.addListener({
+            try { if (fut.get().isFocusSuccessful) focusRing.locked() } catch (_: Throwable) {}
+        }, ContextCompat.getMainExecutor(this))
     }
 
     /** Kilatan putih tipis di atas pratinjau saat memotret (tanpa mengganggu kamera). */
@@ -501,6 +666,7 @@ class CameraActivity : AppCompatActivity() {
         armed = false
         stableSince = 0L
         shutter.isEnabled = false
+        if (Motion.on()) shutterRing.animate().alpha(0.45f).scaleX(0.94f).scaleY(0.94f).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD).start()
         shutterFlash()
         shutter.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
         val dir = File(cacheDir, "scan").apply { mkdirs() }
@@ -510,10 +676,12 @@ class CameraActivity : AppCompatActivity() {
             ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(r: ImageCapture.OutputFileResults) {
+                    ringBack()
                     shutter.isEnabled = true
                     busyShot = false
                     shots.add(f)
-                    updateThumb(f)
+                    // terbang ke gambar kecil hanya bila kamera tetap terbuka (multi-halaman / KTP sisi depan)
+                    updateThumb(f, fly = modeIdx == 0 || (modeIdx == 1 && shots.size == 1))
                     if (modeIdx == 1) { // KTP Mode
                         if (shots.size == 1) {
                             toast("Foto Sisi DEPAN KTP disimpan. Sekarang foto Sisi BELAKANG!")
@@ -526,6 +694,7 @@ class CameraActivity : AppCompatActivity() {
                     }
                 }
                 override fun onError(e: ImageCaptureException) {
+                    ringBack()
                     shutter.isEnabled = true
                     busyShot = false
                     toast("Gagal mengambil foto: ${e.message}")
@@ -534,18 +703,81 @@ class CameraActivity : AppCompatActivity() {
         )
     }
 
-    private fun updateThumb(f: File) {
-        try { thumb.setImageBitmap(Pdf.decode(this, Uri.fromFile(f), 220)) } catch (_: Throwable) {}
-        badge.visibility = View.VISIBLE
-        badge.text = shots.size.toString()
-        // gambar kecil "menerima" foto: membesar ke ukuran asli, lencana jumlah ikut bersamaan — tanpa pantulan
-        if (Motion.on()) {
-            thumb.scaleX = 0.85f; thumb.scaleY = 0.85f
-            thumb.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
-            badge.scaleX = 0.6f; badge.scaleY = 0.6f
-            badge.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
+    private fun ringBack() {
+        if (!Motion.on()) { shutterRing.alpha = 1f; return }
+        shutterRing.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
+    }
+
+    private fun updateThumb(f: File, fly: Boolean = true) {
+        val bm = try { Pdf.decode(this, Uri.fromFile(f), 480) } catch (_: Throwable) { null }
+        val land = {
+            if (bm != null) thumb.setImageBitmap(bm)
+            badge.visibility = View.VISIBLE
+            badge.text = shots.size.toString()
+            // gambar kecil "menerima" foto: memantul, lencana jumlah ikut memantul
+            thumb.boing(0.86f)
+            badge.boing(0.5f, 40L)
+            thumbLabel.morphText("${shots.size} Halaman")
         }
-        thumbLabel.text = "${shots.size} Halaman"
+        if (bm == null || !fly || !Motion.on() || !flyToThumb(bm, land)) land()
+    }
+
+    /**
+     * Foto yang baru diambil "terbang" dari bingkai panduan ke gambar kecil di kiri bawah, mengecil & membulat
+     * dengan pegas lembut — supaya jelas ke mana hasil jepretan pergi. Kembalikan false bila tidak bisa.
+     */
+    private fun flyToThumb(bm: android.graphics.Bitmap, land: () -> Unit): Boolean {
+        val root = guide.parent as? FrameLayout ?: return false
+        if (guide.width == 0 || thumb.width == 0) return false
+        val from = guide.frame()
+        val rl = IntArray(2); root.getLocationInWindow(rl)
+        val gl = IntArray(2); guide.getLocationInWindow(gl)
+        val tl = IntArray(2); thumb.getLocationInWindow(tl)
+        val sx = gl[0] - rl[0] + from.left; val sy = gl[1] - rl[1] + from.top
+        val sw = from.width(); val sh = from.height()
+        val ex = (tl[0] - rl[0]).toFloat(); val ey = (tl[1] - rl[1]).toFloat()
+        val ew = thumb.width.toFloat(); val eh = thumb.height.toFloat()
+        val card = object : View(this) {
+            val src = android.graphics.Rect(0, 0, bm.width, bm.height)
+            val dst = android.graphics.RectF()
+            val p = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+            var radius = 0f
+            val path = android.graphics.Path()
+            override fun onDraw(c: Canvas) {
+                // isi seperti CENTER_CROP di ukuran view saat ini (ukuran view diubah tiap frame, bukan skala → tidak gepeng)
+                val vw = width.toFloat(); val vh = height.toFloat()
+                val s = maxOf(vw / bm.width, vh / bm.height)
+                val dw = bm.width * s; val dh = bm.height * s
+                dst.set((vw - dw) / 2f, (vh - dh) / 2f, (vw + dw) / 2f, (vh + dh) / 2f)
+                path.reset(); path.addRoundRect(0f, 0f, vw, vh, radius, radius, android.graphics.Path.Direction.CW)
+                c.save(); c.clipPath(path); c.drawBitmap(bm, src, dst, p); c.restore()
+            }
+        }.apply { isClickable = false; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO; elevation = dp(6).toFloat() }
+        val lp = FrameLayout.LayoutParams(sw.toInt(), sh.toInt(), Gravity.TOP or Gravity.START)
+        root.addView(card, lp)
+        val r1 = dp(14).toFloat()
+        val a = ValueAnimator.ofFloat(0f, 1f)
+        a.duration = Motion.SPRING_SOFT_MS
+        a.interpolator = Motion.SPRING_SOFT
+        a.startDelay = 70      // sesudah kilatan rana
+        a.addUpdateListener {
+            val t = it.animatedValue as Float
+            val tc = t.coerceIn(0f, 1.04f)
+            val w = sw + (ew - sw) * tc; val h = sh + (eh - sh) * tc
+            card.translationX = sx + (ex - sx) * t
+            card.translationY = sy + (ey - sy) * t
+            card.radius = r1 * t.coerceIn(0f, 1f)
+            if (lp.width != w.toInt() || lp.height != h.toInt()) { lp.width = maxOf(1, w.toInt()); lp.height = maxOf(1, h.toInt()); card.layoutParams = lp }
+            card.invalidate()
+        }
+        var done = false
+        val finish = { if (!done) { done = true; land(); root.removeView(card) } }
+        a.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(x: android.animation.Animator) { finish() }
+        })
+        a.start()
+        root.postDelayed({ finish() }, 70 + Motion.SPRING_SOFT_MS + 200L)
+        return true
     }
 
     private fun finishWithShots() {

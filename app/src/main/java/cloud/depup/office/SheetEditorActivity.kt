@@ -288,7 +288,15 @@ class SheetEditorActivity : AppCompatActivity() {
         cleanPrint = if (restoredDraft) null else fingerprint()
     }
 
-    private fun updateSheetBar() {
+    /** Sel aktif memantul kecil (dipilih / diberi tebal / diwarnai). */
+    private fun bounceActive(from: Float = 0.9f) {
+        cellViews.getOrNull(activeRow)?.getOrNull(activeCol)?.boing(from)
+    }
+
+    /** Isi lembar berganti: kartu grid meluncur masuk dari arah lembar yang dituju (pegas lembut). */
+    private fun slideGrid(dir: Int) = gridBox.cascadeIn(dyDp = if (dir == 0) 14 else 0, dxDp = 22 * dir)
+
+    private fun updateSheetBar(bounce: Boolean = false) {
         if (!::sheetBarContainer.isInitialized) return
         sheetBarContainer.removeAllViews()
 
@@ -304,8 +312,11 @@ class SheetEditorActivity : AppCompatActivity() {
                 background = shape(if (isSel) C.TEAL else C.SURFACE, 100, C.LINE, 1)
                 setPadding(dp(12), dp(6), dp(12), dp(6))
                 isClickable = true
+                springPress(0.92f)
+                if (isSel && bounce) boing(0.85f)
                 setOnClickListener {
                     if (currentSheetIdx != idx) {
+                        val dir = if (idx > currentSheetIdx) 1 else -1
                         currentSheetIdx = idx
                         val targetM = sheetList[idx].second
                         // PINDAH penunjuk ke list milik sheet itu. Dulu isinya disalin ke `matrix` — padahal `matrix`
@@ -316,7 +327,8 @@ class SheetEditorActivity : AppCompatActivity() {
                         activeCol = 0
                         syncFormulaBar()
                         renderGrid()
-                        updateSheetBar()
+                        slideGrid(dir)
+                        updateSheetBar(true)
                     }
                 }
                 setOnLongClickListener {
@@ -331,6 +343,7 @@ class SheetEditorActivity : AppCompatActivity() {
             background = shape(C.BLUE_BG, 100)
             setPadding(dp(10), dp(6), dp(10), dp(6))
             isClickable = true
+            springPress(0.9f)
             setOnClickListener {
                 val newIndex = sheetList.size + 1
                 val newMatrix = mutableListOf<MutableList<SheetCell>>()
@@ -343,7 +356,8 @@ class SheetEditorActivity : AppCompatActivity() {
                 activeCol = 0
                 syncFormulaBar()
                 renderGrid()
-                updateSheetBar()
+                slideGrid(0)
+                updateSheetBar(true)
                 toast("Sheet$newIndex ditambahkan")
             }
         }
@@ -735,6 +749,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 setPadding(dp(14), dp(6), dp(14), dp(6))
                 isClickable = true
                 setOnClickListener { onClick() }
+                springPress(0.93f)
             }
             row.add(tvBtn, w = WRAP, side = 3)
         }
@@ -748,14 +763,22 @@ class SheetEditorActivity : AppCompatActivity() {
             activeCol = activeCol.coerceIn(0, numCols - 1)
             syncFormulaBar()
             renderGrid()
+            lastRowView()?.pop(0.9f)      // baris baru muncul memantul
         }
 
         toolBtn("- Baris") {
+            if (rowLeaving) return@toolBtn     // baris sebelumnya masih meluncur keluar
             if (matrix.size > 1) {
-                matrix.removeAt(matrix.size - 1)
-                activeRow = activeRow.coerceIn(0, matrix.size - 1)
-                syncFormulaBar()
-                renderGrid()
+                val drop = {
+                    rowLeaving = false
+                    matrix.removeAt(matrix.size - 1)
+                    activeRow = activeRow.coerceIn(0, matrix.size - 1)
+                    syncFormulaBar()
+                    renderGrid()
+                }
+                // baris terakhir meluncur keluar & celahnya menutup, baru dihapus dari data
+                val rv = lastRowView()
+                if (rv != null && Motion.on()) { rowLeaving = true; rv.collapseOut { drop() } } else drop()
             } else toast("Minimal 1 baris")
         }
 
@@ -766,6 +789,7 @@ class SheetEditorActivity : AppCompatActivity() {
                     while (cells.size < numCols) cells.add(SheetCell("", r == 0))
                 }
                 renderGrid()
+                slideGrid(1)
             } else toast("Maksimal ${colNames.size} kolom")
         }
 
@@ -776,6 +800,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 activeCol = activeCol.coerceIn(0, numCols - 1)
                 syncFormulaBar()
                 renderGrid()
+                slideGrid(-1)
             } else toast("Minimal 2 kolom")
         }
 
@@ -789,6 +814,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 matrix[activeRow][activeCol].valStr = formula
                 syncFormulaBar()
                 refreshCells()
+                bounceActive(0.85f)
             } else toast("Tambahkan baris angka terlebih dahulu")
         }
 
@@ -797,6 +823,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].isBold = !matrix[activeRow][activeCol].isBold
                 refreshCells()
+                bounceActive(0.85f)
             }
         }
 
@@ -805,6 +832,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].bgColor = C.BLUE_BG
                 refreshCells()
+                bounceActive(0.88f)
             }
         }
 
@@ -813,6 +841,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 ensureCell(activeRow, activeCol)
                 matrix[activeRow][activeCol].bgColor = 0
                 refreshCells()
+                bounceActive(0.88f)
             }
         }
 
@@ -832,7 +861,7 @@ class SheetEditorActivity : AppCompatActivity() {
         formulaEt.setText(raw)
         formulaEt.setSelection(formulaEt.text.length)
         updatingFormula = false
-        activeCellPill.text = "${colNames.getOrElse(activeCol) { "C${activeCol + 1}" }}${activeRow + 1}"
+        activeCellPill.morphText("${colNames.getOrElse(activeCol) { "C${activeCol + 1}" }}${activeRow + 1}")
     }
 
     // ================= RUMUS =================
@@ -1112,6 +1141,7 @@ class SheetEditorActivity : AppCompatActivity() {
     // (hingga 1.600 sel) dan menghitung ulang semua rumus tanpa cache — mengetik terasa berat di tabel besar.
 
     private var cellViews: Array<Array<TextView?>> = emptyArray()
+    private var rowLeaving = false
     private var builtCols = -1
 
     /** Jalankan [block] dengan cache nilai sel aktif (thread UI). */
@@ -1169,6 +1199,8 @@ class SheetEditorActivity : AppCompatActivity() {
         gridBox.add(cardGrid)
     }
 
+    private fun lastRowView(): View? = (gridBox.getChildAt(0) as? android.view.ViewGroup)?.let { g -> g.getChildAt(g.childCount - 1).takeIf { g.childCount > 1 } }
+
     /** Perbarui isi & gaya semua sel di tempatnya (tanpa membangun ulang tampilan). */
     private fun refreshCells() {
         if (cellViews.size != matrix.size || builtCols != numCols) { renderGrid(); return }
@@ -1190,6 +1222,7 @@ class SheetEditorActivity : AppCompatActivity() {
             cellViews.getOrNull(pr)?.getOrNull(pc)?.let { styleCell(it, pr, pc) }
             cellViews.getOrNull(r)?.getOrNull(c)?.let { styleCell(it, r, c) }
         }
+        if (pr != r || pc != c) bounceActive(0.92f)   // cincin sel aktif "mendarat" di sel baru
     }
 
     /**
