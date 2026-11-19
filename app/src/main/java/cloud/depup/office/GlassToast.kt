@@ -37,6 +37,8 @@ object GlassToast {
     private val main = Handler(Looper.getMainLooper())
     private var current: WeakReference<View>? = null
     private const val DOWNSCALE = 8
+    /** Warna kaca notifikasi: abu sangat gelap (bukan hitam pekat) — sama di tema terang & gelap. */
+    private const val TOAST_INK = 0xFF1C1C1F.toInt()
 
     fun show(act: Activity, msg: String, long: Boolean = true) {
         if (Looper.myLooper() != Looper.getMainLooper()) { main.post { show(act, msg, long) }; return }
@@ -149,9 +151,12 @@ object GlassToast {
     private fun attachLive(act: Activity, sc: GlassScaffold, msg: String, long: Boolean) {
         val ctx = act
         val cap = GlassSurface(ctx).apply {
-            tintColor = { C.PANEL }
-            tintAlpha = Glass.toneAlpha(224)
-            liquidTint = Glass.toneTint(0.5f)
+            // kaca GELAP berasap (seperti notifikasi iOS di atas konten terang): isi di belakang masih terasa hidup,
+            // tapi teks putih selalu terbaca — kaca bening membuat pesan "nyaru" dengan halaman.
+            tintColor = { TOAST_INK }
+            tintAlpha = 236          // setelan transparansi kaca tetap berlaku (diterapkan di GlassSurface)
+            liquidTint = 0.82f
+            darkGlass = true
             corner = ctx.dp(100).toFloat()      // bentuk kapsul: dibatasi setengah tinggi
             alpha = 0f
             elevation = ctx.dp(6).toFloat()
@@ -160,7 +165,7 @@ object GlassToast {
         val text = TextView(ctx).apply {
             this.text = msg
             textSize = 14f
-            setTextColor(C.ON_PANEL)
+            setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             maxLines = 4
             setPadding(ctx.dp(20), ctx.dp(12), ctx.dp(20), ctx.dp(12))

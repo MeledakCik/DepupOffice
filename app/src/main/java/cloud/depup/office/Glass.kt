@@ -115,6 +115,8 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
     var tintAlpha: Int? = null
     /** Kekuatan tint pada kaca cair (0..1); null = bawaan (kapsul tipis, bilah rata sedikit lebih pekat). */
     var liquidTint: Float? = null
+    /** true = kaca selalu berperilaku gelap (pita kecerahan untuk teks putih), apa pun temanya — mis. notifikasi. */
+    var darkGlass = false
     /** Tepi mana yang nyata untuk bilah rata (diberi tepi kaca): -1 bawah, 1 atas, 0 tanpa. */
     var edge = 0
 
@@ -295,9 +297,9 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         val base = tintColor?.invoke() ?: (baseColor ?: C.BG)
         u[11] = Color.red(base) / 255f; u[12] = Color.green(base) / 255f; u[13] = Color.blue(base) / 255f
         u[14] = Glass.toneTint(liquidTint ?: if (cap) (if (dark) 0.36f else 0.22f) else (if (dark) 0.5f else 0.42f))
-        u[15] = if (dark) 1f else 0f
+        u[15] = if (dark || darkGlass) 1f else 0f
         u[16] = mx + touchX; u[17] = my + touchY; u[18] = touchAmt; u[19] = 44f * d
-        u[20] = if (dark) 0.8f else 1f
+        u[20] = if (dark || darkGlass) 0.8f else 1f
         u[21] = d
         // Batas sampel = area kaca yang TAMPIL (bukan seluruh node rekaman). Efek GPU hanya menghitung masukannya di
         // dalam area yang digambar; sampel di luar itu bernilai kosong (hitam transparan) — penyebab garis sian &
