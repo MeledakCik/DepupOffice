@@ -2,15 +2,11 @@ package cloud.depup.office
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.ColorFilter
-import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.RadialGradient
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.view.MotionEvent
 import android.view.View
@@ -23,10 +19,9 @@ import kotlin.math.hypot
  * Sistem seleksi teks milik Depup (editor Word) — menggantikan pegangan & kaca pembesar bawaan Android, yang
  * digambar sistem dan tidak bisa diberi gaya:
  *
- * - Pegangan seleksi gaya iOS: garis setinggi baris + butir kaca (aksen, tepi putih, kilau) di ujung atas/bawah.
- * - Pegangan kursor: butir kaca di bawah kursor (muncul sesudah mengetuk, hilang saat mengetik / beberapa detik).
- * - Kaca pembesar (loupe) berbentuk kapsul dengan tepi kaca: tepi putih, kilau atas, garis luar tipis & bayangan —
- *   jelas terpisah dari halaman (tidak nyaru).
+ * - Pegangan seleksi minimalis: garis setinggi baris + bulatan warna aksen polos (flat) di ujung atas/bawah.
+ * - Pegangan kursor: bulatan aksen di bawah kursor (muncul sesudah mengetuk, hilang saat mengetik / beberapa detik).
+ * - Kaca pembesar (loupe) kapsul dengan satu garis tepi warna aksen polos — terpisah dari halaman tanpa efek.
  *
  * Semua digambar di satu lapisan transparan di atas scaffold kaca; sentuhan yang tidak mengenai pegangan diteruskan
  * ke isi di bawahnya. Logika gerak (tekan-lama, ketuk-ganda/tiga) ada di [ParaEdit].
@@ -124,7 +119,7 @@ object SelectionKit {
                 .setSize((128 * d).toInt(), (54 * d).toInt())
                 .setCornerRadius(27 * d)
                 .setInitialZoom(1.4f)
-                .setElevation(10 * d)
+                .setElevation(0f)
                 .setDefaultSourceToMagnifierOffset(0, -(60 * d).toInt())
                 .setOverlay(LoupeGlass(d))
                 .build().also { loupe = it; loupeHost = sc }
@@ -165,10 +160,7 @@ object SelectionKit {
         private val d = ctx.resources.displayMetrics.density
         private val bar = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 2f * d; strokeCap = Paint.Cap.ROUND }
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.5f * d; color = Color.WHITE }
-        private val shade = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x33000000 }
-        private val gloss = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val r = 7f * d
+        private val r = 6f * d
         private var grab = 0          // 0 tidak ada, 1 awal, 2 akhir, 3 kursor
         private var fixed = 0         // ujung seleksi yang diam saat menggeser
         private var grabDy = 0f
@@ -188,16 +180,12 @@ object SelectionKit {
             super.onDetachedFromWindow()
         }
 
-        /** Butir kaca: aksen + bayangan lembut + tepi putih + kilau kecil di kiri atas. */
+        /** Butir pegangan: lingkaran warna aksen polos (flat) — tanpa bayangan, tepi, atau kilau. */
         private fun bead(c: Canvas, x: Float, y: Float, s: Float) {
             val rr = r * s
             if (rr <= 0.5f) return
-            c.drawCircle(x, y + 1.2f * d, rr + 1f * d, shade)
             fill.color = C.ACCENT
             c.drawCircle(x, y, rr, fill)
-            gloss.shader = RadialGradient(x - rr * 0.35f, y - rr * 0.4f, rr * 0.9f, 0x99FFFFFF.toInt(), 0x00FFFFFF, Shader.TileMode.CLAMP)
-            c.drawCircle(x, y, rr, gloss)
-            c.drawCircle(x, y, rr, rim)
         }
 
         override fun onDraw(c: Canvas) {
@@ -275,23 +263,16 @@ object SelectionKit {
     }
 
     /**
-     * Lapisan kaca di atas isi loupe: garis luar gelap tipis (memisahkan dari halaman), tepi putih, kilau lembut di
-     * separuh atas — kesan lensa kaca tanpa mengaburkan huruf yang diperbesar.
+     * Bingkai loupe minimalis: satu garis tepi warna aksen polos (flat) — cukup untuk memisahkan loupe dari halaman
+     * tanpa bayangan, kilau, atau efek kaca.
      */
     private class LoupeGlass(private val d: Float) : Drawable() {
-        private val outer = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1f * d; color = 0x40000000 }
-        private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * d; color = 0xE6FFFFFF.toInt() }
-        private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * d }
         private val rf = RectF()
         override fun draw(c: Canvas) {
-            val b = bounds
-            rf.set(b); val rad = rf.height() / 2f
-            sheen.shader = LinearGradient(0f, rf.top, 0f, rf.centerY(), 0x38FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP)
-            c.drawRoundRect(rf, rad, rad, sheen)
-            rf.inset(1.5f * d, 1.5f * d)
+            edge.color = C.ACCENT
+            rf.set(bounds); rf.inset(1f * d, 1f * d)
             c.drawRoundRect(rf, rf.height() / 2f, rf.height() / 2f, edge)
-            rf.set(b); rf.inset(0.5f * d, 0.5f * d)
-            c.drawRoundRect(rf, rf.height() / 2f, rf.height() / 2f, outer)
         }
         override fun setAlpha(alpha: Int) {}
         override fun setColorFilter(cf: ColorFilter?) {}
