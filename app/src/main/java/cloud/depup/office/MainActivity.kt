@@ -278,6 +278,9 @@ class MainActivity : AppCompatActivity() {
         setBarCompact(bar)
         // Judul kecil di tengah: baru terlihat setelah judul besar halaman tergulir ke balik kaca.
         barTitle = tv("Beranda", 17f, C.TEXT, true).apply { gravity = Gravity.CENTER; maxLines = 1; alpha = 0f; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        // Judul kecil tidak ditampilkan: nama tab sudah ada di navigasi bawah. Tampilannya tetap ada (tersembunyi)
+        // agar logika gulir & pergantian tab tidak berubah; bilah atas hanya berisi blur progresif.
+        barTitle.visibility = View.GONE
         bar.add(barTitle, w = 0, weight = 1f, side = 0, h = dp(44))
         return bar
     }
