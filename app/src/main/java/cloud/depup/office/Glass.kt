@@ -291,7 +291,12 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
      */
     private fun rimBlur(): Float {
         val d = resources.displayMetrics.density
-        return if (Perf.low || radius < 6f * d) -1f else min(radius * 0.3f, 5f * d)
+        if (Perf.low || radius < 6f * d) return -1f
+        // Setelan blur di atas bawaan → tepi ikut makin buram; blur maksimal = seluruh kaca buram rata (tanpa tepi
+        // bening), jadi pilihan "blur maksimal" benar-benar maksimal sampai ke pinggir.
+        val more = ((Glass.blurAmt - Glass.DEFAULT) / (1f - Glass.DEFAULT)).coerceIn(0f, 1f)
+        val r = min(radius * 0.3f, 5f * d) + (radius - min(radius * 0.3f, 5f * d)) * more
+        return if (r >= radius * 0.95f) -1f else r
     }
 
     /** Nilai uniform shader (urutan: lihat [LiquidFx.update]). Semua dalam koordinat node (px). */
