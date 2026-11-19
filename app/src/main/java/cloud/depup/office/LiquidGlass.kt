@@ -110,7 +110,7 @@ object LiquidGlass {
     }
 
     /** Kekuatan dispersi untuk shader: 0 bila dimatikan pengguna atau HP kelas bawah (satu sampel, lebih ringan). */
-    internal fun dispersionAmount(): Float = if (Perf.low || !DISPERSION) 0f else 0.12f
+    internal fun dispersionAmount(): Float = if (Perf.low || !DISPERSION) 0f else 0.2f
 
     /** Penjaga/penangkap galat: kaca cair dimatikan lebih dulu — blur biasa tetap menyala. */
     fun disableAuto(ctx: Context) {
@@ -247,19 +247,27 @@ half4 main(float2 xy) {
     float2 lo = box.xy;
     float2 hi = box.zw;
 
-    // 5. dispersi kromatik: R, G, B dibiaskan sedikit berbeda di tepi. Selisihnya sebanding dengan pembiasan, TAPI dibatasi
-    //    ±0,6 dp: kaca tebal membiaskan (dan memantulkan) isi sampai puluhan dp di tepi — tanpa batas, R & B terpisah
-    //    beberapa dp dan tiap garis tipis di dekat tepi jadi garis pelangi (kapsul tampak ber-outline warna).
+    // 5. dispersi kromatik: cahaya merah dibiaskan sedikit lebih jauh daripada ungu. Lima sampel sepanjang arah
+    //    pembiasan, masing-masing diberi warna spektrum (merah → jingga → hijau → biru → ungu) lalu dinormalkan per
+    //    kanal: hasilnya pelangi bergradasi halus, bukan dua bayangan merah/biru yang tampak seperti garis. Sebarannya
+    //    sebanding dengan pembiasan, dibatasi ±2 dp (kaca tebal membiaskan sampai puluhan dp di tepi). Isi yang rata
+    //    tetap tidak berwarna (bobot tiap kanal berjumlah 1).
     float3 col = c0;
     if (dot(disp, disp) > 0.0025) {
         if (dispersion > 0.001) {
             float2 dd = disp * (dispersion * slope);
             float dm = length(dd);
-            float cap = 0.6 * px;
+            float cap = 2.0 * px;
             if (dm > cap) { dd *= cap / dm; }
-            col = float3(over(content.eval(clamp(xy + disp + dd, lo, hi)), c0).r,
-                         over(content.eval(clamp(xy + disp, lo, hi)), c0).g,
-                         over(content.eval(clamp(xy + disp - dd, lo, hi)), c0).b);
+            float2 p = xy + disp;
+            float3 s0 = over(content.eval(clamp(p + dd, lo, hi)), c0);
+            float3 s1 = over(content.eval(clamp(p + dd * 0.5, lo, hi)), c0);
+            float3 s2 = over(content.eval(clamp(p, lo, hi)), c0);
+            float3 s3 = over(content.eval(clamp(p - dd * 0.5, lo, hi)), c0);
+            float3 s4 = over(content.eval(clamp(p - dd, lo, hi)), c0);
+            col = float3((s0.r * 1.0 + s1.r * 0.6 + s4.r * 0.4) * 0.5,
+                         (s1.g * 0.55 + s2.g * 0.9 + s3.g * 0.45) / 1.9,
+                         (s2.b * 0.1 + s3.b * 0.6 + s4.b * 0.9) / 1.6);
         } else {
             col = over(content.eval(clamp(xy + disp, lo, hi)), c0);
         }
