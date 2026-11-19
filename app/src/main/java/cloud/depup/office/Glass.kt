@@ -734,12 +734,13 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
         val to = if (grow) 1f else 0f
         if (grow) { miniBar.reveal = low; miniBar.translationY = drop; miniBar.box.alpha = 0f }
         val a = ValueAnimator.ofFloat(from, to)
-        a.duration = if (grow) Motion.SLOW else Motion.MED
-        a.interpolator = Motion.STANDARD
+        // tumbuh: pegas lembut (kapsul melar sedikit melewati ukurannya lalu mengendap, seperti tetes kaca)
+        a.duration = if (grow) Motion.SPRING_SOFT_MS else Motion.MED
+        a.interpolator = if (grow) Motion.SPRING_SOFT else Motion.STANDARD
         a.addUpdateListener {
             val f = it.animatedValue as Float
-            miniBar.reveal = low + (1f - low) * f
-            miniBar.translationY = drop * (1f - f)
+            miniBar.reveal = (low + (1f - low) * f).coerceAtMost(1f)   // bentuk kaca tidak melewati ukuran penuh
+            miniBar.translationY = drop * (1f - f)                     // posisi boleh memantul kecil
             miniBar.box.alpha = ((f - 0.35f) / 0.65f).coerceIn(0f, 1f)
             miniBar.invalidate()   // isi buram & bentuk kaca ikut selaras tiap frame
         }

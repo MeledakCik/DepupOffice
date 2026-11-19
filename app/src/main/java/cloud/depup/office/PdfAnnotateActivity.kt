@@ -19,7 +19,6 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import kotlin.math.max
@@ -337,11 +336,9 @@ class PdfAnnotateActivity : AppCompatActivity() {
             }
         }.start()
 
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (dirty) confirm("Buang coretan?", "Coretan yang belum disimpan akan hilang.", "Buang") { finish() }
-                else finish()
-            }
+        onBackPressedDispatcher.addCallback(this, PreviewBack(this) {
+            if (dirty) confirm("Buang coretan?", "Coretan yang belum disimpan akan hilang.", "Buang") { finish() }
+            else finish()
         })
     }
 

@@ -2,6 +2,7 @@ package cloud.depup.office
 
 import android.app.Activity
 import android.app.Dialog
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
@@ -966,8 +967,88 @@ fun Dialog.inheritSecure(owner: Activity) {
 // ================= BOTTOM SHEET =================
 
 /** Dialog bergaya bottom sheet (sudut atas 24dp, handle, latar redup). */
+/**
+ * Wadah lembar bawah yang bisa DITARIK seperti lembar iOS: tarik ke bawah (saat isi sudah di paling atas) → lembar
+ * mengikuti jari dan latar meredup berkurang; dilepas jauh/cepat → lembar meluncur pergi searah lemparan; dilepas
+ * dekat → memantul kembali dengan pegas.
+ * Ketukan biasa ke tombol di dalam lembar tidak terganggu (diambil alih hanya setelah jari benar-benar menyeret).
+ */
+@SuppressLint("ViewConstructor")
+class SheetFrame(ctx: Context, private val scroll: ScrollView) : FrameLayout(ctx) {
+    /** Lembar dilempar/ditarik jauh: [vy] kecepatan (px/dtk) untuk meneruskan gerak. */
+    var onFling: ((vy: Float) -> Unit)? = null
+    /** 0 = posisi normal, 1 = sudah turun setinggi lembar (untuk meredupkan latar). */
+    var onDrag: ((frac: Float) -> Unit)? = null
+    private val slop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop
+    private var downX = 0f
+    private var downY = 0f
+    private var dragging = false
+    private var vt: android.view.VelocityTracker? = null
+
+    init { addView(scroll, LayoutParams(MATCH, WRAP)) }
+
+    /** Hanya ke bawah: jendela dialog memotong apa pun di atas tepinya (sudut membulat lembar ikut terpotong). */
+    private fun offsetFor(dy: Float): Float = dy.coerceAtLeast(0f)
+
+    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                downX = ev.rawX; downY = ev.rawY; dragging = false
+                vt?.recycle(); vt = android.view.VelocityTracker.obtain(); vt?.addMovement(ev)
+                scroll.animate().cancel()
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                vt?.addMovement(ev)
+                val dy = ev.rawY - downY
+                val dx = ev.rawX - downX
+                if (!dragging && dy > slop && kotlin.math.abs(dy) > kotlin.math.abs(dx) * 1.2f && !scroll.canScrollVertically(-1)) {
+                    dragging = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    downY = ev.rawY - slop   // tanpa lompatan saat mulai menyeret
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+        vt?.addMovement(ev)
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> return true
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (!dragging) return true
+                val off = offsetFor(ev.rawY - downY)
+                scroll.translationY = off
+                onDrag?.invoke((off / scroll.height.coerceAtLeast(1)).coerceIn(0f, 1f))
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                if (!dragging) return true
+                dragging = false
+                vt?.computeCurrentVelocity(1000)
+                val vy = vt?.yVelocity ?: 0f
+                vt?.recycle(); vt = null
+                val off = scroll.translationY
+                val far = off > scroll.height * 0.32f
+                val fast = vy > context.dp(1100)
+                if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && (far || fast) && vy > -context.dp(300)) {
+                    onFling?.invoke(vy)
+                } else {
+                    // kembali ke tempatnya dengan pantulan pegas
+                    scroll.animate().translationY(0f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING)
+                        .setUpdateListener { onDrag?.invoke((scroll.translationY / scroll.height.coerceAtLeast(1)).coerceIn(0f, 1f)) }
+                        .start()
+                }
+            }
+        }
+        return true
+    }
+}
+
 fun AppCompatActivity.sheet(build: (body: LinearLayout, dismiss: () -> Unit) -> Unit): Dialog {
-    val d = Dialog(this)
+    // ComponentDialog: tombol/gestur Kembali lewat dispatcher (wajib untuk kembali prediktif Android 14+)
+    val d = androidx.activity.ComponentDialog(this)
     d.requestWindowFeature(Window.FEATURE_NO_TITLE)
     val body = vbox(0)
     val r = dp(24).toFloat()
@@ -979,28 +1060,55 @@ fun AppCompatActivity.sheet(build: (body: LinearLayout, dismiss: () -> Unit) -> 
     val hw = LinearLayout(this).apply { gravity = Gravity.CENTER_HORIZONTAL }
     hw.add(handle, w = dp(40), h = dp(4))
     body.add(hw, top = 10)
+    val scroll = ScrollView(this).apply { addView(body) }
+    val frame = SheetFrame(this, scroll)
+    val dim = if (C.dark) 0.6f else 0.4f
     var closing = false
-    // Tutup dengan turun + memudar sebagai satu lembar (bukan hilang mendadak); juga untuk tombol Kembali.
+    fun dismissNow() { try { d.dismiss() } catch (_: Exception) {} }
+    // Tutup: lembar turun + memudar sebagai satu bagian (bukan hilang mendadak); juga untuk tombol Kembali.
     val close: () -> Unit = {
         if (!closing) {
             closing = true
             if (Motion.on() && d.isShowing) body.animate().translationY(dp(48).toFloat()).alpha(0f).setStartDelay(0)
                 .setDuration(Motion.FAST + 50L).setInterpolator(Motion.EXIT).setUpdateListener(null).withLayer()
-                .withEndAction { try { d.dismiss() } catch (_: Exception) {} }.start()
-            else d.dismiss()
+                .withEndAction { dismissNow() }.start()
+            else dismissNow()
         }
     }
-    build(body, close)
-    d.setOnKeyListener { _, code, ev ->
-        if (code == android.view.KeyEvent.KEYCODE_BACK && ev.action == android.view.KeyEvent.ACTION_UP) { close(); true } else false
+    // Ditarik/dilempar: lembar meneruskan gerak jari sampai keluar layar (cepat = singkat), latar ikut terang
+    frame.onFling = { vy ->
+        if (!closing) {
+            closing = true
+            val left = (scroll.height - scroll.translationY).coerceAtLeast(1f)
+            val ms = if (vy > 1f) (left / vy * 1000f).toLong().coerceIn(120L, 280L) else 240L
+            scroll.animate().translationY(scroll.height.toFloat() + dp(24)).setDuration(ms)
+                .setInterpolator(android.view.animation.LinearInterpolator())
+                .setUpdateListener { d.window?.setDimAmount(dim * (1f - (scroll.translationY / scroll.height.coerceAtLeast(1)).coerceIn(0f, 1f))) }
+                .withEndAction { dismissNow() }.start()
+        }
     }
-    d.setContentView(ScrollView(this).apply { addView(body) })
+    frame.onDrag = { f -> d.window?.setDimAmount(dim * (1f - f)) }
+    build(body, close)
+    // Kembali: dengan gestur prediktif (Android 14+) lembar turun mengikuti ibu jari; dibatalkan → memantul kembali
+    d.onBackPressedDispatcher.addCallback(d, object : androidx.activity.OnBackPressedCallback(true) {
+        override fun handleOnBackProgressed(backEvent: androidx.activity.BackEventCompat) {
+            val p = backEvent.progress
+            scroll.translationY = dp(56) * p
+            d.window?.setDimAmount(dim * (1f - 0.35f * p))
+        }
+        override fun handleOnBackCancelled() {
+            scroll.animate().translationY(0f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).setUpdateListener(null).start()
+            d.window?.setDimAmount(dim)
+        }
+        override fun handleOnBackPressed() = close()
+    })
+    d.setContentView(frame)
     d.inheritSecure(this)
     d.window?.apply {
         setBackgroundDrawable(ColorDrawable(0))
         setGravity(Gravity.BOTTOM)
         setLayout(MATCH, WRAP)
-        setDimAmount(if (C.dark) 0.6f else 0.4f)
+        setDimAmount(dim)
         setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     }
     // Masuk: lembar naik dengan pegas lembut (mendarat sedikit memantul), isinya menyusul dalam gelombang singkat
@@ -1096,7 +1204,8 @@ fun AppCompatActivity.saveSheet(
                 isClickable = true
                 isFocusable = true
                 minimumHeight = dp(56)
-                setOnClickListener { sel = i; paint() }
+                setOnClickListener { val was = sel; sel = i; paint(); if (was != i) marks[i].boing(0.5f) }
+                springPress(0.98f)
             }
             val mk = ImageView(this)
             marks.add(mk)
