@@ -680,7 +680,7 @@ private class TabLensFx {
         u[5] = 0f
         u[6] = bezel
         u[7] = bezel * 1.6f                                 // tetesan lensa: kaca kecil tapi tebal, tepi membias kuat
-        u[8] = LiquidGlass.dispersionAmount() * 1.6f        // lensa kecil: dispersi lebih terasa, seperti iOS
+        u[8] = LiquidGlass.dispersionAmount()               // sama dengan kaca lain: semburat tipis, bukan outline warna
         u[9] = GlassLight.x; u[10] = GlassLight.y
         u[11] = Color.red(base) / 255f; u[12] = Color.green(base) / 255f; u[13] = Color.blue(base) / 255f
         u[14] = 0.06f                                       // kaca bening: isinya = kaca navigasi asli
