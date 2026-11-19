@@ -356,11 +356,17 @@ object Files {
         })
     }
 
-    fun share(ctx: Context, uri: Uri, mime: String, whatsapp: Boolean) {
+    fun share(ctx: Context, uri0: Uri, mime: String, whatsapp: Boolean) {
+        // Alamat file:// (salinan cache Pembaca, berkas hasil, hasil pencarian) DILARANG dikirim ke aplikasi lain sejak
+        // Android 7 (FileUriExposedException) — dulu inilah penyebab "Tidak bisa dibagikan". Ubah ke alamat
+        // FileProvider (content://) yang bisa dibaca aplikasi penerima.
+        val uri = if (uri0.scheme == "file") uriFor(ctx, File(uri0.path ?: throw IllegalArgumentException("path kosong"))) else uri0
         try { Meta.logShare(ctx, nameOf(ctx, uri), if (whatsapp) "WhatsApp" else "Menu bagikan", sizeOf(ctx, uri)) } catch (_: Exception) {}
         val i = Intent(Intent.ACTION_SEND).setType(mime)
             .putExtra(Intent.EXTRA_STREAM, uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        // ClipData: izin baca ikut diteruskan lewat pemilih aplikasi (tanpa ini sebagian aplikasi menerima berkas kosong)
+        i.clipData = android.content.ClipData.newRawUri(nameOf(ctx, uri), uri)
         if (whatsapp) {
             for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b")) {
                 try {
