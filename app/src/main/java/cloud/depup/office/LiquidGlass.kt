@@ -110,7 +110,7 @@ object LiquidGlass {
     }
 
     /** Kekuatan dispersi untuk shader: 0 bila dimatikan pengguna atau HP kelas bawah (satu sampel, lebih ringan). */
-    internal fun dispersionAmount(): Float = if (Perf.low || !DISPERSION) 0f else 0.22f
+    internal fun dispersionAmount(): Float = if (Perf.low || !DISPERSION) 0f else 0.12f
 
     /** Penjaga/penangkap galat: kaca cair dimatikan lebih dulu — blur biasa tetap menyala. */
     fun disableAuto(ctx: Context) {
@@ -247,14 +247,19 @@ half4 main(float2 xy) {
     float2 lo = box.xy;
     float2 hi = box.zw;
 
-    // 5. dispersi kromatik: R, G, B dibiaskan sedikit berbeda di tepi
+    // 5. dispersi kromatik: R, G, B dibiaskan sedikit berbeda di tepi. Selisihnya sebanding dengan pembiasan, TAPI dibatasi
+    //    ±0,6 dp: kaca tebal membiaskan (dan memantulkan) isi sampai puluhan dp di tepi — tanpa batas, R & B terpisah
+    //    beberapa dp dan tiap garis tipis di dekat tepi jadi garis pelangi (kapsul tampak ber-outline warna).
     float3 col = c0;
     if (dot(disp, disp) > 0.0025) {
         if (dispersion > 0.001) {
-            float sp = dispersion * slope;
-            col = float3(over(content.eval(clamp(xy + disp * (1.0 + sp), lo, hi)), c0).r,
+            float2 dd = disp * (dispersion * slope);
+            float dm = length(dd);
+            float cap = 0.6 * px;
+            if (dm > cap) { dd *= cap / dm; }
+            col = float3(over(content.eval(clamp(xy + disp + dd, lo, hi)), c0).r,
                          over(content.eval(clamp(xy + disp, lo, hi)), c0).g,
-                         over(content.eval(clamp(xy + disp * (1.0 - sp), lo, hi)), c0).b);
+                         over(content.eval(clamp(xy + disp - dd, lo, hi)), c0).b);
         } else {
             col = over(content.eval(clamp(xy + disp, lo, hi)), c0);
         }
