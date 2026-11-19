@@ -110,7 +110,7 @@ object LiquidGlass {
     }
 
     /** Kekuatan dispersi untuk shader: 0 bila dimatikan pengguna atau HP kelas bawah (satu sampel, lebih ringan). */
-    internal fun dispersionAmount(): Float = if (Perf.low || !DISPERSION) 0f else 0.2f
+    internal fun dispersionAmount(): Float = if (Perf.low || !DISPERSION || GlassPerf.level >= 2) 0f else 0.2f
 
     /** Penjaga/penangkap galat: kaca cair dimatikan lebih dulu — blur biasa tetap menyala. */
     fun disableAuto(ctx: Context) {

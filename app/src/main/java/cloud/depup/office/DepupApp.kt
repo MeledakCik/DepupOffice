@@ -57,6 +57,7 @@ class DepupApp : Application() {
             override fun onActivityResumed(a: Activity) {
                 GlassGuard.start(a)
                 GlassLight.start(a)   // arah kilau kaca mengikuti kemiringan HP selama layar di depan
+                GlassPerf.start(a)    // kaca diringankan otomatis bila GPU kewalahan
                 if (Glass.autoDisabled) {
                     Glass.autoDisabled = false
                     a.window?.decorView?.postDelayed({
@@ -71,7 +72,7 @@ class DepupApp : Application() {
                     }, 900L)
                 }
             }
-            override fun onActivityPaused(a: Activity) { GlassGuard.stop(a); GlassLight.stop(a) }
+            override fun onActivityPaused(a: Activity) { GlassGuard.stop(a); GlassLight.stop(a); GlassPerf.stop() }
             override fun onActivityStopped(a: Activity) {}
             override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
             override fun onActivityDestroyed(a: Activity) {}

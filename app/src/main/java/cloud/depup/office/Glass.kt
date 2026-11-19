@@ -306,7 +306,7 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
      */
     private fun rimBlur(): Float {
         val d = resources.displayMetrics.density
-        if (Perf.low || radius < 6f * d) return -1f
+        if (Perf.low || GlassPerf.level >= 1 || radius < 6f * d) return -1f
         // Setelan blur di atas bawaan → tepi ikut makin buram; blur maksimal = seluruh kaca buram rata (tanpa tepi
         // bening), jadi pilihan "blur maksimal" benar-benar maksimal sampai ke pinggir.
         val more = ((Glass.blurAmt - Glass.DEFAULT) / (1f - Glass.DEFAULT)).coerceIn(0f, 1f)
@@ -480,8 +480,12 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         if (!relate(c)) return
         syncBlur()
         val r0 = max(radius, 10f * density)
-        // HP kelas bawah: dua lapisan saja (berat & ringan)
-        val use = if (Perf.low) intArrayOf(3, 0) else intArrayOf(3, 2, 1, 0)   // ringan dulu, berat paling atas
+        // HP kelas bawah / GPU kewalahan ([GlassPerf]): lebih sedikit lapisan. Ringan dulu, berat paling atas.
+        val use = when {
+            Perf.low || GlassPerf.level >= 2 -> intArrayOf(3, 0)
+            GlassPerf.level >= 1 -> intArrayOf(3, 1, 0)
+            else -> intArrayOf(3, 2, 1, 0)
+        }
         for (i in use) {
             val n = ns[i]
             val r = r0 * fadeBands[i][0]
