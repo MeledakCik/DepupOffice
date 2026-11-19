@@ -6,6 +6,7 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.animation.ValueAnimator
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
@@ -121,7 +122,69 @@ class CropView(ctx: Context) : View(ctx) {
     private var fBright = 0
     private var fContrast = 0
 
+    // ---- transisi tampilan (hanya visual; data halaman sudah berubah duluan) ----
+    private var spin = 0f          // derajat putar sementara di sekitar pusat gambar
+    private var spinScale = 1f     // skala sementara supaya ukuran lama → baru menyambung mulus
+    private var flipS = 1f         // -1..1: balik horizontal seperti kartu
+    private var tAnim: ValueAnimator? = null
+    private var qAnim: ValueAnimator? = null
+    private var fAnim: ValueAnimator? = null
+    private var curM = FloatArray(20).also { ColorMatrix().getArray().copyInto(it) }
+
     init { background = ctx.shape(C.NAVY_PANEL, 16) }
+
+    /** Kotak gambar saat ini (salinan) — simpan SEBELUM ganti bitmap untuk [spinIn]. */
+    fun imgRect() = RectF(img)
+
+    /** Sesudah diputar 90° searah jarum jam: gambar baru masuk dengan berputar dari posisi lama, berpegas. */
+    fun spinIn(fromDeg: Float, old: RectF) {
+        tAnim?.cancel()
+        if (!Motion.on() || img.height() == 0f) { spin = 0f; spinScale = 1f; invalidate(); return }
+        val s0 = if (img.height() > 0f) old.width() / img.height() else 1f
+        tAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.SPRING_MS; interpolator = Motion.SPRING
+            addUpdateListener { val f = it.animatedValue as Float; spin = fromDeg * (1f - f); spinScale = s0 + (1f - s0) * f; invalidate() }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { spin = 0f; spinScale = 1f; invalidate() }
+            })
+            start()
+        }
+    }
+
+    /** Sesudah dibalik: gambar berbalik seperti kartu (lebar −1 → 1), berpegas lembut. */
+    fun flipIn() {
+        tAnim?.cancel()
+        if (!Motion.on()) { flipS = 1f; invalidate(); return }
+        tAnim = ValueAnimator.ofFloat(-1f, 1f).apply {
+            duration = Motion.SPRING_SOFT_MS; interpolator = Motion.SPRING_SOFT
+            addUpdateListener { flipS = it.animatedValue as Float; invalidate() }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { flipS = 1f; invalidate() }
+            })
+            start()
+        }
+    }
+
+    /** Titik sudut meluncur dari posisi [old] ke posisinya sekarang (Penuh, Auto-crop, Reset). */
+    fun morphQuadFrom(old: FloatArray) {
+        qAnim?.cancel()
+        val to = quad.copyOf()
+        if (!Motion.on() || old.size != to.size || old.contentEquals(to)) return
+        val q = FloatArray(to.size)
+        qAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.SPRING_SOFT_MS; interpolator = Motion.SPRING_SOFT
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                for (i in q.indices) q[i] = (old[i] + (to[i] - old[i]) * f).coerceIn(0f, 1f)
+                quad = q; invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { quad = to; invalidate() }
+                override fun onAnimationCancel(a: android.animation.Animator) { quad = to; invalidate() }
+            })
+            start()
+        }
+    }
 
     /** Gambar tampilan (sudah diputar/dibalik/diluruskan) — dipakai untuk pratinjau hasil. */
     val bitmap: Bitmap? get() = shown
@@ -156,7 +219,8 @@ class CropView(ctx: Context) : View(ctx) {
         }.start()
     }
 
-    fun setFilter(mode: Int, bright: Int, contrast: Int) {
+    fun setFilter(mode: Int, bright: Int, contrast: Int, animate: Boolean = false) {
+        val bmpChange = (mode == 3) != (fMode == 3) && magicBmp != null
         fMode = mode; fBright = bright; fContrast = contrast
         val m = Pdf.adjustMatrix(bright, contrast)
         when (mode) {
@@ -172,8 +236,28 @@ class CropView(ctx: Context) : View(ctx) {
                 )))
             }
         }
-        imgPaint.colorFilter = ColorMatrixColorFilter(m)
-        invalidate()
+        val target = m.getArray().copyOf()
+        fAnim?.cancel()
+        if (!animate || bmpChange || !Motion.on()) {
+            target.copyInto(curM); imgPaint.colorFilter = ColorMatrixColorFilter(m); invalidate(); return
+        }
+        // filter baru "mengalir" masuk: matriks warna diinterpolasi dari yang tampil sekarang
+        val from = curM.copyOf()
+        val tmp = ColorMatrix()
+        fAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.SLOW; interpolator = Motion.STANDARD
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                for (i in 0 until 20) curM[i] = from[i] + (target[i] - from[i]) * f
+                tmp.set(curM); imgPaint.colorFilter = ColorMatrixColorFilter(tmp); invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) {
+                    target.copyInto(curM); imgPaint.colorFilter = ColorMatrixColorFilter(ColorMatrix(target)); invalidate()
+                }
+            })
+            start()
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) { super.onSizeChanged(w, h, ow, oh); fit() }
@@ -201,6 +285,16 @@ class CropView(ctx: Context) : View(ctx) {
 
     override fun onDraw(c: Canvas) {
         val b = shown ?: return
+        val tx = spin != 0f || spinScale != 1f || flipS != 1f
+        if (tx) {
+            c.save()
+            c.rotate(spin, img.centerX(), img.centerY())
+            c.scale(spinScale * flipS, spinScale, img.centerX(), img.centerY())
+        }
+        try { drawAll(c, b) } finally { if (tx) c.restore() }
+    }
+
+    private fun drawAll(c: Canvas, b: Bitmap) {
         c.drawBitmap(if (fMode == 3) (magicBmp ?: b) else b, null, img, imgPaint)
 
         // Redupkan area di luar segi-empat
@@ -312,6 +406,7 @@ class CropView(ctx: Context) : View(ctx) {
     private var currentRedactRect: RectF? = null
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) qAnim?.cancel()   // jari menang atas animasi
         if (isRedactMode) {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -541,6 +636,7 @@ class ScanEditActivity : AppCompatActivity() {
             add(icon(res, Color.WHITE, 16), w = dp(16), h = dp(16))
             add(tv(label, 12f, Color.WHITE, true), w = WRAP, side = 6)
             setOnClickListener { f() }
+            springPress(0.93f)
         }
         ov.add(overlay(R.drawable.ic_full, "Penuh") { resetCrop() }, w = WRAP)
         ov.add(overlay(R.drawable.ic_rotate, "Reset") { resetAll() }, top = 8, w = WRAP)
@@ -565,8 +661,10 @@ class ScanEditActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             isClickable = true
-            setOnClickListener { f() }
-            add(icon(res, tint, 24), w = dp(24), h = dp(24))
+            val ic = icon(res, tint, 24)
+            setOnClickListener { ic.boing(0.78f); f() }
+            springPress(0.9f)
+            add(ic, w = dp(24), h = dp(24))
             add(tv(label, 12f, tint, true), top = 4, w = WRAP)
         }
         tools.add(tool(R.drawable.ic_rotate, "Putar 90°") { rotate() }, w = 0, weight = 1f)
@@ -635,7 +733,8 @@ class ScanEditActivity : AppCompatActivity() {
             val c = vbox(10).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 isClickable = true
-                setOnClickListener { mode = m; paintFilters(); applyFilter() }
+                setOnClickListener { if (mode != m) { mode = m; paintFilters(true); applyFilter(true) } }
+                springPress(0.95f)
                 tag = m
             }
             val bg = when (m) { 2 -> Color.BLACK; 1 -> C.LINE_STRONG; 3 -> C.BLUE_BG; else -> C.SURFACE2 }
@@ -695,7 +794,16 @@ class ScanEditActivity : AppCompatActivity() {
         autoDetect(pages.toList(), crop = true, skew = true, announce = true)
     }
 
+    private var tabNow = 0
+
     private fun showTab(i: Int) {
+        val changed = i != tabNow
+        tabNow = i
+        if (changed) {
+            // panel baru meluncur masuk dari arah tab yang dipilih; tab aktif memantul kecil
+            (if (i == 0) cropPanel else filterPanel).cascadeIn(dyDp = 10, dxDp = if (i == 0) -14 else 14)
+            (if (i == 0) segCrop else segFilter).boing(0.9f)
+        }
         cropPanel.visibility = if (i == 0) View.VISIBLE else View.GONE
         filterPanel.visibility = if (i == 1) View.VISIBLE else View.GONE
         segCrop.setTextColor(if (i == 0) C.ACCENT else C.MUTED)
@@ -731,15 +839,17 @@ class ScanEditActivity : AppCompatActivity() {
         return box
     }
 
-    private fun paintFilters() {
+    private fun paintFilters(animate: Boolean = false) {
         filterCards.forEachIndexed { i, c ->
             val on = c.tag == mode
+            val was = checks[i].visibility == View.VISIBLE
             c.background = choiceBg(on, 14)
             checks[i].visibility = if (on) View.VISIBLE else View.INVISIBLE
+            if (animate && on && !was) checks[i].boing(0.4f)
         }
     }
 
-    private fun applyFilter() = cv.setFilter(mode, bright, contrast)
+    private fun applyFilter(animate: Boolean = false) = cv.setFilter(mode, bright, contrast, animate)
 
     override fun onDestroy() {
         Perf.removeTrim(trimPreviews)
@@ -788,14 +898,17 @@ class ScanEditActivity : AppCompatActivity() {
                 setOnDragListener { v, e ->
                     when (e.action) {
                         android.view.DragEvent.ACTION_DRAG_STARTED -> e.localState is Int
-                        android.view.DragEvent.ACTION_DRAG_ENTERED -> { v.scaleX = 1.2f; v.scaleY = 1.2f; true }
-                        android.view.DragEvent.ACTION_DRAG_EXITED, android.view.DragEvent.ACTION_DRAG_ENDED -> { v.scaleX = 1f; v.scaleY = 1f; true }
+                        android.view.DragEvent.ACTION_DRAG_ENTERED -> { v.animate().scaleX(1.2f).scaleY(1.2f).setStartDelay(0).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start(); true }
+                        android.view.DragEvent.ACTION_DRAG_EXITED, android.view.DragEvent.ACTION_DRAG_ENDED -> { v.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start(); true }
                         android.view.DragEvent.ACTION_DROP -> { movePage(e.localState as Int, i); true }
                         else -> true
                     }
                 }
             }, w = dp(36), h = dp(36), side = 0).also {
-                (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
+                val chip = chips.getChildAt(chips.childCount - 1)
+                (chip.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
+                chip.springPress(0.88f)
+                if (on && pageChanged && prevShown >= 0) chip.boing(0.8f)   // nomor halaman aktif memantul
             }
             val dot = View(this).apply { background = shape(if (on) C.ACCENT else C.LINE_STRONG, 100) }
             dots.add(dot, w = dp(if (on && !(pageChanged && Motion.on())) 18 else 8), h = dp(8), side = 0).also {
@@ -803,7 +916,7 @@ class ScanEditActivity : AppCompatActivity() {
             }
             // titik halaman aktif memanjang dari bulat ke pil (seperti indikator halaman iOS)
             if (on && pageChanged && Motion.on()) android.animation.ValueAnimator.ofInt(dp(8), dp(18)).apply {
-                duration = Motion.MED; interpolator = Motion.STANDARD
+                duration = Motion.SPRING_MS; interpolator = Motion.SPRING
                 addUpdateListener { a -> dot.layoutParams = dot.layoutParams.also { it.width = a.animatedValue as Int } }
                 start()
             }
@@ -826,7 +939,9 @@ class ScanEditActivity : AppCompatActivity() {
         pg.setQuad(Quad.rot90(pg.quad))
         // Bila sudah dibalik, putar searah jarum jam di layar = kurangi putaran dasar.
         pg.rot = (pg.rot + (if (pg.flip) 270 else 90)) % 360
+        val old = cv.imgRect()
         show()
+        cv.spinIn(-90f, old)
     }
 
     private fun flipPage() {
@@ -835,9 +950,14 @@ class ScanEditActivity : AppCompatActivity() {
         pg.skew = -pg.skew
         pg.flip = !pg.flip
         show()
+        cv.flipIn()
     }
 
-    private fun resetCrop() { pages[cur].setQuad(Quad.full()); show() }
+    private fun resetCrop() {
+        val old = cv.quad.copyOf()
+        pages[cur].setQuad(Quad.full()); show()
+        cv.morphQuadFrom(old)
+    }
 
     private fun resetAll() {
         val pg = pages[cur]
@@ -847,15 +967,20 @@ class ScanEditActivity : AppCompatActivity() {
             pg.file = orig
             pg.origFile = null
         }
+        val geom = pg.rot != 0 || pg.flip || pg.skew != 0f
+        val old = cv.quad.copyOf()
         pg.rot = 0; pg.flip = false; pg.skew = 0f; pg.setQuad(Quad.full())
         show()
+        if (geom) cv.pop(0.94f) else cv.morphQuadFrom(old)
     }
 
     private fun removePage() {
         if (pages.size == 1) { toast("Minimal harus ada satu halaman"); return }
         confirm("Hapus halaman ${cur + 1}?", "Halaman ini dibuang dari hasil scan.", "Hapus") {
             pages.removeAt(cur).let { it.file.delete(); it.origFile?.delete() }
+            lastShown = -1          // halaman berikutnya muncul memantul, bukan bergeser
             show()
+            cv.pop(0.9f)
         }
     }
 
@@ -1069,6 +1194,8 @@ class ScanEditActivity : AppCompatActivity() {
     private fun autoDetect(list: List<ScanPage>, crop: Boolean, skew: Boolean, announce: Boolean) {
         work(if (crop) "AI mendeteksi sudut dokumen…" else "Meluruskan halaman…", { list.map { detectFor(it, crop, skew) } }) { r ->
             r.onSuccess { res ->
+                val curPg = pages.getOrNull(cur)
+                val oldQ = if (curPg != null && curPg in list) cv.quad.copyOf() else null
                 var found = 0; var fixed = 0; var full = 0; var split = false
                 list.forEachIndexed { i, pg ->
                     val a = res[i]
@@ -1090,6 +1217,8 @@ class ScanEditActivity : AppCompatActivity() {
                     }
                 }
                 if (pages.isNotEmpty()) show()
+                // titik sudut meluncur dari tempat lama ke tepi dokumen yang terdeteksi
+                if (oldQ != null && pages.getOrNull(cur) === curPg) cv.morphQuadFrom(oldQ)
                 when {
                     split -> toast("Buku terbuka terdeteksi — sudut dipasang pada halaman yang dituju (yang berisi / utuh). Geser titik bila ingin halaman lain.")
                     crop && found > 0 && announce -> toast("Sudut dokumen terdeteksi di $found halaman. Geser titik sudut bila perlu.")

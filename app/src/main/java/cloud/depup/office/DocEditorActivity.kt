@@ -1,5 +1,6 @@
 package cloud.depup.office
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -338,7 +339,7 @@ class DocEditorActivity : AppCompatActivity() {
         // zoom visual (cubit): halaman tidak pernah ditata ulang saat diperbesar/diperkecil
         zoomFrame = ZoomFrame(this).apply {
             vScroll = scroll; hScroll = hsv
-            onZoom = { z -> if (::zoomTv.isInitialized) zoomTv.text = "${(z * 100).roundToInt()}%" }
+            onZoom = { z -> if (::zoomTv.isInitialized) zoomTv.rollTo((z * 100).roundToInt(), "%") }
             addView(pad, FrameLayout.LayoutParams(WRAP, WRAP))
         }
         (scroll as EditorScroll).zoomFrame = zoomFrame
@@ -768,10 +769,23 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     /** Status dokumen: teks + titik warna (abu = belum pernah disimpan, kuning = ada perubahan, hijau = tersimpan). */
+    private var statusColor = 0
+
     private fun setStatus(text: String, color: Int) {
         if (!::subTv.isInitialized) return
-        subTv.text = text
-        (statusDot.background as? GradientDrawable)?.setColor(color)
+        subTv.morphText(text)                     // teks status bergulir (Ada perubahan → Tersimpan)
+        val g = statusDot.background as? GradientDrawable ?: return
+        if (statusColor == color) return
+        val from = statusColor
+        statusColor = color
+        if (from == 0 || !Motion.on()) { g.setColor(color); return }
+        // titik status mengalir ke warna baru dan berdenyut sekali
+        ValueAnimator.ofArgb(from, color).apply {
+            duration = Motion.MED; interpolator = Motion.STANDARD
+            addUpdateListener { g.setColor(it.animatedValue as Int) }
+            start()
+        }
+        statusDot.boing(0.4f)
     }
 
     private val tabNames = listOf("Beranda", "Sisipkan", "Tata Letak", "Tinjau", "Tabel")
@@ -905,6 +919,7 @@ class DocEditorActivity : AppCompatActivity() {
      * pembaca layar & tooltip (tekan lama). Dulu: kotak ikon dengan label kecil di bawahnya — terlihat seperti templat.
      */
     private fun toolBox(label: String, glyph: View, glyphW: Int = 26, onClick: () -> Unit, isActive: (() -> Boolean)? = null): View {
+        var tapped = false
         val b = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -912,8 +927,9 @@ class DocEditorActivity : AppCompatActivity() {
             isFocusable = true
             contentDescription = label
             tooltipText = label
-            setOnClickListener { onClick(); refreshTools() }
+            setOnClickListener { tapped = true; onClick(); refreshTools() }
         }
+        b.springPress(if (chipMode) 0.94f else 0.86f)
         glyph.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         b.add(glyph, w = dp(glyphW), h = dp(24))
         val chip = chipMode
@@ -934,9 +950,13 @@ class DocEditorActivity : AppCompatActivity() {
         if (isActive != null) toolStates.add {
             val on = isActive()
             if (on == last) return@add
+            val first = last == null
             last = on
             b.background = bg(on)
             b.isSelected = on
+            // dinyalakan lewat ketukan (bukan karena kursor pindah): ikon memantul
+            if (!first && on && tapped) glyph.boing(0.7f)
+            tapped = false
             b.contentDescription = label + if (on) ", aktif" else ""
         }
         return b
@@ -962,6 +982,7 @@ class DocEditorActivity : AppCompatActivity() {
             tooltipText = label
             background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
             setOnClickListener { onClick() }
+            springPress(0.95f)
         }
         val v = tv("", 13f, C.TEXT, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         b.add(v, w = 0, weight = 1f)
@@ -969,7 +990,7 @@ class DocEditorActivity : AppCompatActivity() {
         var last: String? = null
         toolStates.add {
             val now = value()
-            if (now != last) { last = now; v.text = now; b.contentDescription = "$label: $now. Ketuk untuk mengganti" }
+            if (now != last) { if (last == null) v.text = now else v.morphText(now); last = now; b.contentDescription = "$label: $now. Ketuk untuk mengganti" }
         }
         ribbon.addView(b, LinearLayout.LayoutParams(dp(widthDp + 22), dp(40)).apply { marginEnd = dp(6) })
     }
@@ -1692,8 +1713,12 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun updateUndoButtons() {
         if (!::undoBtn.isInitialized) return
-        undoBtn.alpha = if (undo.isEmpty()) 0.35f else 1f
-        redoBtn.alpha = if (redo.isEmpty()) 0.35f else 1f
+        fun fade(v: View, a: Float) {
+            if (v.alpha == a) return
+            if (Motion.on()) v.animate().alpha(a).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start() else v.alpha = a
+        }
+        fade(undoBtn, if (undo.isEmpty()) 0.35f else 1f)
+        fade(redoBtn, if (redo.isEmpty()) 0.35f else 1f)
     }
 
     private fun markDirty() {

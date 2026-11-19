@@ -288,6 +288,28 @@ fun View.wipeIn(delay: Long = 120L, duration: Long = 500L) {
     postDelayed({ if (clipBounds != null) { a.cancel(); clipBounds = null; invalidate() } }, delay + duration + 150L)
 }
 
+/**
+ * Ganti teks dengan gulir halus: teks lama naik & memudar cepat, teks baru masuk dari bawah dengan pegas.
+ * Teks sama → tidak ada animasi. Selalu berakhir di posisi & transparansi asli.
+ */
+fun TextView.morphText(t: CharSequence) {
+    if (text.toString() == t.toString()) return
+    if (!Motion.on() || !isAttachedToWindow || !isShown) { text = t; return }
+    val n = Motion.next(this)
+    val d = dp(6).toFloat()
+    animate().cancel()
+    animate().alpha(0f).translationY(-d).setStartDelay(0).setDuration(Motion.FAST - 40).setInterpolator(Motion.EXIT)
+        .setUpdateListener(null).withEndAction {
+            if (Motion.gen[this] != n) return@withEndAction
+            text = t
+            translationY = d
+            animate().alpha(1f).translationY(0f).setDuration(Motion.SPRING_SOFT_MS).setInterpolator(Motion.SPRING_SOFT)
+                .withEndAction { alpha = 1f; translationY = 0f }.start()
+        }.start()
+    postDelayed({ if (Motion.gen[this] == n && text.toString() != t.toString()) { text = t; alpha = 1f; translationY = 0f } },
+        Motion.FAST + Motion.SPRING_SOFT_MS + 150L)
+}
+
 /** Angka bergulir mulus dari nilai yang sedang tampil ke [to] (mis. "100%" → "150%"). Teks akhir selalu tepat. */
 fun TextView.rollTo(to: Int, suffix: String = "") {
     val from = text.toString().removeSuffix(suffix).trim().toIntOrNull()
