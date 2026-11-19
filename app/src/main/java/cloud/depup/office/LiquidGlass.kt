@@ -418,7 +418,7 @@ internal class LensDrawable(
         s.setFloatUniform("radius", h / 2f)
         s.setFloatUniform("slab", 0f)
         s.setFloatUniform("bezel", bezel)
-        s.setFloatUniform("thick", bezel * 0.9f)
+        s.setFloatUniform("thick", bezel * 1.6f)
         s.setFloatUniform("dispersion", LiquidGlass.dispersionAmount())
         s.setFloatUniform("light", GlassLight.x, GlassLight.y)
         s.setFloatUniform("tint", android.graphics.Color.red(tintColor) / 255f, android.graphics.Color.green(tintColor) / 255f,
