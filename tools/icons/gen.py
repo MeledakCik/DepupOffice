@@ -211,15 +211,6 @@ def _():
     return outline(bookmark_shape(), 2.0)
 
 
-@icon("box")
-def _():
-    # sampel: tutup selebar penuh + badan lebih sempit dengan celah pegangan
-    lid = squircle(2.625, 2.625, 21.375, 7.3, 2.0)
-    body = squircle(4.4, 8.35, 19.6, 21.375, TR)
-    slot = squircle(9.75, 10.1, 14.25, 11.5, 0.7)
-    return unary_union([lid, knock(body, slot)])
-
-
 @icon("bright")
 def _():
     parts = [circle(12, 12, 4.3)]
@@ -419,18 +410,6 @@ def _():
     return unary_union([l, r, dashes])
 
 
-@icon("folder")
-def _():
-    # sampel: bagian belakang bertab (atas) + badan depan selebar penuh, dipisah celah lurus. Semua sudut bulat.
-    tab = squircle(2.625, 3.25, 11.6, 9.0, 2.2)
-    back = squircle(2.625, 5.4, 21.375, 12.0, 2.2)
-    slope = poly([(8.0, 3.25), (10.2, 3.25), (13.4, 5.4), (13.4, 7.0), (8.0, 7.0)], 0)
-    b = smooth(unary_union([tab, back, slope]), 0.9)          # pertemuan tab–belakang melengkung lembut
-    b = b.difference(box(0, 9.63, 24, 24))
-    front = squircle(2.625, 10.7, 21.375, 20.75, TR)
-    return unary_union([b, front])
-
-
 @icon("format_clear")
 def _():
     t = unary_union([line([(4.6, 4.8), (16.4, 4.8)]), line([(10.5, 4.8), (8.6, 19.2)])])
@@ -465,12 +444,6 @@ def _():
     sq = squircle(2.6, 3.2, 21.4, 20.8, 4.6)
     return split(sq, [LineString([(-1, 8.6), (25, 8.6)]), LineString([(9.0, 8.6), (9.0, 25)]),
                       LineString([(-1, 14.7), (25, 14.7)])])
-
-
-@icon("tools")
-def _():
-    return unary_union([squircle(3.0, 3.0, 10.8, 10.8, 3.0), squircle(13.2, 3.0, 21.0, 10.8, 3.0),
-                        squircle(3.0, 13.2, 10.8, 21.0, 3.0), circle(17.1, 17.1, 3.95)])
 
 
 @icon("heart")
@@ -810,18 +783,6 @@ def _sample():
 
 
 _sample()
-
-
-@icon("tools")
-def _():
-    # sampel "tools": empat bentuk 8,86 — daun (sudut kiri-atas besar), dua kotak, satu lingkaran; semua sudut bulat
-    a, b = 2.625, 11.485
-    c, d = 12.515, 21.375
-    leaf = rrect(a, a, b, b, 7.9, 1.6, 1.6, 1.6)
-    sq1 = squircle(c, a, d, b, 1.6)
-    sq2 = squircle(a, c, b, d, 1.6)
-    dot = circle((c + d) / 2, (c + d) / 2, (d - c) / 2)
-    return unary_union([leaf, sq1, sq2, dot])
 
 
 # ---- dibangun ulang dari sampel dengan garis SW (bingkai sampel ±2,95 → 2,5) ----
