@@ -146,8 +146,32 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
     }
 
     override fun onCheckIsTextEditor(): Boolean {
-        if (trackGuard && !isFocused) { EdPerf.editorChecks++; return false }
+        // CATATAN: TextView.isTextEditable() → textCanBeSelected() JUGA memakai fungsi ini. Dulu paragraf yang belum
+        // fokus selalu menjawab false → tekan-lama / ketuk-ganda tidak bisa memilih kata. Selama jari menyentuh
+        // paragraf ini, ia mengaku editor seperti biasa (pelacakan tulisan-tangan hanya sebentar, dilepas saat blur).
+        if (trackGuard && !isFocused && !touching) { EdPerf.editorChecks++; return false }
         return super.onCheckIsTextEditor()
+    }
+
+    /** Jari sedang menyentuh paragraf ini (seleksi kata saat tekan-lama/ketuk-ganda harus diizinkan). */
+    private var touching = false
+
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> touching = true
+        }
+        val r = super.onTouchEvent(event)
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> touching = false
+        }
+        return r
+    }
+
+    override fun performLongClick(): Boolean {
+        val was = touching
+        touching = true
+        try { return super.performLongClick() } finally { touching = was }
     }
 
     lateinit var para: EPara
@@ -509,7 +533,10 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
             }
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                 touching = false; lastMove = android.os.SystemClock.uptimeMillis()
-                if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && !moved) { tapX = ev.x; tapY = ev.y; tapAt = lastMove }
+                // ketukan = singkat & tidak bergeser. Tekan-lama (memilih kata) BUKAN ketukan: dulu memicu zoom otomatis
+                // 200% yang langsung menghapus seleksi yang baru dibuat.
+                val short = ev.eventTime - ev.downTime < android.view.ViewConfiguration.getLongPressTimeout()
+                if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && !moved && short) { tapX = ev.x; tapY = ev.y; tapAt = lastMove }
             }
         }
     }

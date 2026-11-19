@@ -1546,6 +1546,8 @@ class DocEditorActivity : AppCompatActivity() {
         if (!::zoomFrame.isInitialized) return
         if (android.os.SystemClock.uptimeMillis() - sc.tapAt > 500) return      // hanya karena diketuk, bukan kursor dipindah kode
         if (zoomFrame.zoom >= editZoom - 0.01f) return
+        // sedang memilih teks (ketuk-ganda / tarik pegangan): jangan zoom — seleksi & menunya akan hilang
+        cur()?.let { if (it.selectionStart != it.selectionEnd) { sc.tapAtConsumed(); return } }
         sc.tapAtConsumed()
         zoomFrame.animateZoomTo(editZoom, sc.tapX, sc.tapY)
     }
