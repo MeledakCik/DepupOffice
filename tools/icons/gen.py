@@ -11,9 +11,12 @@ from shapely.ops import unary_union
 from shapely import affinity
 
 Q = 8           # ruas per seperempat lingkaran (cukup halus di 24dp; titik sedikit = APK kecil)
-SW = 2.2        # tebal garis untuk ikon garis
-KW = 1.75       # tebal lubang garis di dalam bentuk solid
-GAP = 1.15      # celah antar-bagian
+# Ukuran mengikuti sampel "Depup Office Element Pack" (512 px → grid 24): area ikon 18,75 (tepi 2,6), garis 2,8,
+# sudut ubin 2,65 (lingkaran, bukan squircle), lubang/detail ±2,6–2,95, celah antar-bagian 1,4.
+SW = 2.8        # tebal garis untuk ikon garis
+KW = 2.6        # tebal lubang garis di dalam bentuk solid
+GAP = 1.4       # celah antar-bagian
+TR = 2.65       # radius sudut ubin (persegi panjang penuh) ukuran penuh
 
 
 # ------------------------------------------------------------------ primitif
@@ -21,20 +24,10 @@ def circle(cx, cy, r):
     return Point(cx, cy).buffer(r, quad_segs=Q)
 
 
-def squircle(x0, y0, x1, y1, r, n=3.1):
-    """Persegi bersudut 'continuous' (superellipse di sudut) — kesan squircle iOS."""
-    r = min(r * 1.12, (x1 - x0) / 2, (y1 - y0) / 2)
-    pts = []
-    corners = [(x1 - r, y1 - r, 0), (x0 + r, y1 - r, 90), (x0 + r, y0 + r, 180), (x1 - r, y0 + r, 270)]
-    steps = Q + 2
-    for cx, cy, a0 in corners:
-        for i in range(steps + 1):
-            t = math.radians(a0 + 90 * i / steps)
-            c, s = math.cos(t), math.sin(t)
-            x = cx + r * math.copysign(abs(c) ** (2 / n), c)
-            y = cy + r * math.copysign(abs(s) ** (2 / n), s)
-            pts.append((x, y))
-    return Polygon(pts)
+def squircle(x0, y0, x1, y1, r, n=None):
+    """Persegi bersudut bulat LINGKARAN (gaya sampel). Nama lama dipertahankan agar semua ikon ikut berubah."""
+    r = max(0.01, min(r, (x1 - x0) / 2 - 0.01, (y1 - y0) / 2 - 0.01))
+    return box(x0 + r, y0 + r, x1 - r, y1 - r).buffer(r, quad_segs=Q)
 
 
 def line(pts, w=SW):
@@ -145,27 +138,27 @@ def _():
 
 @icon("back")
 def _():
-    return line([(14.8, 5.2), (8.0, 12), (14.8, 18.8)], 2.4)
+    return line([(14.8, 5.2), (8.0, 12), (14.8, 18.8)], 3.05)
 
 
 @icon("next")
 def _():
-    return line([(9.2, 5.2), (16.0, 12), (9.2, 18.8)], 2.4)
+    return line([(9.2, 5.2), (16.0, 12), (9.2, 18.8)], 3.05)
 
 
 @icon("chev")
 def _():
-    return line([(9.6, 6.6), (15.0, 12), (9.6, 17.4)], 2.3)
+    return line([(9.6, 6.8), (14.8, 12), (9.6, 17.2)], SW)
 
 
 @icon("down")
 def _():
-    return line([(6.4, 9.4), (12, 15.0), (17.6, 9.4)], 2.4)
+    return line([(6.4, 9.4), (12, 15.0), (17.6, 9.4)], 3.05)
 
 
 @icon("up")
 def _():
-    return line([(6.4, 14.6), (12, 9.0), (17.6, 14.6)], 2.4)
+    return line([(6.4, 14.6), (12, 9.0), (17.6, 14.6)], 3.05)
 
 
 @icon("bell")
@@ -173,8 +166,8 @@ def _():
     dome = unary_union([circle(12, 9.4, 6.0), box(6.0, 9.4, 18.0, 15.0)])
     base = squircle(3.8, 14.2, 20.2, 17.6, 1.7)
     body = smooth(unary_union([dome, base, poly([(6.0, 14.0), (18.0, 14.0), (19.4, 15.6), (4.6, 15.6)], 0)]), 0.8)
-    top = line([(12, 2.6), (12, 3.6)], 2.6)
-    clap = line([(10.4, 20.2), (13.6, 20.2)], 2.6)
+    top = line([(12, 2.6), (12, 3.6)], 3.31)
+    clap = line([(10.4, 20.2), (13.6, 20.2)], 3.31)
     return unary_union([body, top, clap])
 
 
@@ -196,9 +189,11 @@ def _():
 
 @icon("box")
 def _():
-    lid = squircle(2.8, 3.4, 21.2, 8.4, 2.2)
-    body = squircle(4.4, 9.6, 19.6, 20.8, 3.2)
-    return unary_union([lid, knock(body, line([(9.8, 13.4), (14.2, 13.4)], KW))])
+    # sampel: tutup selebar penuh + badan lebih sempit dengan celah pegangan
+    lid = squircle(2.625, 2.625, 21.375, 7.3, 2.0)
+    body = squircle(4.4, 8.35, 19.6, 21.375, TR)
+    slot = squircle(9.75, 10.1, 14.25, 11.5, 0.7)
+    return unary_union([lid, knock(body, slot)])
 
 
 @icon("bright")
@@ -207,7 +202,7 @@ def _():
     for k in range(8):
         a = math.radians(45 * k)
         parts.append(line([(12 + 7.1 * math.cos(a), 12 + 7.1 * math.sin(a)),
-                           (12 + 9.0 * math.cos(a), 12 + 9.0 * math.sin(a))], 2.2))
+                           (12 + 9.0 * math.cos(a), 12 + 9.0 * math.sin(a))], 2.8))
     return unary_union(parts)
 
 
@@ -215,8 +210,8 @@ def _():
 def _():
     glass = smooth(unary_union([circle(12, 9.2, 6.6),
                                 poly([(7.4, 12.6), (16.6, 12.6), (15.4, 16.8), (8.6, 16.8)], 0.4)]), 0.6)
-    glass = knock(glass, line([(9.6, 8.6), (9.6 + 0.01, 8.6)], 1.9))
-    base = line([(9.6, 19.6), (14.4, 19.6)], 2.4)
+    glass = knock(glass, line([(9.6, 8.6), (9.6 + 0.01, 8.6)], 2.42))
+    base = line([(9.6, 19.6), (14.4, 19.6)], 3.05)
     return unary_union([glass, base])
 
 
@@ -230,7 +225,7 @@ def _():
 
 @icon("check")
 def _():
-    return line([(4.8, 12.6), (9.6, 17.2), (19.2, 7.2)], 2.5)
+    return line([(4.8, 12.6), (9.6, 17.2), (19.2, 7.2)], 3.18)
 
 
 @icon("check_ok")
@@ -240,12 +235,12 @@ def _():
 
 @icon("clock")
 def _():
-    return knock(circle(12, 12, 9.6), line([(12, 6.9), (12, 12.4), (15.4, 14.4)], 1.95))
+    return knock(circle(12, 12, 9.6), line([(12, 6.9), (12, 12.4), (15.4, 14.4)], 2.48))
 
 
 @icon("close")
 def _():
-    return unary_union([line([(6.2, 6.2), (17.8, 17.8)], 2.4), line([(17.8, 6.2), (6.2, 17.8)], 2.4)])
+    return unary_union([line([(6.2, 6.2), (17.8, 17.8)], 3.05), line([(17.8, 6.2), (6.2, 17.8)], 3.05)])
 
 
 @icon("plus")
@@ -267,7 +262,7 @@ def _():
 
 @icon("offline")
 def _():
-    slash = line([(3.4, 3.4), (20.6, 20.6)], 2.2)
+    slash = line([(3.4, 3.4), (20.6, 20.6)], 2.8)
     return gap(cloud_shape(), slash, 1.2)
 
 
@@ -325,7 +320,7 @@ def _():
     body, flap = page()
     band = squircle(6.8, 11.4, 17.2, 17.4, 2.0)
     body = knock(body, band)
-    return unary_union([body.difference(flap.buffer(GAP)), flap, line([(9.6, 14.4), (14.4, 14.4)], 1.7)])
+    return unary_union([body.difference(flap.buffer(GAP)), flap, line([(9.6, 14.4), (14.4, 14.4)], 2.16)])
 
 
 @icon("download")
@@ -395,24 +390,24 @@ def _():
 def _():
     l = poly([(10.0, 5.0), (10.0, 18.8), (3.2, 18.8)], 1.0)
     r = poly([(14.0, 5.0), (14.0, 18.8), (20.8, 18.8)], 1.0)
-    dashes = unary_union([line([(12, y), (12, y + 1.2)], 1.8) for y in (2.8, 7.4, 12.0, 16.6, 20.6)])
+    dashes = unary_union([line([(12, y), (12, y + 1.2)], 2.29) for y in (2.8, 7.4, 12.0, 16.6, 20.6)])
     return unary_union([l, r, dashes])
 
 
 @icon("folder")
 def _():
-    body = squircle(2.6, 6.6, 21.4, 20.0, 3.6)
-    tab = squircle(2.6, 3.6, 11.4, 10.0, 2.6)
-    tab2 = poly([(9.0, 3.6), (11.2, 3.6), (13.6, 7.6), (9.0, 7.6)], 0.6)
-    f = smooth(unary_union([body, tab, tab2]), 0.6)
-    f = f.difference(box(0, 9.15, 24, 10.75))
-    return smooth(f, 0.45)
+    # sampel: bagian belakang dengan tab (atas) dan badan depan selebar penuh, dipisah celah lurus
+    back = squircle(2.625, 3.25, 21.375, 12.0, 2.4)
+    tab_cut = poly([(11.2, 3.0), (24.0, 3.0), (24.0, 5.6), (13.4, 5.6)], 0.8)
+    back = smooth(back.difference(tab_cut), 0.5)
+    front = squircle(2.625, 10.7, 21.375, 20.75, TR)
+    return unary_union([back.difference(box(0, 9.63, 24, 10.7)), front])
 
 
 @icon("format_clear")
 def _():
     t = unary_union([line([(4.6, 4.8), (16.4, 4.8)]), line([(10.5, 4.8), (8.6, 19.2)])])
-    x = unary_union([line([(14.6, 14.2), (19.6, 19.2)], 2.1), line([(19.6, 14.2), (14.6, 19.2)], 2.1)])
+    x = unary_union([line([(14.6, 14.2), (19.6, 19.2)], 2.67), line([(19.6, 14.2), (14.6, 19.2)], 2.67)])
     return unary_union([t, x])
 
 
@@ -461,7 +456,7 @@ def _():
 @icon("home")
 def _():
     h = poly([(2.8, 10.6), (12, 3.0), (21.2, 10.6), (21.2, 21.0), (2.8, 21.0)], 2.0)
-    return knock(h, line([(12, 15.4), (12, 24)], 3.2))
+    return knock(h, line([(12, 15.4), (12, 24)], 3.4))
 
 
 def picture(x0, y0, x1, y1, r):
@@ -494,7 +489,7 @@ def _():
 @icon("lock")
 def _():
     body = squircle(4.0, 9.8, 20.0, 21.4, 3.8)
-    body = knock(body, line([(12, 14.2), (12, 16.8)], 2.3))
+    body = knock(body, line([(12, 14.2), (12, 16.8)], 2.93))
     shackle = line([(7.9, 10.2), (7.9, 7.2)] + arc(12, 7.2, 4.1, 180, 360, 24)[1:] + [(16.1, 10.2)], 2.3)
     return unary_union([body, shackle.difference(body.buffer(0.0))])
 
@@ -609,24 +604,28 @@ def _():
 @icon("search")
 def _():
     lens = ring(10.6, 10.6, 7.6, 2.5)
-    handle = line([(16.4, 16.4), (20.2, 20.2)], 3.0)
+    handle = line([(16.4, 16.4), (20.2, 20.2)], 3.4)
     return unary_union([lens, handle])
 
 
 def magnifier(sym):
     lens = knock(circle(10.4, 10.4, 7.9), sym)
-    handle = line([(17.0, 17.0), (20.4, 20.4)], 3.0)
+    handle = line([(17.0, 17.0), (20.4, 20.4)], 3.4)
     return gap(lens, handle, 1.0)
+
+
+# zoom = lensa CINCIN yang sama dengan ikon cari dari sampel (bukan lensa penuh), tanda +/− di dalam lubangnya
+_LX, _LY = 9.72, 9.75     # pusat lensa ikon cari sampel (lubang r ≈ 4,14)
 
 
 @icon("zoom_in")
 def _():
-    return magnifier(plus(10.4, 10.4, 3.2, KW))
+    return unary_union([I["search"](), plus(_LX, _LY, 2.0, 2.2)])
 
 
 @icon("zoom_out")
 def _():
-    return magnifier(line([(7.2, 10.4), (13.6, 10.4)], KW))
+    return unary_union([I["search"](), line([(_LX - 2.0, _LY), (_LX + 2.0, _LY)], 2.2)])
 
 
 def shield_shape():
@@ -653,7 +652,7 @@ def _():
 def _():
     sq = [(3.6, 15.8), (5.2, 12.0), (6.8, 9.2), (8.2, 8.6), (8.6, 10.2), (7.6, 15.0), (8.8, 15.6), (10.8, 12.4),
           (12.4, 11.8), (13.2, 13.8), (14.4, 14.4), (15.6, 12.8), (17.2, 13.4), (18.6, 13.0), (20.4, 11.8)]
-    return unary_union([line(sq, 2.0), line([(3.6, 19.8), (20.4, 19.8)], 2.4)])
+    return unary_union([line(sq, 2.0), line([(3.6, 19.8), (20.4, 19.8)], 3.05)])
 
 
 @icon("spark")
@@ -668,7 +667,7 @@ def _():
 
 @icon("trash")
 def _():
-    lid = line([(3.6, 6.2), (20.4, 6.2)], 2.4)
+    lid = line([(3.6, 6.2), (20.4, 6.2)], 3.05)
     handle = squircle(8.8, 2.2, 15.2, 5.8, 1.4)
     body = poly([(5.2, 8.6), (18.8, 8.6), (17.6, 21.4), (6.4, 21.4)], 2.0)
     body = knock(body, line([(10.0, 12.0), (10.0, 17.6)], KW), line([(14.0, 12.0), (14.0, 17.6)], KW))
@@ -702,11 +701,36 @@ def _():
 
 @icon("wand")
 def _():
-    stick = line([(4.0, 20.0), (14.6, 9.4)], 2.8)
+    stick = line([(4.0, 20.0), (14.6, 9.4)], 3.4)
     s1 = spark(17.8, 6.2, 4.0)
     s2 = spark(8.6, 4.6, 2.2)
     s3 = spark(20.0, 15.0, 2.0)
     return unary_union([gap(stick, s1, 1.1), s2, s3])
+
+
+# ------------------------------------------------------------------ bentuk dari sampel
+def _from_path(d):
+    """Path M/L/Z (even-odd) → geometri shapely."""
+    import re as _re
+    g = None
+    for ring in _re.findall(r"M([^MZ]*)Z", d):
+        nums = [float(v) for v in _re.findall(r"-?[0-9.]+", ring)]
+        p = Polygon(list(zip(nums[0::2], nums[1::2]))).buffer(0)
+        g = p if g is None else g.symmetric_difference(p)
+    return g
+
+
+def _sample():
+    try:
+        from sample24 import SAMPLE
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from sample24 import SAMPLE
+    for n, d in SAMPLE.items():
+        I[n] = (lambda dd: (lambda: _from_path(dd)))(d)
+
+
+_sample()
 
 
 # ------------------------------------------------------------------ keluaran
