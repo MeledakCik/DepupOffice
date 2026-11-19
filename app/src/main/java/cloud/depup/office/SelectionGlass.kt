@@ -1,7 +1,6 @@
 package cloud.depup.office
 
 import android.graphics.Color
-import android.graphics.Matrix
 import android.graphics.RectF
 import android.view.Gravity
 import android.view.View
@@ -55,12 +54,7 @@ object SelectionGlass {
         val ctx = anchor.context
 
         // kotak seleksi → koordinat scaffold (memperhitungkan zoom/skala & gulir semua induk)
-        val m = Matrix()
-        anchor.transformMatrixToGlobal(m)
-        val r = RectF(local); m.mapRect(r)
-        val sl = IntArray(2); sc.getLocationInWindow(sl)
-        val rl = IntArray(2); anchor.rootView.getLocationInWindow(rl)
-        r.offset((rl[0] - sl[0]).toFloat(), (rl[1] - sl[1]).toFloat())
+        val r = RectF(local); SelectionKit.localToSc(anchor, sc).mapRect(r)
 
         val c = cap
         val existing = c != null && c.parent === sc

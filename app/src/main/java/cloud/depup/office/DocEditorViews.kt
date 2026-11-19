@@ -424,6 +424,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         if (!selectWord(off, false)) return super.performLongClick()
         anchorA = selectionStart; anchorB = selectionEnd
         longDrag = true
+        parent?.requestDisallowInterceptTouchEvent(true)   // geser jari memperluas seleksi, BUKAN menggulir halaman
         handleDragging(true)
         loupeAt(off, downX)
         performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
