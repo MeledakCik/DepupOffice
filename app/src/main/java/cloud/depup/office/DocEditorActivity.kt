@@ -1119,7 +1119,7 @@ class DocEditorActivity : AppCompatActivity() {
                     dismiss()
                     command {
                         syncAll()
-                        val formattedComment = " [💬 $authorStr: $commentText] "
+                        val formattedComment = " [Komentar $authorStr: $commentText] "
                         insertText(formattedComment)
                     }
                     toast("Catatan revisi berhasil disisipkan!")

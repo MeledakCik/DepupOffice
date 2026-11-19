@@ -570,6 +570,10 @@ fun LinearLayout.add(
 
 /** Tombol dasar: label + ikon opsional, tinggi minimal 48dp, ripple, sedikit mengecil saat ditekan. */
 fun Context.pressable(label: String, iconRes: Int, fg: Int, bg: android.graphics.drawable.Drawable, onClick: () -> Unit): LinearLayout =
+    pressable(label, iconRes, fg, bg, false, onClick)
+
+/** [iconEnd] = ikon di kanan teks (mis. "Berikutnya ›"). */
+fun Context.pressable(label: String, iconRes: Int, fg: Int, bg: android.graphics.drawable.Drawable, iconEnd: Boolean, onClick: () -> Unit): LinearLayout =
     LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
@@ -579,11 +583,12 @@ fun Context.pressable(label: String, iconRes: Int, fg: Int, bg: android.graphics
         isClickable = true
         isFocusable = true
         contentDescription = label
-        if (iconRes != 0) add(icon(iconRes, fg, 20), w = dp(20), h = dp(20))
+        if (iconRes != 0 && !iconEnd) add(icon(iconRes, fg, 20), w = dp(20), h = dp(20))
         add(tv(label, 15f, fg, true).apply {
             maxLines = 2; gravity = Gravity.CENTER
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, w = WRAP, side = if (iconRes != 0) 4 else 0)
+        }, w = WRAP, side = if (iconRes != 0 && !iconEnd) 4 else 0)
+        if (iconRes != 0 && iconEnd) add(icon(iconRes, fg, 20), w = dp(20), h = dp(20), side = 4)
         setOnClickListener { haptic(this); onClick() }
         springPress(0.97f)
     }
@@ -594,9 +599,24 @@ fun haptic(v: View) {
 }
 
 /** Tombol utama (terisi) atau sekunder (tonal). Warna teks dipilih otomatis agar selalu kontras. */
-fun Context.btn(label: String, filled: Boolean = true, color: Int = C.ACCENT, iconRes: Int = 0, onClick: () -> Unit): View =
-    if (filled) pressable(label, iconRes, C.on(color), shape(color, 100), onClick)
-    else pressable(label, iconRes, if (color == C.ACCENT) C.TEXT else color, shape(C.SURFACE, 100, C.LINE, 1), onClick)
+fun Context.btn(label: String, filled: Boolean = true, color: Int = C.ACCENT, iconRes: Int = 0, iconEnd: Boolean = false, onClick: () -> Unit): View =
+    if (filled) pressable(label, iconRes, C.on(color), shape(color, 100), iconEnd, onClick)
+    else pressable(label, iconRes, if (color == C.ACCENT) C.TEXT else color, shape(C.SURFACE, 100, C.LINE, 1), iconEnd, onClick)
+
+/**
+ * Teks + ikon dari paket ikon aplikasi di dalam satu baris (untuk tempat yang hanya menerima teks, mis. PopupMenu).
+ * Pengganti emoji: ikon tetap seragam gayanya, ikut warna tema, dan tajam di semua HP.
+ */
+fun Context.withIcon(text: CharSequence, iconRes: Int, color: Int, sizeDp: Int = 16, end: Boolean = true): CharSequence {
+    val d = androidx.core.content.ContextCompat.getDrawable(this, iconRes)?.mutate() ?: return text
+    d.setTint(color)
+    d.setBounds(0, 0, dp(sizeDp), dp(sizeDp))
+    val span = android.text.style.ImageSpan(d, android.text.style.DynamicDrawableSpan.ALIGN_CENTER)
+    val sb = android.text.SpannableStringBuilder()
+    if (end) { sb.append(text).append("  "); val at = sb.length; sb.append("\u2009"); sb.setSpan(span, at, at + 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+    else { sb.append("\u2009"); sb.setSpan(span, 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE); sb.append("  ").append(text) }
+    return sb
+}
 
 /** Tombol bergaris tepi (aksi ketiga). */
 fun Context.outlineBtn(label: String, iconRes: Int = 0, onClick: () -> Unit): View =
@@ -697,7 +717,13 @@ fun Context.sectionTitle(title: String, link: String? = null, onLink: (() -> Uni
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         add(headingTv(title, 18f), w = 0, weight = 1f)
-        if (link != null) add(tv("$link  →", 14f, C.MUTED, true).apply {
+        if (link != null) add(tv(link, 14f, C.MUTED, true).apply {
+            // panah teks diganti chevron dari paket ikon
+            val ch = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_chev)?.mutate()?.apply {
+                setTint(C.MUTED); setBounds(0, 0, dp(14), dp(14))
+            }
+            setCompoundDrawablesRelative(null, null, ch, null)
+            compoundDrawablePadding = dp(4)
             gravity = Gravity.CENTER
             setPadding(dp(12), 0, dp(4), 0)
             minHeight = dp(48)

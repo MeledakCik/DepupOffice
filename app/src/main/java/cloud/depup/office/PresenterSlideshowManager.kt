@@ -41,7 +41,14 @@ object PresenterSlideshowManager {
                 gravity = Gravity.CENTER_VERTICAL
             }
             val titleTv = activity.tv(title, 14f, Color.WHITE, true)
-            val timerTv = activity.tv("⏱ 00:00", 12f, Color.LTGRAY)
+            val timerTv = activity.tv("00:00", 12f, Color.LTGRAY).apply {
+                // jam dari paket ikon, bukan emoji ⏱
+                val ck = androidx.core.content.ContextCompat.getDrawable(activity, R.drawable.ic_clock)?.mutate()?.apply {
+                    setTint(Color.LTGRAY); setBounds(0, 0, activity.dp(14), activity.dp(14))
+                }
+                setCompoundDrawablesRelative(ck, null, null, null)
+                compoundDrawablePadding = activity.dp(5)
+            }
             topRow.add(titleTv, w = 0, weight = 1f)
             topRow.add(timerTv, w = WRAP)
             pad.add(topRow)
@@ -105,7 +112,7 @@ object PresenterSlideshowManager {
                     timerSeconds++
                     val mins = timerSeconds / 60
                     val secs = timerSeconds % 60
-                    timerTv.text = String.format("⏱ %02d:%02d", mins, secs)
+                    timerTv.text = String.format("%02d:%02d", mins, secs)
                     handler.postDelayed(this, 1000)
                 }
             }
@@ -128,14 +135,14 @@ object PresenterSlideshowManager {
             val ctrlRow = activity.hbox().apply {
                 gravity = Gravity.CENTER
 
-                val btnPrev = activity.btn("◄ Sblm", false, C.ACCENT) {
+                val btnPrev = activity.btn("Sblm", false, C.ACCENT, R.drawable.ic_back) {
                     if (currentSlide > 0) {
                         currentSlide--
                         renderSlide()
                     }
                 }
 
-                val btnAuto = activity.btn("AutoPlay", false, C.ACCENT) {
+                val btnAuto = activity.btn("AutoPlay", false, C.ACCENT, R.drawable.ic_play) {
                     isAutoPlay = !isAutoPlay
                     if (isAutoPlay) {
                         activity.toast("AutoPlay aktif (4 detik/slide)")
@@ -145,7 +152,7 @@ object PresenterSlideshowManager {
                     }
                 }
 
-                val btnNext = activity.btn("Brkt ►", true, C.PRIMARY) {
+                val btnNext = activity.btn("Brkt", true, C.PRIMARY, R.drawable.ic_next, iconEnd = true) {
                     if (currentSlide < total - 1) {
                         currentSlide++
                         renderSlide()

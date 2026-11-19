@@ -530,11 +530,12 @@ class ViewerActivity : AppCompatActivity() {
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 val office = officeWeb != null
                 // Dokumen terkunci: fitur bagikan/ekspor tetap ada tetapi meminta password pemilik/guru (lihat requirePassword).
-                val lockTag = if (secure) " 🔒" else ""
-                pm.menu.add(0, 1, 0, "Bagikan$lockTag")
-                pm.menu.add(0, 2, 1, "Cetak Dokumen$lockTag")
+                // dikunci: ikon gembok dari paket ikon (bukan emoji) di ujung nama menu
+                fun locked(t: String): CharSequence = if (secure) withIcon(t, R.drawable.ic_lock, C.MUTED, 15) else t
+                pm.menu.add(0, 1, 0, locked("Bagikan"))
+                pm.menu.add(0, 2, 1, locked("Cetak Dokumen"))
                 if (isPdfLoaded) pm.menu.add(0, 8, 2, "Bacakan Suara (Voice Reader)")
-                if (isPdfLoaded) pm.menu.add(0, 3, 3, "Tanda Tangan & Edit PDF$lockTag")
+                if (isPdfLoaded) pm.menu.add(0, 3, 3, locked("Tanda Tangan & Edit PDF"))
                 if (!secure) pm.menu.add(0, 4, 4, "Ubah Nama Berkas")
                 if (isPdfLoaded) pm.menu.add(0, 5, 5, "Lompat Halaman")
                 if (isPdfLoaded) pm.menu.add(0, 6, 6, "Pengaturan Reader PDF")
