@@ -26,6 +26,125 @@ class SheetEditorActivity : AppCompatActivity() {
         const val TEMPLATE_INVOICE = "invoice"
         const val TEMPLATE_PRESENSI = "presensi"
         const val TEMPLATE_BLANK = "blank"
+        /** Buka dari draf pemulihan [SheetDrafts] (id draf). */
+        const val EXTRA_DRAFT = "draft"
+        private const val STATE_DRAFT = "depup.sheetDraftId"
+    }
+
+    /** Id draf pemulihan sesi editor ini ([SheetDrafts]). */
+    private var draftId = java.util.UUID.randomUUID().toString()
+    /**
+     * Sidik isi saat terakhir dibuka/diekspor; null = belum pernah bersih (dipulihkan dari draf). Penanda perubahan
+     * dihitung dari ISI (semua sheet), jadi tidak ada jenis suntingan yang terlewat.
+     */
+    private var cleanPrint: Int? = 0
+    private var restoredDraft = false
+
+    private fun fingerprint(): Int {
+        var h = 17
+        for ((n, m) in sheetList) {
+            h = h * 31 + n.hashCode()
+            for (row in m) {
+                h = h * 31 + row.size
+                for (c in row) { h = h * 31 + c.valStr.hashCode(); h = h * 31 + (if (c.isBold) 1 else 0); h = h * 31 + c.bgColor }
+            }
+        }
+        return h
+    }
+
+    private fun isDirty() = ::gridBox.isInitialized && cleanPrint != fingerprint()
+    private fun markClean() { cleanPrint = fingerprint() }
+
+    /** Isi semua sheet → JSON draf (rumus disimpan mentah, bukan hasil). */
+    private fun draftJson(): String {
+        val sheets = org.json.JSONArray()
+        for ((n, m) in sheetList) {
+            val rows = org.json.JSONArray()
+            for (row in m) {
+                val r = org.json.JSONArray()
+                for (c in row) r.put(org.json.JSONArray().put(c.valStr).put(if (c.isBold) 1 else 0).put(c.bgColor))
+                rows.put(r)
+            }
+            val cols = if (m === matrix) numCols else (m.maxOfOrNull { it.size } ?: 1)
+            sheets.put(org.json.JSONObject().put("name", n).put("cols", cols).put("rows", rows))
+        }
+        return org.json.JSONObject()
+            .put("title", if (::sheetTitleEt.isInitialized) sheetTitleEt.text.toString() else "")
+            .put("source", sourceName ?: "")
+            .put("cur", currentSheetIdx)
+            .put("sheets", sheets).toString()
+    }
+
+    /** Pulihkan dari draf; false bila draf rusak (layar dibuka seperti biasa). */
+    private fun restoreFrom(d: DraftStore.Draft): Boolean = try {
+        val j = org.json.JSONObject(d.file.readText())
+        val arr = j.getJSONArray("sheets")
+        val list = ArrayList<Pair<String, MutableList<MutableList<SheetCell>>>>()
+        val colsOf = ArrayList<Int>()
+        for (i in 0 until arr.length()) {
+            val sh = arr.getJSONObject(i)
+            val rows = sh.getJSONArray("rows")
+            val m = mutableListOf<MutableList<SheetCell>>()
+            for (r in 0 until rows.length()) {
+                val ra = rows.getJSONArray(r)
+                val row = mutableListOf<SheetCell>()
+                for (c in 0 until ra.length()) {
+                    val ca = ra.getJSONArray(c)
+                    row.add(SheetCell(ca.optString(0), ca.optInt(1) == 1, ca.optInt(2)))
+                }
+                m.add(row)
+            }
+            if (m.isEmpty()) m.add(MutableList(4) { SheetCell("") })
+            list.add(sh.optString("name").ifBlank { "Sheet${i + 1}" } to m)
+            colsOf.add(sh.optInt("cols", m.maxOf { it.size }).coerceIn(1, 8))
+        }
+        require(list.isNotEmpty())
+        sheetList.clear(); sheetList.addAll(list)
+        matrix = list[0].second
+        numCols = colsOf[0]
+        sourceName = j.optString("source").ifBlank { null }
+        restoredDraft = true
+        buildUi(j.optString("title").ifBlank { d.name })
+        val cur = j.optInt("cur").coerceIn(0, list.size - 1)
+        if (cur != 0) {
+            currentSheetIdx = cur; matrix = list[cur].second; numCols = colsOf[cur]
+            activeRow = 0; activeCol = 0
+            syncFormulaBar(); renderGrid(); updateSheetBar()
+        }
+        toast("Perubahan yang belum diekspor telah dipulihkan.")
+        true
+    } catch (_: Throwable) {
+        sheetList.clear(); matrix = mutableListOf(); restoredDraft = false
+        false
+    }
+
+    /** Keluar: tanya dulu bila ada perubahan yang belum diekspor (dulu langsung tertutup & semua isian hilang). */
+    private fun askClose() {
+        if (!isDirty()) { finish(); return }
+        AlertDialog.Builder(this).setTitle("Simpan perubahan?")
+            .setMessage("Ada perubahan yang belum diekspor pada spreadsheet ini.")
+            .setPositiveButton("Ekspor") { _, _ -> saveSpreadsheet() }
+            .setNegativeButton("Jangan Simpan") { _, _ -> SheetDrafts.clear(this, draftId); finish() }
+            .setNeutralButton("Batal", null).show()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_DRAFT, draftId)
+    }
+
+    /** Ke latar dengan perubahan belum diekspor → draf pemulihan; ditutup → draf dibuang. */
+    override fun onStop() {
+        super.onStop()
+        if (isFinishing) { SheetDrafts.clear(this, draftId); return }
+        if (!isDirty()) return
+        val json = try { draftJson() } catch (_: Throwable) { return }
+        val title = if (::sheetTitleEt.isInitialized) sheetTitleEt.text.toString().ifBlank { "Spreadsheet" } else "Spreadsheet"
+        SheetDrafts.write(this, draftId, title, null) { f ->
+            val tmp = File(f.parentFile, f.name + ".part")
+            tmp.writeText(json)
+            if (!tmp.renameTo(f)) { tmp.copyTo(f, overwrite = true); tmp.delete() }
+        }
     }
 
     private lateinit var sheetTitleEt: EditText
@@ -73,6 +192,18 @@ class SheetEditorActivity : AppCompatActivity() {
         currentCurrency = SheetSettings.currencySymbol(this)
         currentSeparator = SheetSettings.csvSeparator(this)
         currentAutoSum = SheetSettings.autoSum(this)
+
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = askClose()
+        })
+        // Pulihkan: proses dimatikan di latar (draf sesi ini) atau dari layar utama (EXTRA_DRAFT)
+        val sid = savedInstanceState?.getString(STATE_DRAFT)
+        val want = sid ?: intent.getStringExtra(EXTRA_DRAFT)
+        if (sid != null) draftId = sid
+        val draft = want?.let { SheetDrafts.get(this, it) }
+        if (draft != null) draftId = draft.id
+        SheetDrafts.markLive(draftId, true)
+        if (draft != null && restoreFrom(draft)) return
 
         val rawUri = intent.getStringExtra(EXTRA_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         if (rawUri == null) { buildUi(loadInitialMatrix()); return }
@@ -140,7 +271,7 @@ class SheetEditorActivity : AppCompatActivity() {
         if (sheetList.isEmpty()) {
             sheetList.add(Pair("Sheet1", matrix))
         } else {
-            sheetList[0] = Pair("Sheet1", matrix)
+            sheetList[0] = Pair(sheetList[0].first, matrix)   // nama sheet pertama dipertahankan (draf yang dipulihkan)
         }
         sheetBarContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -156,6 +287,7 @@ class SheetEditorActivity : AppCompatActivity() {
         renderGrid()
         applyDensity()
         window.decorView.viewTreeObserver.addOnGlobalLayoutListener(imeWatch)
+        cleanPrint = if (restoredDraft) null else fingerprint()
     }
 
     private fun updateSheetBar() {
@@ -294,6 +426,8 @@ class SheetEditorActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        SheetDrafts.markLive(draftId, false)
+        if (isFinishing) SheetDrafts.clear(this, draftId)
         if (::topBarV.isInitialized) try { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(imeWatch) } catch (_: Exception) {}
         super.onDestroy()
     }
@@ -402,7 +536,7 @@ class SheetEditorActivity : AppCompatActivity() {
             setPadding(dp(12), dp(6), dp(12), dp(6))
         }
 
-        bar.add(navCircle(R.drawable.ic_back, "Kembali") { finish() }, w = dp(40), h = dp(40))
+        bar.add(navCircle(R.drawable.ic_back, "Kembali") { askClose() }, w = dp(40), h = dp(40))
 
         sheetTitleEt = field("Nama Spreadsheet Excel", multi = false).apply {
             setText(initialTitle)
@@ -1214,6 +1348,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 Pdf.text(pdfText.toString(), pdfFile)
             }) { res ->
                 res.onSuccess {
+                    markClean(); SheetDrafts.clear(this, draftId)   // diekspor: draf tidak diperlukan lagi
                     showResult("Spreadsheet Berhasil Diekspor", xlsxFile, XLSX, "PDF juga dibuat: ${pdfFile.name}")
                 }.onFailure { fail(it) }
             }
