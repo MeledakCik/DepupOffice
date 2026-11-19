@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Depup Solid: ikon solid membulat 24dp — bentuk penuh bersudut squircle, detail berupa lubang, ujung garis
-     bulat, celah antar-bagian. Dibuat oleh tools/icons/gen.py; warna diatur lewat tint di kode. -->
+<!-- Depup Solid: ikon solid membulat 24dp — garis 2,5 berujung bulat, sudut lingkaran, detail berupa lubang,
+     celah 1,5. Path mulus (garis + kurva Bezier). Dibuat oleh tools/icons/gen.py; warna lewat tint. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
     <path android:fillColor="#FF111111" android:fillType="evenOdd"
-        android:pathData="M4.64 2.70L4.11 2.89L3.65 3.18L3.25 3.56L2.79 4.36L2.62 5.20L2.62 18.81L2.70 19.38L2.90 19.91L3.20 20.37L3.58 20.77L4.29 21.19L5.12 21.37L18.74 21.38L19.31 21.31L19.84 21.13L20.32 20.85L20.78 20.40L21.20 19.69L21.37 18.85L21.36 4.95L21.26 4.48L21.04 3.97L20.78 3.59L20.38 3.21L19.92 2.91L19.49 2.73L18.54 2.62L5.12 2.63ZM17.81 15.54L17.18 14.86L16.40 14.22L15.61 13.72L14.77 13.32L13.87 13.03L12.93 12.85L11.95 12.80L10.98 12.87L10.04 13.06L9.15 13.36L8.31 13.76L7.53 14.27L6.83 14.86L6.20 15.53L5.58 16.37L5.58 5.58L18.42 5.58L18.42 16.36ZM11.24 8.30L10.74 7.62L10.02 7.19L9.19 7.06L8.37 7.26L7.69 7.76L7.25 8.48L7.12 9.31L7.32 10.13L7.82 10.81L8.54 11.24L9.37 11.37L10.19 11.17L10.87 10.67L11.31 9.95L11.44 9.12Z" />
+        android:pathData="M2.625 5.278L2.629 18.866C2.704 20.274 3.868 21.377 5.278 21.375L18.866 21.371C20.274 21.296 21.377 20.132 21.375 18.722L21.371 5.134C21.296 3.726 20.132 2.623 18.722 2.625L5.134 2.629C3.726 2.704 2.623 3.868 2.625 5.278ZM5.629 5.125L18.433 5.128C18.686 5.158 18.877 5.374 18.875 5.629L18.871 15.943C18.85 16.085 18.745 16.199 18.606 16.232C18.466 16.265 18.321 16.21 18.239 16.093C16.828 14.03 14.49 12.797 11.991 12.8C9.492 12.803 7.157 14.041 5.751 16.107C5.659 16.225 5.502 16.271 5.361 16.222C5.22 16.174 5.125 16.041 5.125 15.892L5.128 5.567C5.158 5.314 5.374 5.123 5.629 5.125ZM11.378 9.734C11.662 8.576 10.953 7.406 9.794 7.122C8.636 6.838 7.466 7.547 7.182 8.706C6.898 9.864 7.607 11.034 8.766 11.318C9.924 11.602 11.094 10.893 11.378 9.734Z" />
 </vector>

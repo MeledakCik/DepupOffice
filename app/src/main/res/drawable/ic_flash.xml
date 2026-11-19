@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Depup Solid: ikon solid membulat 24dp — bentuk penuh bersudut squircle, detail berupa lubang, ujung garis
-     bulat, celah antar-bagian. Dibuat oleh tools/icons/gen.py; warna diatur lewat tint di kode. -->
+<!-- Depup Solid: ikon solid membulat 24dp — garis 2,5 berujung bulat, sudut lingkaran, detail berupa lubang,
+     celah 1,5. Path mulus (garis + kurva Bezier). Dibuat oleh tools/icons/gen.py; warna lewat tint. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
     <path android:fillColor="#FF111111" android:fillType="evenOdd"
-        android:pathData="M10.60 13.80L10.84 13.89L10.95 14.19L10.44 18.68L10.55 19.04L10.81 19.34L11.16 19.52L11.58 19.54L11.93 19.41L12.23 19.16L18.12 11.63L18.32 11.23L18.34 10.88L18.21 10.50L17.94 10.20L17.59 10.03L13.40 10.00L13.11 9.86L13.05 9.61L13.56 5.36L13.51 5.09L13.33 4.76L13.08 4.55L12.82 4.44L12.25 4.46L11.78 4.79L5.91 12.16L5.71 12.57L5.69 12.92L5.81 13.30L6.08 13.60L6.45 13.77Z" />
+        android:pathData="M12.218 19.169L18.169 11.569C18.381 11.262 18.405 10.863 18.231 10.534C18.057 10.204 17.714 9.998 17.341 10L13.346 9.996C13.157 9.969 13.026 9.796 13.049 9.607L13.564 5.469C13.593 5.032 13.333 4.627 12.925 4.471C12.516 4.314 12.052 4.441 11.781 4.785L5.857 12.225C5.642 12.531 5.616 12.931 5.789 13.263C5.962 13.595 6.306 13.802 6.68 13.8L10.657 13.804C10.844 13.832 10.975 14.004 10.952 14.192L10.429 18.495C10.402 18.933 10.664 19.337 11.075 19.492C11.485 19.646 11.949 19.516 12.218 19.169Z" />
 </vector>
