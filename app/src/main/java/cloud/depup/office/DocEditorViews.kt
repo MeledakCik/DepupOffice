@@ -156,16 +156,103 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
     /** Jari sedang menyentuh paragraf ini (seleksi kata saat tekan-lama/ketuk-ganda harus diizinkan). */
     private var touching = false
 
+    /**
+     * PENYEBAB SELEKSI MATI: Editor Android menyiapkan pengendali seleksi (pegangan, menu Salin, ketuk-ganda,
+     * tekan-lama-geser) di prepareCursorControllers() — dipanggil saat paragraf dipasang / teks diganti. Saat itu
+     * paragraf belum fokus → onCheckIsTextEditor() = false → pengendali SELEKSI dimatikan permanen (pengendali
+     * kursor tetap hidup, makanya kursor bisa dipindah tapi kata tak bisa dipilih). Menyetel ulang isCursorVisible
+     * memanggil prepareCursorControllers() lagi — dilakukan saat ia sudah boleh mengaku editor.
+     */
+    private fun armSelection() {
+        val v = isCursorVisible
+        isCursorVisible = !v
+        isCursorVisible = v
+    }
+
+    // ---- ketuk tiga kali = pilih satu kalimat (sampai titik) ----
+    private var tapCount = 0
+    private var lastTapUp = 0L
+    private var lastTapX = 0f
+    private var lastTapY = 0f
+
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-        when (event.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> touching = true
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            touching = true
+            if (!isFocused) armSelection()       // tekan-lama / ketuk-ganda di paragraf yang belum aktif
         }
         val r = super.onTouchEvent(event)
         when (event.actionMasked) {
-            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> touching = false
+            android.view.MotionEvent.ACTION_UP -> {
+                touching = false
+                countTap(event)
+            }
+            android.view.MotionEvent.ACTION_CANCEL -> { touching = false; tapCount = 0 }
         }
         return r
+    }
+
+    private fun countTap(e: android.view.MotionEvent) {
+        val vc = android.view.ViewConfiguration.get(context)
+        val quick = e.eventTime - e.downTime < android.view.ViewConfiguration.getLongPressTimeout()
+        val near = kotlin.math.hypot(e.x - lastTapX, e.y - lastTapY) < vc.scaledDoubleTapSlop
+        val soon = e.eventTime - lastTapUp < android.view.ViewConfiguration.getDoubleTapTimeout() + 120
+        tapCount = if (quick && near && soon) tapCount + 1 else if (quick) 1 else 0
+        lastTapUp = e.eventTime; lastTapX = e.x; lastTapY = e.y
+        if (tapCount >= 3) {
+            tapCount = 0
+            val off = getOffsetForPosition(e.x, e.y)
+            post { selectSentence(off) }      // sesudah Editor selesai memproses ketukan ketiga
+        }
+    }
+
+    /** Pilih satu kalimat di sekitar [off]: dari sesudah tanda akhir kalimat sebelumnya sampai titik/!/? berikutnya. */
+    private fun selectSentence(off: Int) {
+        val t = text ?: return
+        if (t.isEmpty() || off < 0) return
+        val o = off.coerceIn(0, t.length)
+        fun end(c: Char) = c == '.' || c == '!' || c == '?' || c == '\n'
+        var s = o
+        while (s > 0 && !end(t[s - 1])) s--
+        while (s < t.length && t[s].isWhitespace()) s++
+        var en = o
+        while (en < t.length && !end(t[en])) en++
+        if (en < t.length && t[en] != '\n') en++       // titiknya ikut terpilih
+        if (en <= s) return
+        if (!isFocused) requestFocus()
+        setSelection(s, en)
+        showSelectionMenu()
+    }
+
+    private var selMode: android.view.ActionMode? = null
+
+    /** Menu seleksi mengambang (Potong / Salin / Tempel / Pilih semua) untuk seleksi kalimat. */
+    private fun showSelectionMenu() {
+        selMode?.finish()
+        val ids = if (host.secureMode) listOf(android.R.id.paste to "Tempel", android.R.id.selectAll to "Pilih semua")
+            else listOf(android.R.id.cut to "Potong", android.R.id.copy to "Salin", android.R.id.paste to "Tempel", android.R.id.selectAll to "Pilih semua")
+        selMode = startActionMode(object : android.view.ActionMode.Callback2() {
+            override fun onCreateActionMode(m: android.view.ActionMode, menu: android.view.Menu): Boolean {
+                ids.forEachIndexed { i, (id, label) -> menu.add(0, id, i, label).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS) }
+                return true
+            }
+            override fun onPrepareActionMode(m: android.view.ActionMode, menu: android.view.Menu) = false
+            override fun onActionItemClicked(m: android.view.ActionMode, item: android.view.MenuItem): Boolean {
+                onTextContextMenuItem(item.itemId)
+                if (item.itemId != android.R.id.selectAll) m.finish()
+                return true
+            }
+            override fun onDestroyActionMode(m: android.view.ActionMode) { if (selMode === m) selMode = null }
+            override fun onGetContentRect(m: android.view.ActionMode, v: View, out: android.graphics.Rect) {
+                val l = layout ?: return super.onGetContentRect(m, v, out)
+                val a = selectionStart; val b = selectionEnd
+                val la = l.getLineForOffset(a); val lb = l.getLineForOffset(b)
+                val x1 = if (la == lb) l.getPrimaryHorizontal(a) else l.getLineLeft(la)
+                val x2 = if (la == lb) l.getPrimaryHorizontal(b) else l.getLineRight(lb)
+                out.set((totalPaddingLeft + minOf(x1, x2)).toInt(), totalPaddingTop + l.getLineTop(la),
+                    (totalPaddingLeft + maxOf(x1, x2)).toInt(), totalPaddingTop + l.getLineBottom(lb))
+            }
+        }, android.view.ActionMode.TYPE_FLOATING)
     }
 
     override fun performLongClick(): Boolean {
@@ -367,7 +454,10 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         // fokus: saran & ejaan keyboard aktif; lepas fokus: dimatikan lagi (lihat init) dan garis ejaannya dibuang
         setRawInputType(if (focused || spellAll) BASE_TYPE else BASE_TYPE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         if (!focused && !spellAll) text?.let { t -> for (sp in t.getSpans(0, t.length, android.text.style.SuggestionSpan::class.java)) t.removeSpan(sp) }
+        if (!focused) selMode?.finish()
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
+        // baru fokus: kini boleh mengaku editor → hidupkan pengendali seleksi (lihat armSelection)
+        if (focused) armSelection()
         // lepas fokus: hitung ulang pelacakan (menyetel ini memanggil updatePositionUpdateListener) → pendengar dibuang
         if (!focused && trackGuard && android.os.Build.VERSION.SDK_INT >= 33) isAutoHandwritingEnabled = false
         if (focused && ::para.isInitialized) host.onSel(this)
