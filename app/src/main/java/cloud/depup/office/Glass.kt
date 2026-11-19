@@ -280,7 +280,12 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         val f = fx as? LiquidFx ?: try { LiquidFx().also { fx = it } } catch (_: Throwable) { LiquidGlass.fail(); return false }
         return try {
             fillUniforms()
-            if (f.update(u, radius, rimBlur()) || mode != 2) { n.setRenderEffect(f.effect); mode = 2 }
+            // Di atas setelan blur bawaan, sebagian blur dipindah ke SESUDAH lensa (lihat LiquidFx) dan tepi bening memudar:
+            // makin maksimal, makin rata buramnya sampai pinggir. Total blur tengah tetap = [radius].
+            val more = ((Glass.blurAmt - Glass.DEFAULT) / (1f - Glass.DEFAULT)).coerceIn(0f, 1f)
+            val post = radius * 0.8f * more
+            val pre = if (post > 0f) kotlin.math.sqrt(max(radius * radius - post * post, 0f)) else radius
+            if (f.update(u, pre, rimBlur(), post, 1f - more) || mode != 2) { n.setRenderEffect(f.effect); mode = 2 }
             true
         } catch (_: Throwable) { LiquidGlass.fail(); mode = 0; false }
     }
