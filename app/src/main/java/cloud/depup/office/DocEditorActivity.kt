@@ -919,6 +919,7 @@ class DocEditorActivity : AppCompatActivity() {
      * pembaca layar & tooltip (tekan lama). Dulu: kotak ikon dengan label kecil di bawahnya — terlihat seperti templat.
      */
     private fun toolBox(label: String, glyph: View, glyphW: Int = 26, onClick: () -> Unit, isActive: (() -> Boolean)? = null): View {
+        var tapped = false
         val b = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -928,7 +929,6 @@ class DocEditorActivity : AppCompatActivity() {
             tooltipText = label
             setOnClickListener { tapped = true; onClick(); refreshTools() }
         }
-        var tapped = false
         b.springPress(if (chipMode) 0.94f else 0.86f)
         glyph.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         b.add(glyph, w = dp(glyphW), h = dp(24))
