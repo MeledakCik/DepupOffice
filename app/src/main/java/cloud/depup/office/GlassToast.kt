@@ -126,11 +126,12 @@ object GlassToast {
                     cornerRadius = radius
                     setColor(C.PANEL)
                 }
-                // naik sedikit sambil menebal, mendarat lembut — tanpa pantulan
-                capsule.translationY = ctx.dp(12).toFloat(); capsule.scaleX = 0.96f; capsule.scaleY = 0.96f
-                scaffold?.holdWhole(Motion.SLOW + 200L)   // bayangan kapsul yang bergerak bisa menyentuh kaca di bawahnya
-                capsule.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(Motion.SLOW)
-                    .setInterpolator(Motion.ENTER).start()
+                // naik dari bawah dengan pegas, sedikit membesar lalu mendarat memantul lembut
+                capsule.translationY = ctx.dp(18).toFloat(); capsule.scaleX = 0.88f; capsule.scaleY = 0.88f
+                scaffold?.holdWhole(Motion.SPRING_MS + 200L)   // bayangan kapsul yang bergerak bisa menyentuh kaca di bawahnya
+                capsule.animate().translationY(0f).scaleX(1f).scaleY(1f).setDuration(Motion.SPRING_MS)
+                    .setInterpolator(Motion.SPRING).start()
+                android.animation.ObjectAnimator.ofFloat(capsule, View.ALPHA, 1f).apply { duration = Motion.FAST + 30L }.start()
                 capsule.announceForAccessibility(msg)
             }
             main.postDelayed({ dismiss(capsule) }, if (long) 3200L else 2000L)

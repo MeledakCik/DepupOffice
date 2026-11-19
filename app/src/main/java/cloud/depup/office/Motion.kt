@@ -21,10 +21,10 @@ import kotlin.math.roundToInt
  *   [EXIT] untuk yang pergi.
  * - Tiga durasi saja: [FAST] 150 ms (pergi / memudar keluar), [MED] 250 ms (memudar masuk, isi berganti),
  *   [SLOW] 350 ms (pindah tab, penanda, lembar, kapsul). Umpan balik tekan: [PRESS_DOWN] turun, [PRESS_UP] naik.
- * - Tanpa pantulan (overshoot) dan tanpa gelombang bertahap: elemen yang bergerak bersama mulai & berhenti
- *   bersamaan, ke satu arah, dengan jarak geser yang sama ([SHIFT_DP]).
- * - Satu pengecualian: pil penanda / lensa tab ([PillIndicator]) digerakkan pegas fisika — mengikuti kecepatan &
- *   jari, mendarat dengan pantulan kecil yang lembut, seperti tetes air.
+ * - Micro-motion PEGAS ([SpringInterpolator]): tekan-lepas memantul seperti jeli ([springPress]), ikon & lencana
+ *   muncul memantul ([boing]), isi tab/lembar masuk bertahap dalam gelombang singkat ([cascadeIn]), lembar & dialog
+ *   mendarat dengan pantulan lembut. Pegas selalu berakhir TEPAT di nilai tujuan.
+ * - Pil penanda / lensa tab ([PillIndicator]) digerakkan pegas fisika sungguhan — mengikuti kecepatan & jari.
  *
  * Aturan penting di dalam wadah kaca: animasi transparansi selalu TANPA lapisan offscreen ([noLayer]) —
  * lebih ringan, dan aman untuk blur waktu-nyata.
@@ -47,6 +47,16 @@ object Motion {
     /** Jarak geser standar untuk isi yang masuk/berganti (dp). */
     const val SHIFT_DP = 10
 
+    /** Pegas memantul (lepas tekan, ikon muncul): pantulan ±12%, diam dalam [SPRING_MS]. */
+    val SPRING = SpringInterpolator(0.52f, 10.5f)
+    /** Pegas lembut (isi masuk, lembar, notifikasi): pantulan ±2%, terasa "mendarat". */
+    val SPRING_SOFT = SpringInterpolator(0.78f, 7.2f)
+    const val SPRING_MS = 480L
+    const val SPRING_SOFT_MS = 560L
+    /** Jeda antar-anak pada gelombang masuk ([cascadeIn]) & batas anak yang diberi jeda. */
+    const val CASCADE_STEP = 28L
+    const val CASCADE_MAX = 8
+
     /** false saat render ulang yang tidak perlu dianimasikan (mis. kembali dari layar lain). */
     @Volatile var quiet = false
 
@@ -55,6 +65,84 @@ object Motion {
     /** Nomor gerak terakhir tiap tampilan: pengaman akhir gerak lama tidak memotong gerak yang lebih baru. */
     internal val gen = WeakHashMap<View, Int>()
     internal fun next(v: View): Int { val n = (gen[v] ?: 0) + 1; gen[v] = n; return n }
+}
+
+/**
+ * Kurva pegas teredam untuk animator berdurasi: x(t) = 1 − e^(−ζωt)·(cos ω_d t + ζω/ω_d · sin ω_d t), t ∈ [0, 1].
+ * ζ < 1 → memantul lembut lalu diam; nilai 1 tepat di akhir (tidak pernah "melompat" di frame terakhir).
+ * [omega] dipilih sehingga ζ·ω ≥ ~5,5 → simpangan sudah < 0,5% sebelum durasi habis.
+ */
+class SpringInterpolator(private val zeta: Float, private val omega: Float) : android.view.animation.Interpolator {
+    private val wd = omega * kotlin.math.sqrt(1f - zeta * zeta)
+    private val end = raw(1f)
+    private fun raw(t: Float): Float {
+        val e = kotlin.math.exp(-zeta * omega * t)
+        return 1f - e * (kotlin.math.cos(wd * t) + zeta * omega / wd * kotlin.math.sin(wd * t))
+    }
+    override fun getInterpolation(t: Float): Float = if (t >= 1f) 1f else raw(t) / end
+}
+
+/**
+ * Tekan-lepas seperti jeli: turun cepat ke [to] saat ditekan, dilepas memantul kembali ke 1 ([Motion.SPRING]).
+ * Lewat StateListAnimator (status "ditekan") — TIDAK memasang pendengar sentuh, jadi aman dipakai bersama
+ * ketukan, seret, tekan lama & ripple apa pun.
+ */
+fun View.springPress(to: Float = 0.97f) {
+    val down = android.animation.AnimatorSet().apply {
+        playTogether(android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_X, to),
+            android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_Y, to))
+        duration = Motion.PRESS_DOWN; interpolator = Motion.STANDARD
+    }
+    val up = android.animation.AnimatorSet().apply {
+        playTogether(android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_X, 1f),
+            android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_Y, 1f))
+        duration = Motion.SPRING_MS; interpolator = Motion.SPRING
+    }
+    stateListAnimator = android.animation.StateListAnimator().apply {
+        addState(intArrayOf(android.R.attr.state_pressed, android.R.attr.state_enabled), down)
+        addState(intArrayOf(), up)
+    }
+}
+
+/** Muncul memantul dari [from] ke ukuran asli (ikon, lencana, tanda sukses). */
+fun View.boing(from: Float = 0.82f, delay: Long = 0L) {
+    if (!Motion.on()) return
+    animate().cancel()
+    scaleX = from; scaleY = from
+    animate().scaleX(1f).scaleY(1f).setStartDelay(delay).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING)
+        .setUpdateListener(null).withEndAction { scaleX = 1f; scaleY = 1f }.start()
+}
+
+/**
+ * Gelombang masuk: anak-anak wadah ini meluncur ke tempatnya satu per satu (jeda [Motion.CASCADE_STEP], pegas
+ * lembut). [fade] = ikut menebal — JANGAN di dalam wadah kaca (blur waktu-nyata); di sana cukup posisi.
+ * Dengan pengaman: setiap anak selalu berakhir di posisi & transparansi aslinya.
+ */
+fun ViewGroup.cascadeIn(dyDp: Int = 16, dxDp: Int = 0, fade: Boolean = false, delay: Long = 0L, skip: Int = 0) {
+    if (!Motion.on()) return
+    var k = 0
+    for (i in skip until childCount) {
+        val c = getChildAt(i)
+        if (c.visibility != View.VISIBLE) continue
+        val d = delay + minOf(k, Motion.CASCADE_MAX) * Motion.CASCADE_STEP
+        k++
+        val n = Motion.next(c)
+        c.animate().cancel()
+        val a0 = if (fade) c.alpha else -1f            // transparansi asli (mis. tombol nonaktif) dipertahankan
+        val done = {
+            if (Motion.gen[c] == n) {
+                c.animate().cancel(); c.translationX = 0f; c.translationY = 0f
+                if (a0 >= 0f) c.alpha = a0
+                c.invalidate(); c.glassAncestor()?.invalidate()   // kaca di atasnya ikut memperbarui latar
+            }
+        }
+        c.translationX = dp(dxDp).toFloat(); c.translationY = dp(dyDp).toFloat()
+        val anim = c.animate().translationX(0f).translationY(0f)
+        if (a0 >= 0f) { c.noLayer(); c.alpha = 0f; anim.alpha(a0) }
+        anim.setStartDelay(d).setDuration(Motion.SPRING_SOFT_MS).setInterpolator(Motion.SPRING_SOFT).setUpdateListener(null)
+            .withEndAction(done).start()
+        c.postDelayed(done, d + Motion.SPRING_SOFT_MS + 150L)
+    }
 }
 
 /** Transparansi tanpa lapisan offscreen: alfa dikalikan langsung ke tiap gambar anak (ringan & aman di wadah kaca). */
@@ -90,16 +178,8 @@ fun ViewGroup.swapContent(dxDp: Int = 0, dyDp: Int = 6, rebuild: () -> Unit) {
         v.animate().alpha(0f).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD).setUpdateListener(null)
             .withEndAction { ov.remove(v) }.start()
     }
-    val sx = dp(dxDp).toFloat()
-    val sy = dp(dyDp).toFloat()
-    for (i in 0 until childCount) {
-        val c = getChildAt(i)
-        if (c.visibility != View.VISIBLE) continue
-        c.animate().cancel()
-        c.translationX = sx; c.translationY = sy
-        c.animate().translationX(0f).translationY(0f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD)
-            .setUpdateListener(null).withEndAction { c.translationX = 0f; c.translationY = 0f }.start()
-    }
+    // isi baru masuk dalam gelombang singkat berpegas (hanya posisi: aman di wadah kaca, tidak pernah kosong)
+    cascadeIn(dyDp = dyDp * 2, dxDp = dxDp * 2)
 }
 
 /**
@@ -122,12 +202,12 @@ fun View.shiftIn(dxDp: Int = 0, dyDp: Int = Motion.SHIFT_DP, delay: Long = 0L, d
 /** Meluncur ke tempatnya tanpa menghilang dulu (nama lama, kini sama dengan [shiftIn]). */
 fun View.glide(delay: Long = 0L, dyDp: Int = Motion.SHIFT_DP, dxDp: Int = 0) = shiftIn(dxDp, dyDp, delay)
 
-/** Muncul dengan sedikit membesar ke ukuran asli — tanpa pantulan. */
+/** Muncul dengan sedikit membesar ke ukuran asli, mendarat dengan pantulan lembut. */
 fun View.pop(from: Float = 0.92f, delay: Long = 0L) {
     if (!Motion.on()) return
     animate().cancel()
     scaleX = from; scaleY = from
-    animate().scaleX(1f).scaleY(1f).setStartDelay(delay).setDuration(Motion.MED).setInterpolator(Motion.STANDARD)
+    animate().scaleX(1f).scaleY(1f).setStartDelay(delay).setDuration(Motion.SPRING_SOFT_MS).setInterpolator(Motion.SPRING_SOFT)
         .setUpdateListener(null).withEndAction { scaleX = 1f; scaleY = 1f }.start()
 }
 
