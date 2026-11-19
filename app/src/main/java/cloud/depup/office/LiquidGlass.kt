@@ -306,8 +306,12 @@ half4 main(float2 xy) {
         float shadeZone = dark > 0.5 ? bz * 0.45 : bz * 0.6;
         float shade = (1.0 - smoothstep(0.0, shadeZone, inside)) * max(-facing, 0.0);
         if (dark > 0.5) { col *= 1.0 - shade * 0.12; } else { col -= float3(1.0, 1.0, 1.0) * (shade * 0.05); }
-        float rimBand = 1.0 - smoothstep(0.0, 1.5 * px, inside);
-        float rim = rimBand * (max(facing, 0.0) * 0.9 + max(-facing, 0.0) * 0.35);
+        // Garis kilau tepi: terang di sisi yang menghadap cahaya, sangat redup di seberangnya. Di kaca GELAP garis putih
+        // yang sama mencolok di atas latar gelap dan melingkari kapsul seperti outline — dibuat lebih tipis & redup,
+        // sisi seberangnya nyaris hilang (kilau, bukan garis tepi).
+        float rimBand = 1.0 - smoothstep(0.0, (dark > 0.5 ? 1.0 : 1.5) * px, inside);
+        float rim = rimBand * (dark > 0.5 ? max(facing, 0.0) * 0.7 + max(-facing, 0.0) * 0.12
+                                          : max(facing, 0.0) * 0.9 + max(-facing, 0.0) * 0.25);
         float zone = 1.0 - smoothstep(0.0, bz, inside);
         float glow = zone * zone * (0.55 + 0.45 * facing);
         float gk = dark > 0.5 ? 0.05 : 0.09;
