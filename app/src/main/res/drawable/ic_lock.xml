@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Depup Line: ikon garis 24dp, tebal 1.75, ujung & sambungan membulat. Warna diatur lewat tint di kode. -->
+<!-- Depup Solid: ikon solid membulat 24dp — bentuk penuh bersudut squircle, detail berupa lubang, ujung garis
+     bulat, celah antar-bagian. Dibuat oleh tools/icons/gen.py; warna diatur lewat tint di kode. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:pathData="M7.5 10.5V8a4.5 4.5 0 0 1 9 0v2.5" android:fillColor="#00000000" android:strokeColor="#FF111111" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" />
-    <path android:pathData="M5.5 12.5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2zM12 14.5v2" android:fillColor="#00000000" android:strokeColor="#FF111111" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:fillColor="#FF111111" android:fillType="evenOdd"
+        android:pathData="M17.25 9.87L17.19 6.44L17.05 5.77L16.58 4.64L16.21 4.07L15.25 3.08L14.69 2.69L13.94 2.32L12.61 1.99L11.92 1.95L10.71 2.11L10.06 2.32L9.31 2.69L8.24 3.54L7.42 4.64L6.91 5.91L6.75 7.12L6.75 9.87L5.70 10.11L5.24 10.34L4.85 10.65L4.54 11.04L4.31 11.50L4.14 12.06L4.03 12.77L4.00 14.06L4.03 18.43L4.14 19.14L4.31 19.70L4.54 20.16L4.85 20.55L5.24 20.86L5.70 21.09L6.26 21.26L6.97 21.37L8.26 21.40L17.03 21.37L17.74 21.26L18.30 21.09L18.76 20.86L19.15 20.55L19.46 20.16L19.69 19.70L19.86 19.14L19.97 18.43L19.97 12.77L19.86 12.06L19.69 11.50L19.46 11.04L19.15 10.65L18.76 10.34L18.30 10.11ZM9.15 6.44L9.28 6.07L9.66 5.41L10.21 4.86L10.87 4.48L11.24 4.35L12.00 4.25L12.76 4.35L13.47 4.65L14.08 5.12L14.34 5.41L14.72 6.07L14.85 6.44L14.95 7.24L14.95 9.80L9.05 9.80L9.05 7.24ZM10.87 13.98L11.19 13.39L11.56 13.14L12.00 13.05L12.64 13.24L13.06 13.76L13.15 14.20L13.13 17.02L12.81 17.61L12.44 17.86L12.00 17.95L11.56 17.86L11.19 17.61L10.94 17.24L10.85 16.80Z" />
 </vector>
