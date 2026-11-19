@@ -28,8 +28,11 @@
         <item name="android:activityCloseExitAnimation">@anim/act_close_exit</item>
     </style>
 
+    <!-- Menu pop-up: tumbuh dari tombol pemicu dengan pantulan pegas, ditutup menyusut & memudar (MenuPop.kt). -->
     <style name="PopupMenu" parent="Widget.AppCompat.PopupMenu">
         <item name="android:popupBackground">@drawable/dlg_bg</item>
+        <item name="android:popupEnterTransition">@transition/menu_pop</item>
+        <item name="android:popupExitTransition">@transition/menu_pop</item>
     </style>
 
     <style name="DlgTheme" parent="Theme.AppCompat.DayNight.Dialog.Alert">

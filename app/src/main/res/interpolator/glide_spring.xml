@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Meluncur cepat lalu mendarat dengan pantulan pegas kecil (±3%) — perpindahan layar. -->
+<pathInterpolator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:pathData="M0,0 C0.16,0.72 0.26,1.035 0.48,1.014 C0.66,0.996 0.8,1 1,1" />

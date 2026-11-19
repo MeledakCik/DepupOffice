@@ -628,7 +628,7 @@ class ViewerActivity : AppCompatActivity() {
                 isHorizontalScrollBarEnabled = false
                 target = rv
                 onCommit = { f, fx, fy, finish -> setZoom(zoom * f, fx, fy, finish) }
-                onDouble = { fx, fy -> setZoom(if (zoom > 1.05f) 1f else 2f, fx, fy) }
+                onDouble = { fx, fy -> animateZoom(if (zoom > 1.05f) 1f else 2f, fx, fy) }
                 addView(rv, FrameLayout.LayoutParams(baseW, MATCH))
             }
             stage.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -660,12 +660,12 @@ class ViewerActivity : AppCompatActivity() {
                 setPadding(dp(10), dp(6), dp(6), dp(6))
             }
             tb.add(icon(R.drawable.ic_zoom_out, C.TEXT, 22).asButton("Perkecil").apply {
-                setOnClickListener { setZoom(zoom - 0.5f, baseW / 2f, scroll.height / 2f) }
+                setOnClickListener { animateZoom(zoom - 0.5f, scroll.width / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             zoomLabel = tv("100%", 13f, C.TEXT, true).apply { gravity = Gravity.CENTER }
             tb.add(zoomLabel, w = dp(52))
             tb.add(icon(R.drawable.ic_zoom_in, C.TEXT, 22).asButton("Perbesar").apply {
-                setOnClickListener { setZoom(zoom + 0.5f, baseW / 2f, scroll.height / 2f) }
+                setOnClickListener { animateZoom(zoom + 0.5f, scroll.width / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             if (!secure) tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
                 setOnClickListener { requirePassword("Cetak Dokumen") { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } } }
@@ -710,9 +710,15 @@ class ViewerActivity : AppCompatActivity() {
             v.animate().cancel()
             if (show) {
                 v.visibility = View.VISIBLE
-                if (Motion.on()) v.animate().alpha(1f).setDuration(Motion.MED).start() else v.alpha = 1f
+                // kembali dengan pegas: membesar dari 90% & menebal, mendarat sedikit memantul
+                if (Motion.on()) {
+                    if (v.alpha < 0.01f) { v.scaleX = 0.9f; v.scaleY = 0.9f }
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
+                    android.animation.ObjectAnimator.ofFloat(v, View.ALPHA, 1f).apply { duration = Motion.FAST + 40L }.start()   // transparansi tanpa pantulan
+                } else { v.alpha = 1f; v.scaleX = 1f; v.scaleY = 1f }
             } else if (Motion.on()) {
-                v.animate().alpha(0f).setDuration(Motion.MED).withEndAction { if (v.alpha < 0.01f) v.visibility = View.INVISIBLE }.start()
+                v.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(Motion.FAST + 40L).setInterpolator(Motion.EXIT)
+                    .withEndAction { if (v.alpha < 0.01f) v.visibility = View.INVISIBLE }.start()
             } else { v.alpha = 0f; v.visibility = View.INVISIBLE }
         }
     }
@@ -1218,6 +1224,36 @@ class ViewerActivity : AppCompatActivity() {
         zoomLabel.text = "${(zoom * 100).toInt()}%"
     }
 
+    private var zoomAnim: android.animation.ValueAnimator? = null
+
+    /**
+     * Zoom beranimasi (ketuk ganda, tombol +/−): halaman membesar/mengecil SECARA VISUAL di sekitar titik fokus dengan
+     * pegas lembut, lalu tata letak final diterapkan tepat sebelum frame berikutnya — jalur yang sama dengan akhir
+     * cubitan, jadi tanpa kedip. Dulu keduanya melompat langsung ke ukuran baru.
+     */
+    private fun animateZoom(z: Float, focusX: Float, focusY: Float) {
+        val nz = z.coerceIn(0.5f, 2.5f)
+        if (zoomAnim?.isRunning == true) return            // ketukan beruntun: tunggu yang sedang berjalan
+        if (!Motion.on() || abs(nz - zoom) < 0.05f) { setZoom(nz, focusX, focusY); return }
+        val ratio = nz / zoom
+        rv.pivotX = scroll.scrollX + focusX
+        rv.pivotY = focusY
+        val a = android.animation.ValueAnimator.ofFloat(1f, ratio)
+        a.duration = Motion.SPRING_SOFT_MS - 120L
+        a.interpolator = Motion.SPRING_SOFT
+        a.addUpdateListener { val s = it.animatedValue as Float; rv.scaleX = s; rv.scaleY = s }
+        a.addListener(object : android.animation.AnimatorListenerAdapter() {
+            private var cancelled = false
+            override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true; rv.scaleX = 1f; rv.scaleY = 1f }
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                if (cancelled) return
+                setZoom(nz, focusX, focusY) { rv.scaleX = 1f; rv.scaleY = 1f }
+            }
+        })
+        zoomAnim = a
+        a.start()
+    }
+
     private fun setZoom(z: Float, focusX: Float, focusY: Float, finishVisual: (() -> Unit)? = null) {
         // Allow zooming below 100% so the minus button and pinch-out actually shrink the page.
         val nz = z.coerceIn(0.5f, 2.5f)
@@ -1386,6 +1422,7 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        zoomAnim?.cancel()
         guard.disable()
         // salinan terdekripsi (PDF terkunci / Dokumen Terlindungi) tidak boleh tertinggal di cache
         try {

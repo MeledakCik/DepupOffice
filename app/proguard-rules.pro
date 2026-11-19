@@ -22,3 +22,6 @@
     public static int d(...);
     public static int i(...);
 }
+
+# Transisi menu dipanggil lewat XML (res/transition/menu_pop.xml, atribut class) — jangan dibuang/diganti nama R8.
+-keep class cloud.depup.office.MenuPop { <init>(android.content.Context, android.util.AttributeSet); }
