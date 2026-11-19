@@ -74,4 +74,35 @@ class HardeningTest {
         assertNull(OxUtil.safeHref("file:///data/data/x"))
         assertFalse(OxUtil.safeHref(null) != null)
     }
+
+    @Test
+    fun xlsxBookWritesEverySheetWithUniqueNames() {
+        val f = File.createTempFile("buku", ".xlsx")
+        try {
+            XlsxWriter.writeBook(f, listOf(
+                XlsxWriter.Sheet("Data", listOf(listOf("a"))),
+                XlsxWriter.Sheet("data", listOf(listOf("b"))),
+                XlsxWriter.Sheet("Q1/Q2", listOf(listOf("c")))
+            ))
+            ZipFile(f).use { z ->
+                for (i in 1..3) assertTrue("sheet$i hilang", z.getEntry("xl/worksheets/sheet$i.xml") != null)
+                val wb = z.getInputStream(z.getEntry("xl/workbook.xml")).readBytes().toString(Charsets.UTF_8)
+                assertTrue(wb, wb.contains("name=\"Data\""))
+                assertTrue(wb, wb.contains("name=\"data (2)\""))
+                assertTrue(wb, wb.contains("name=\"Q1_Q2\""))
+                val rels = z.getInputStream(z.getEntry("xl/_rels/workbook.xml.rels")).readBytes().toString(Charsets.UTF_8)
+                assertTrue(rels, rels.contains("Id=\"rId4\"") && rels.contains("styles.xml"))
+            }
+        } finally {
+            f.delete()
+        }
+    }
+
+    @Test
+    fun invoicePricesAcceptIndonesianFormatting() {
+        assertEquals(15000L, InvoiceMakerManager.digits("15.000"))
+        assertEquals(1250000L, InvoiceMakerManager.digits("Rp 1.250.000"))
+        assertEquals(15000L, InvoiceMakerManager.digits("15,000"))
+        assertNull(InvoiceMakerManager.digits("gratis"))
+    }
 }

@@ -18,6 +18,7 @@ import androidx.appcompat.app.AppCompatActivity
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Pemindai Pasfoto & Ubah Warna Latar (ID Photo Maker & Background Changer).
@@ -97,11 +98,15 @@ object IdPhotoManager {
     }
 
     /**
-     * Buat lembar A4 berisi deretan pasfoto siap cetak.
+     * Buat lembar A4 berisi deretan pasfoto siap cetak, UKURAN FISIK TEPAT: lembar = A4 penuh (21 × 29,7 cm) pada
+     * [dpi] tertentu, pasfoto = ukuran cm-nya pada DPI yang sama. Dicetak "pas halaman" di A4, pasfoto 3×4 benar-benar
+     * 3×4 cm. (Dulu lembar 150 DPI tetapi pasfoto digambar seolah ±250 DPI → hasil cetak ±1,7× terlalu besar.)
      */
     fun createA4PrintSheet(pasfoto: Bitmap, aspect: AspectRatio): Bitmap {
-        val a4W = 1240
-        val a4H = 1754
+        val dpi = if (Perf.low) 200f else 300f
+        fun cm(v: Float) = (v / 2.54f * dpi).roundToInt()
+        val a4W = cm(21f)
+        val a4H = cm(29.7f)
         val sheet = Bitmap.createBitmap(a4W, a4H, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(sheet)
         canvas.drawColor(Color.WHITE)
@@ -110,24 +115,30 @@ object IdPhotoManager {
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             color = Color.LTGRAY
-            strokeWidth = 2f
+            strokeWidth = 1f
         }
 
-        // Ukuran cetak piksel untuk tiap jenis
-        val (pW, pH, cols, rows) = when (aspect) {
-            AspectRatio.SIZE_2X3 -> Tuple4(200, 300, 5, 4)
-            AspectRatio.SIZE_3X4 -> Tuple4(300, 400, 3, 3)
-            AspectRatio.SIZE_4X6 -> Tuple4(400, 600, 2, 2)
-            AspectRatio.SQUARE -> Tuple4(300, 300, 3, 4)
+        // ukuran cm sebenarnya; "1 × 1 (Persegi)" dicetak 3 × 3 cm
+        val (wCm, hCm) = when (aspect) {
+            AspectRatio.SIZE_2X3 -> 2f to 3f
+            AspectRatio.SIZE_3X4 -> 3f to 4f
+            AspectRatio.SIZE_4X6 -> 4f to 6f
+            AspectRatio.SQUARE -> 3f to 3f
         }
+        val pW = cm(wCm)
+        val pH = cm(hCm)
+        val gap = cm(0.3f)          // jarak potong antar-foto
+        val margin = cm(1f)         // tepi aman printer
+        val cols = ((a4W - 2 * margin + gap) / (pW + gap)).coerceAtLeast(1)
+        val rows = ((a4H - 2 * margin + gap) / (pH + gap)).coerceAtLeast(1)
 
-        val marginX = (a4W - (cols * pW + (cols - 1) * 30)) / 2
-        val marginY = (a4H - (rows * pH + (rows - 1) * 30)) / 2
+        val marginX = (a4W - (cols * pW + (cols - 1) * gap)) / 2
+        val marginY = (a4H - (rows * pH + (rows - 1) * gap)) / 2
 
         for (r in 0 until rows) {
             for (c in 0 until cols) {
-                val left = marginX + c * (pW + 30)
-                val top = marginY + r * (pH + 30)
+                val left = marginX + c * (pW + gap)
+                val top = marginY + r * (pH + gap)
                 val dstRect = Rect(left, top, left + pW, top + pH)
                 canvas.drawBitmap(pasfoto, null, dstRect, paint)
                 canvas.drawRect(dstRect, borderPaint)
@@ -137,7 +148,6 @@ object IdPhotoManager {
         return sheet
     }
 
-    private data class Tuple4(val pW: Int, val pH: Int, val cols: Int, val rows: Int)
 
     /**
      * Tampilkan dialog pembuat pasfoto.
@@ -259,7 +269,7 @@ object IdPhotoManager {
         val name = "Pasfoto_A4_${aspect.label.replace(" ", "")}_${System.currentTimeMillis()}"
         val out = Files.namedOut(activity, name, "png")
         FileOutputStream(out).use { a4Bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        activity.toast("Lembar cetak A4 disimpan ke Documents/DepUp Office/Gambar")
+        activity.toast("Lembar A4 disimpan di Documents/DepUp Office/Gambar. Cetak di kertas A4 dengan \"pas halaman\" (tanpa skala tambahan) agar ukuran pasfoto tepat.")
         activity.showImagePreviewDialog(a4Bmp, "Lembar Cetak A4 ${aspect.label}")
     }
 }

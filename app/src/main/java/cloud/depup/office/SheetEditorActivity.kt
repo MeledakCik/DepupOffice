@@ -91,6 +91,9 @@ class SheetEditorActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 sourceName = Files.baseName(name)
+                // editor memuat paling banyak 200 baris × 8 kolom (sheet pertama). Dulu sisanya dibuang DIAM-DIAM —
+                // ekspor lalu menghasilkan berkas yang kehilangan data tanpa pengguna tahu.
+                val cut = sheet != null && (sheet.rows.size > 200 || sheet.rows.any { it.size > 8 })
                 val title = if (sheet != null && sheet.rows.isNotEmpty()) {
                     fillMatrix(sheet.rows, sheet.boldRows)
                     sheet.name.ifBlank { sourceName ?: "Spreadsheet" }
@@ -99,6 +102,15 @@ class SheetEditorActivity : AppCompatActivity() {
                     loadTemplateMatrix()
                 }
                 buildUi(title)
+                if (cut) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Sebagian isi tidak dimuat")
+                        .setMessage("Spreadsheet ini lebih besar dari batas editor (200 baris × 8 kolom, sheet pertama). " +
+                            "Hanya bagian itu yang bisa diedit, dan berkas hasil ekspor hanya berisi bagian tersebut.\n\n" +
+                            "Berkas asli tidak diubah. Untuk melihat seluruh isi, buka berkas ini di pembaca.")
+                        .setPositiveButton("Mengerti", null)
+                        .show()
+                }
             }
         }, "sheet-open", 4L * 1024 * 1024).start()
     }
@@ -166,8 +178,9 @@ class SheetEditorActivity : AppCompatActivity() {
                     if (currentSheetIdx != idx) {
                         currentSheetIdx = idx
                         val targetM = sheetList[idx].second
-                        this@SheetEditorActivity.matrix.clear()
-                        this@SheetEditorActivity.matrix.addAll(targetM)
+                        // PINDAH penunjuk ke list milik sheet itu. Dulu isinya disalin ke `matrix` — padahal `matrix`
+                        // adalah list milik Sheet1 sendiri, jadi menambah/berpindah sheet mengosongkan Sheet1.
+                        this@SheetEditorActivity.matrix = targetM
                         numCols = targetM.maxOfOrNull { it.size } ?: 4
                         activeRow = 0
                         activeCol = 0
@@ -194,8 +207,7 @@ class SheetEditorActivity : AppCompatActivity() {
                 newMatrix.add(MutableList(4) { SheetCell("") })
                 sheetList.add(Pair("Sheet$newIndex", newMatrix))
                 currentSheetIdx = sheetList.size - 1
-                this@SheetEditorActivity.matrix.clear()
-                this@SheetEditorActivity.matrix.addAll(newMatrix)
+                this@SheetEditorActivity.matrix = newMatrix
                 numCols = 4
                 activeRow = 0
                 activeCol = 0
@@ -236,10 +248,11 @@ class SheetEditorActivity : AppCompatActivity() {
         if (sheetList.size > 1) {
             builder.setNeutralButton("Hapus Sheet") { _, _ ->
                 sheetList.removeAt(sheetIdx)
+                // sheet sebelum sheet aktif dihapus → nomor sheet aktif bergeser satu
+                if (sheetIdx < currentSheetIdx) currentSheetIdx--
                 currentSheetIdx = currentSheetIdx.coerceIn(0, sheetList.size - 1)
                 val targetM = sheetList[currentSheetIdx].second
-                this@SheetEditorActivity.matrix.clear()
-                this@SheetEditorActivity.matrix.addAll(targetM)
+                this@SheetEditorActivity.matrix = targetM
                 numCols = targetM.maxOfOrNull { it.size } ?: 4
                 activeRow = 0
                 activeCol = 0
@@ -718,6 +731,8 @@ class SheetEditorActivity : AppCompatActivity() {
             if (value.isNaN() || value.isInfinite()) null else value
         } catch (_: Exception) {
             null
+        } catch (_: StackOverflowError) {
+            null   // rantai rumus sangat panjang: sel ini "#ERROR!", bukan aplikasi tertutup
         } finally {
             visitingCells.remove(key)
         }
@@ -1162,31 +1177,41 @@ class SheetEditorActivity : AppCompatActivity() {
             val pdfFile = Files.namedOut(this, cleanName, "pdf")
 
             // nilai sel dihitung di thread UI (cepat, dengan cache) — evaluasi rumus tidak boleh berjalan bersamaan
-            // dengan penyuntingan di thread lain
-            val exportRows = evaluating {
-                matrix.indices.map { r -> (0 until numCols).map { c -> displayValue(r, c) } }
-            }
-            val boldRows = matrix.indices
-                .filter { r -> matrix[r].any { it.isBold } }
-                .toSet()
-            val cols = numCols
-            // rumus ikut disimpan sebagai rumus Excel (dulu hanya hasil tampilan berformat & dibulatkan 2 desimal)
-            val formulas = evaluating {
-                val m = HashMap<Long, Pair<String, Double?>>()
-                matrix.forEachIndexed { r, row ->
-                    row.forEachIndexed { c, cell ->
-                        val raw = cell.valStr.trim()
-                        if (raw.length > 1 && raw.startsWith("=")) m[r.toLong() * 100_000 + c] = raw to cellNumber(r, c)
+            // dengan penyuntingan di thread lain. SEMUA sheet diekspor (dulu hanya sheet yang sedang tampil — sheet
+            // lain hilang dari berkas tanpa peringatan).
+            val book = ArrayList<XlsxWriter.Sheet>()
+            val pdfText = StringBuilder("LAPORAN SPREADSHEET EXCEL\nJudul: $title\n")
+            val keepM = matrix
+            val keepCols = numCols
+            try {
+                for ((sheetName, m) in sheetList.toList()) {
+                    matrix = m   // rumus dihitung terhadap sheet-nya sendiri
+                    numCols = if (m === keepM) keepCols else (m.maxOfOrNull { it.size } ?: 1).coerceAtLeast(1)
+                    val cols = numCols
+                    val rows = evaluating { m.indices.map { r -> (0 until cols).map { c -> displayValue(r, c) } } }
+                    val boldRows = m.indices.filter { r -> m[r].any { it.isBold } }.toSet()
+                    // rumus ikut disimpan sebagai rumus Excel (dulu hanya hasil tampilan berformat & dibulatkan 2 desimal)
+                    val formulas = evaluating {
+                        val fx = HashMap<Long, Pair<String, Double?>>()
+                        m.forEachIndexed { r, row ->
+                            row.forEachIndexed { c, cell ->
+                                val raw = cell.valStr.trim()
+                                if (raw.length > 1 && raw.startsWith("=")) fx[r.toLong() * 100_000 + c] = raw to cellNumber(r, c)
+                            }
+                        }
+                        fx
                     }
+                    val name = if (sheetList.size == 1) title else sheetName
+                    book.add(XlsxWriter.Sheet(name, rows, boldRows, cols) { r, c -> formulas[r.toLong() * 100_000 + c] })
+                    if (sheetList.size > 1) pdfText.append("\n== ").append(sheetName).append(" ==\n") else pdfText.append('\n')
+                    pdfText.append(rows.joinToString("\n") { row -> row.joinToString(" | ") }).append('\n')
                 }
-                m
+            } finally {
+                matrix = keepM; numCols = keepCols
             }
             work("Mengekspor Spreadsheet Excel…", {
-                XlsxWriter.write(xlsxFile, title, exportRows, boldRows, cols) { r, c -> formulas[r.toLong() * 100_000 + c] }
-
-                val pdfText = "LAPORAN SPREADSHEET EXCEL\nJudul: $title\n\n" +
-                    exportRows.joinToString("\n") { row -> row.joinToString(" | ") }
-                Pdf.text(pdfText, pdfFile)
+                XlsxWriter.writeBook(xlsxFile, book)
+                Pdf.text(pdfText.toString(), pdfFile)
             }) { res ->
                 res.onSuccess {
                     showResult("Spreadsheet Berhasil Diekspor", xlsxFile, XLSX, "PDF juga dibuat: ${pdfFile.name}")

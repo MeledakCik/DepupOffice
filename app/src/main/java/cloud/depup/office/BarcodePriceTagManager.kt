@@ -99,7 +99,9 @@ object BarcodePriceTagManager {
     }
 
     fun showDialog(activity: AppCompatActivity) {
-        val autoCode = "899" + (10000000..99999999).random()
+        // 12 angka (899 = awalan GS1 Indonesia + 9 angka): sah untuk EAN-13 (digit cek ditambah otomatis) & Code 128.
+        // Dulu 11 angka — memilih EAN-13 tanpa mengubah kode selalu gagal.
+        val autoCode = "899" + (100000000..999999999).random()
 
         val fProduct = activity.field("Nama Produk").apply { setText("Kopi Susu Gula Aren") }
         val fCode = activity.field("Kode Barcode / SKU").apply { setText(autoCode) }
@@ -133,7 +135,15 @@ object BarcodePriceTagManager {
                     previewTagBmp = tagImg
                     ivPreview.setImageBitmap(tagImg)
                 } catch (_: Throwable) {
-                    activity.toast("Gagal membuat barcode")
+                    // jelaskan penyebabnya (dulu hanya "Gagal membuat barcode")
+                    val code = fCode.text.toString().trim().ifBlank { autoCode }
+                    activity.toast(when {
+                        currentFormat == BarcodeFormat.EAN_13 && (code.length !in 12..13 || !code.all { it.isDigit() }) ->
+                            "EAN-13 butuh 12 atau 13 angka (tanpa huruf/spasi)"
+                        currentFormat == BarcodeFormat.EAN_13 -> "Digit terakhir EAN-13 tidak cocok. Isi 12 angka saja, digit cek dihitung otomatis."
+                        currentFormat == BarcodeFormat.CODE_128 && code.any { it.code > 126 } -> "Code 128 hanya untuk huruf/angka biasa (tanpa emoji/aksen)"
+                        else -> "Gagal membuat barcode"
+                    })
                 }
             }
 

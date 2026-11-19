@@ -199,17 +199,17 @@ object BusinessCardManager {
         title: String
     ): File {
         val cleanName = name.ifBlank { "Kontak" }
-        val vcfContent = """
-            BEGIN:VCARD
-            VERSION:3.0
-            N:;$cleanName;;;
-            FN:$cleanName
-            ORG:$company
-            TITLE:$title
-            TEL;TYPE=CELL:$phone
-            EMAIL;TYPE=INTERNET:$email
-            END:VCARD
-        """.trimIndent()
+        // vCard 3.0 (RFC 2426): \ , ; dan baris baru WAJIB di-escape, baris diakhiri CRLF. Dulu tidak — mis. "PT Maju,
+        // Jaya" terpecah menjadi dua nilai saat diimpor ke Kontak.
+        fun e(v: String) = v.trim().replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;")
+            .replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+        val lines = mutableListOf("BEGIN:VCARD", "VERSION:3.0", "N:;${e(cleanName)};;;", "FN:${e(cleanName)}")
+        if (company.isNotBlank()) lines.add("ORG:${e(company)}")
+        if (title.isNotBlank()) lines.add("TITLE:${e(title)}")
+        if (phone.isNotBlank()) lines.add("TEL;TYPE=CELL:${e(phone)}")
+        if (email.isNotBlank()) lines.add("EMAIL;TYPE=INTERNET:${e(email)}")
+        lines.add("END:VCARD")
+        val vcfContent = lines.joinToString("\r\n", postfix = "\r\n")
 
         val file = Files.namedOut(ctx, "Kontak_${cleanName.replace(" ", "_")}", "vcf")
         FileOutputStream(file).use { out ->

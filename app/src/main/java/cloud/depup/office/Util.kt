@@ -323,7 +323,9 @@ object Files {
 
     fun newOut(ctx: Context, base: String, ext: String): File {
         val s = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        return File(outDir(ctx, ext), "${base}_$s.$ext")
+        // karakter jalur dibuang: "Nota_INV/2024/001" dulu menjadi folder bertingkat yang tidak ada → gagal simpan
+        val safe = base.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]+"), "_").trim().ifBlank { "dokumen" }.take(120)
+        return File(outDir(ctx, ext), "${safe}_$s.$ext")
     }
 
     /** Nama pilihan pengguna; kalau sudah ada, ditambah cap waktu supaya tidak menimpa. */

@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.text.TextPaint
+import android.text.TextUtils
 import android.widget.ScrollView
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
@@ -83,7 +84,12 @@ object DocumentSummarizerManager {
                 entry = zip.nextEntry
             }
             zip.close()
-            xml.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ")
+            // akhir paragraf Word (</w:p>) = baris baru; dulu semua tag jadi spasi → seluruh dokumen satu "paragraf"
+            // dan ringkasannya berisi seluruh dokumen sebagai satu poin
+            xml.replace(Regex("</w:p>|<w:br[^>]*/>"), "\n")
+                .replace(Regex("<[^>]+>"), "")
+                .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+                .replace(Regex("[ \\t]+"), " ")
         } else ""
     }
 
@@ -109,9 +115,11 @@ object DocumentSummarizerManager {
             Pair(p, score)
         }
 
-        return scored.sortedByDescending { it.second }
+        // 5 paragraf terpenting, ditampilkan dalam URUTAN ASLI dokumen (bukan urutan skor)
+        return scored.withIndex().sortedByDescending { it.value.second }
             .take(5)
-            .map { it.first }
+            .sortedBy { it.index }
+            .map { it.value.first }
     }
 
     private fun showSummarySheet(
@@ -164,8 +172,9 @@ object DocumentSummarizerManager {
         activity.work("Membuat PDF Ringkasan…", {
             val doc = PdfDocument()
             val pw = 595; val ph = 842 // A4
-            val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, 1).create())
-            val c = page.canvas
+            var pageNo = 1
+            var page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+            var c = page.canvas
             c.drawColor(Color.WHITE)
 
             val pTitle = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1652F6.toInt(); textSize = 20f; isFakeBoldText = true }
@@ -180,13 +189,26 @@ object DocumentSummarizerManager {
             c.drawLine(40f, y + 12f, pw - 40f, y + 12f, pLine)
             y += 36f
 
+            /** Halaman baru bila sisa ruang < [need] (dulu ringkasan panjang tergambar di luar kertas). */
+            fun room(need: Float) {
+                if (y + need <= ph - 40f) return
+                doc.finishPage(page)
+                pageNo++
+                page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, pageNo).create())
+                c = page.canvas
+                c.drawColor(Color.WHITE)
+                y = 50f
+            }
+            val pPoint = TextPaint(pTitle).apply { textSize = 14f }
             summary.keyPoints.forEachIndexed { idx, pt ->
-                c.drawText("${idx + 1}. Poin Penting:", 40f, y, pTitle.apply { textSize = 14f })
+                room(44f)
+                c.drawText("${idx + 1}. Poin Penting:", 40f, y, pPoint)
                 y += 20f
                 val words = pt.split(" ")
                 var line = ""
                 for (w in words) {
-                    if (pText.measureText("$line $w") > pw - 80f) {
+                    if (line.isNotEmpty() && pText.measureText("$line $w") > pw - 80f) {
+                        room(18f)
                         c.drawText(line, 40f, y, pText)
                         y += 18f
                         line = w
@@ -195,7 +217,8 @@ object DocumentSummarizerManager {
                     }
                 }
                 if (line.isNotEmpty()) {
-                    c.drawText(line, 40f, y, pText)
+                    room(18f)
+                    c.drawText(TextUtils.ellipsize(line, pText, pw - 80f, TextUtils.TruncateAt.END).toString(), 40f, y, pText)
                     y += 24f
                 }
             }

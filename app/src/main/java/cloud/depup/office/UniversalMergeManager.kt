@@ -17,8 +17,11 @@ import java.io.FileOutputStream
  */
 object UniversalMergeManager {
 
-    fun merge(ctx: Context, uris: List<Uri>, out: File, progress: (Int, Int) -> Unit = { _, _ -> }) {
+    /** Gabungkan; mengembalikan nama berkas yang TIDAK bisa ikut (terkunci/rusak/format tak dikenal). */
+    fun merge(ctx: Context, uris: List<Uri>, out: File, progress: (Int, Int) -> Unit = { _, _ -> }): List<String> {
         if (uris.isEmpty()) throw IllegalArgumentException("Tidak ada file yang dipilih")
+        // dulu berkas yang gagal dilewati DIAM-DIAM — hasil gabungan kehilangan dokumen tanpa pengguna tahu
+        val skipped = ArrayList<String>()
 
         val doc = PdfDocument()
         var pageCount = 0
@@ -28,7 +31,8 @@ object UniversalMergeManager {
             uris.forEachIndexed { idx, uri ->
                 progress(idx + 1, uris.size)
                 val mime = Files.mimeOf(ctx, uri).lowercase()
-                val name = Files.nameOf(ctx, uri).lowercase()
+                val shown = Files.nameOf(ctx, uri)
+                val name = shown.lowercase()
 
                 if (mime == PDF || name.endsWith(".pdf")) {
                     // Gabungkan PDF
@@ -43,6 +47,7 @@ object UniversalMergeManager {
                                 val w = pg.width
                                 val h = pg.height
                                 val bmp = Bitmap.createBitmap((w * 1.5f).toInt(), (h * 1.5f).toInt(), Bitmap.Config.ARGB_8888)
+                                bmp.eraseColor(Color.WHITE)
                                 pg.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                                 pg.close()
 
@@ -54,8 +59,8 @@ object UniversalMergeManager {
                             }
                             renderer.close()
                             pfd.close()
-                        }
-                    } catch (_: Throwable) {}
+                        } else skipped.add(shown)
+                    } catch (_: Throwable) { skipped.add(shown) }
                 } else {
                     // Gabungkan Foto / Gambar
                     try {
@@ -80,13 +85,14 @@ object UniversalMergeManager {
                             c.drawBitmap(bmp, null, Rect(dx, dy, dx + dw, dy + dh), bmpPaint)
                             doc.finishPage(pdfPg)
                             bmp.recycle()
-                        }
-                    } catch (_: Throwable) {}
+                        } else skipped.add(shown)
+                    } catch (_: Throwable) { skipped.add(shown) }
                 }
             }
 
             if (pageCount == 0) throw IllegalStateException("Tidak ada halaman yang berhasil digabung")
             FileOutputStream(out).use { doc.writeTo(it) }
+            return skipped
         } catch (t: Throwable) {
             out.delete()
             throw t
