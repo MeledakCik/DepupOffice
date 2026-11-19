@@ -200,6 +200,10 @@ class ViewerActivity : AppCompatActivity() {
     private fun shareTarget(viewUri: android.net.Uri): android.net.Uri = when {
         protectedBytes != null -> srcUri ?: viewUri
         lockedSource != null -> lockedSource!!
+        // salinan cache biasa ("open_…") dari berkas asli: bagikan berkas ASLINYA, supaya penerima melihat nama
+        // aslinya (bukan "open_nama.pdf") dan tidak bergantung pada salinan sementara
+        srcUri?.scheme == "content" && viewUri.scheme == "file" &&
+            (viewUri.lastPathSegment ?: "").startsWith("open_") -> srcUri!!
         else -> viewUri
     }
 
