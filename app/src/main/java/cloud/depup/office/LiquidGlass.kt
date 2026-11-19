@@ -201,7 +201,7 @@ half4 main(float2 xy) {
     float bz = max(bezel, 1.0);
     float inside = max(-d, 0.0);
     // lapisan tepi: hanya zona lengkung yang digambar; sisanya transparan (kaca utuh di bawahnya yang tampil)
-    if (layer > 0.5 && (d > 1.5 || inside >= bz * 0.85)) { return half4(0.0); }
+    if (layer > 0.5 && (d > 1.5 || inside >= bz * 0.9)) { return half4(0.0); }
     half4 here = content.eval(xy);
     if (d > 1.5) { return here; }
     float3 c0 = over(here, tint.rgb);
@@ -298,7 +298,7 @@ half4 main(float2 xy) {
     col = clamp(col, 0.0, 1.0);
     // lapisan tepi: alfa penuh di tepi, memudar ke dalam → menyatu mulus dengan kaca utuh (yang lebih buram) di bawahnya
     if (layer > 0.5) {
-        float a = 1.0 - smoothstep(0.25 * bz, 0.85 * bz, inside);
+        float a = 1.0 - smoothstep(0.3 * bz, 0.9 * bz, inside);
         return half4(half3(col * a), half(a));
     }
     return half4(half3(col), 1.0);
@@ -418,7 +418,7 @@ internal class LensDrawable(
         s.setFloatUniform("radius", h / 2f)
         s.setFloatUniform("slab", 0f)
         s.setFloatUniform("bezel", bezel)
-        s.setFloatUniform("thick", bezel * 0.7f)
+        s.setFloatUniform("thick", bezel * 0.9f)
         s.setFloatUniform("dispersion", LiquidGlass.dispersionAmount())
         s.setFloatUniform("light", GlassLight.x, GlassLight.y)
         s.setFloatUniform("tint", android.graphics.Color.red(tintColor) / 255f, android.graphics.Color.green(tintColor) / 255f,
