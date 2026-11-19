@@ -116,7 +116,80 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         val t = System.nanoTime()
         if (selPhase != 0) drawSelAnim(canvas)     // sorotan beranimasi di BAWAH teks (seperti sorotan bawaan)
         super.onDraw(canvas)
+        drawCaret(canvas)
         EdPerf.paraDrawNs += System.nanoTime() - t; EdPerf.paraDraws++
+    }
+
+    // =========================================================================================
+    // Kursor sendiri: garis aksen 2dp yang berkedip MEMUDAR (bukan hilang-muncul) dan MELUNCUR ke posisi baru saat
+    // dipindah dengan ketukan; saat mengetik langsung menempel. Kursor bawaan dimatikan (isCursorVisible = false) —
+    // itu juga mematikan pegangan & kaca pembesar kursor bawaan Android (diganti [SelectionKit]).
+    // =========================================================================================
+    internal var caretOn = true
+    internal var caretA = 1f
+    private var caretFadeAnim: android.animation.ValueAnimator? = null
+    private var caretMove: android.animation.ValueAnimator? = null
+    private var caretF = 1f
+    private var caretFromX = 0f; private var caretFromT = 0f; private var caretFromB = 0f
+    private var caretShownX = Float.NaN; private var caretShownT = 0f; private var caretShownB = 0f
+    private val caretPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    internal val blink: Runnable = object : Runnable {
+        override fun run() {
+            if (!isFocused || !isAttachedToWindow) return
+            caretOn = !caretOn
+            fadeCaret(if (caretOn) 1f else 0f)
+            postDelayed(this, if (caretOn) 530L else 380L)
+        }
+    }
+
+    private fun fadeCaret(to: Float) {
+        caretFadeAnim?.cancel()
+        if (!Motion.on()) { caretA = to; invalidate(); return }
+        caretFadeAnim = android.animation.ValueAnimator.ofFloat(caretA, to).apply {
+            duration = 150; interpolator = Motion.STANDARD
+            addUpdateListener { caretA = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
+
+    /** Kursor terlihat penuh lagi (diketik / dipindah) dan kedip dimulai ulang. */
+    private fun wakeCaret() {
+        caretFadeAnim?.cancel(); caretA = 1f; caretOn = true
+        removeCallbacks(blink); if (isFocused) postDelayed(blink, 530)
+    }
+
+    /** Kursor pindah karena ketukan: meluncur dari posisi yang tampil sekarang. */
+    private fun glideCaret() {
+        if (!Motion.on() || caretShownX.isNaN()) return
+        caretMove?.cancel()
+        caretFromX = caretShownX; caretFromT = caretShownT; caretFromB = caretShownB
+        caretF = 0f
+        caretMove = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.MED; interpolator = Motion.STANDARD
+            addUpdateListener { caretF = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
+
+    private fun drawCaret(c: Canvas) {
+        if (!isFocused || selectionStart != selectionEnd || selectionStart < 0 || !hasWindowFocus()) { caretShownX = Float.NaN; return }
+        val l = layout ?: return
+        val off = selectionStart.coerceIn(0, text?.length ?: 0)
+        val line = l.getLineForOffset(off)
+        val ox = compoundPaddingLeft.toFloat(); val oy = extendedPaddingTop.toFloat()
+        val tx = l.getPrimaryHorizontal(off) + ox
+        val tt = l.getLineTop(line) + oy; val tb = l.getLineBottom(line) + oy
+        val f = if (caretMove?.isRunning == true) caretF else 1f
+        val x = caretFromX + (tx - caretFromX) * f
+        val t = caretFromT + (tt - caretFromT) * f
+        val b = caretFromB + (tb - caretFromB) * f
+        caretShownX = x; caretShownT = t; caretShownB = b
+        if (caretA <= 0.01f) return
+        caretPaint.color = C.ACCENT
+        caretPaint.alpha = (255 * caretA).toInt()
+        val w = 2f * resources.displayMetrics.density
+        c.drawRoundRect(x - w / 2f, t + w * 0.5f, x + w / 2f, b - w * 0.5f, w / 2f, w / 2f, caretPaint)
     }
 
     // =========================================================================================
@@ -257,54 +330,141 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
     /** Jari sedang menyentuh paragraf ini (seleksi kata saat tekan-lama/ketuk-ganda harus diizinkan). */
     private var touching = false
 
-    /**
-     * PENYEBAB SELEKSI MATI: Editor Android menyiapkan pengendali seleksi (pegangan, menu Salin, ketuk-ganda,
-     * tekan-lama-geser) di prepareCursorControllers() — dipanggil saat paragraf dipasang / teks diganti. Saat itu
-     * paragraf belum fokus → onCheckIsTextEditor() = false → pengendali SELEKSI dimatikan permanen (pengendali
-     * kursor tetap hidup, makanya kursor bisa dipindah tapi kata tak bisa dipilih). Menyetel ulang isCursorVisible
-     * memanggil prepareCursorControllers() lagi — dilakukan saat ia sudah boleh mengaku editor.
-     */
-    private fun armSelection() {
-        val v = isCursorVisible
-        isCursorVisible = !v
-        isCursorVisible = v
-    }
-
-    // ---- ketuk tiga kali = pilih satu kalimat (sampai titik) ----
+    // =========================================================================================
+    // Seleksi milik Depup (lihat [SelectionKit]): kursor digambar sendiri (isCursorVisible = false mematikan
+    // pegangan & kaca pembesar kursor bawaan), tekan-lama / ketuk-ganda / ketuk-tiga ditangani di sini, pegangan &
+    // loupe kaca digambar SelectionKit. Pengendali seleksi bawaan tidak dinyalakan lagi.
+    // =========================================================================================
     private var tapCount = 0
     private var lastTapUp = 0L
     private var lastTapX = 0f
     private var lastTapY = 0f
+    private var downX = 0f
+    private var downY = 0f
+    private var swallow = false           // ketuk-ganda/tiga: seluruh gerakan ditangani sendiri
+    private var longDrag = false          // sesudah tekan-lama: geser jari memperluas seleksi
+    private var anchorA = 0
+    private var anchorB = 0
+    private var dragActive = false        // pegangan / tekan-lama sedang digeser (menu kaca menunggu)
+    private var focusedAtDown = false
+    private var selAtDown = -1
 
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
-            touching = true
-            if (!isFocused) armSelection()       // tekan-lama / ketuk-ganda di paragraf yang belum aktif
+        val vc = android.view.ViewConfiguration.get(context)
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                touching = true
+                downX = event.x; downY = event.y
+                focusedAtDown = isFocused
+                selAtDown = if (selectionStart == selectionEnd) selectionStart else -1
+                val near = kotlin.math.hypot(event.x - lastTapX, event.y - lastTapY) < vc.scaledDoubleTapSlop
+                val soon = event.eventTime - lastTapUp < android.view.ViewConfiguration.getDoubleTapTimeout()
+                tapCount = if (near && soon) tapCount + 1 else 1
+                if (tapCount >= 2) {
+                    // ketuk dua kali = satu kata, tiga kali = satu kalimat — ditangani sendiri, tidak ke Editor
+                    swallow = true
+                    val off = getOffsetForPosition(event.x, event.y)
+                    val n = tapCount
+                    if (tapCount >= 3) tapCount = 0
+                    post { if (n >= 3) selectSentence(off) else selectWord(off, true) }
+                    return true
+                }
+                swallow = false
+            }
+        }
+        if (swallow) {
+            if (event.actionMasked == android.view.MotionEvent.ACTION_UP || event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+                touching = false; swallow = false
+                lastTapUp = event.eventTime; lastTapX = event.x; lastTapY = event.y
+            }
+            return true
+        }
+        if (longDrag) {
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val off = getOffsetForPosition(event.x, event.y)
+                    setSelection(minOf(anchorA, off), maxOf(anchorB, off))
+                    loupeAt(off, event.x)
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    longDrag = false; touching = false
+                    tapCount = 0
+                    SelectionKit.hideLoupe()
+                    // Editor/View melepas status tekan dengan CANCEL (tanpa memindah kursor)
+                    val c = android.view.MotionEvent.obtain(event); c.action = android.view.MotionEvent.ACTION_CANCEL
+                    super.onTouchEvent(c); c.recycle()
+                    handleDragging(false)
+                }
+            }
+            return true
         }
         val r = super.onTouchEvent(event)
         when (event.actionMasked) {
             android.view.MotionEvent.ACTION_UP -> {
                 touching = false
-                countTap(event)
+                val quick = event.eventTime - event.downTime < android.view.ViewConfiguration.getLongPressTimeout()
+                lastTapUp = if (quick) event.eventTime else 0L
+                lastTapX = event.x; lastTapY = event.y
+                if (quick && isFocused && selectionStart == selectionEnd) {
+                    // ketukan tunggal: pegangan kursor kaca muncul; mengetuk kursor yang sama = menu Tempel
+                    SelectionKit.showCaret(this)
+                    if (focusedAtDown && selAtDown == selectionStart) showSelectionMenu()
+                }
             }
             android.view.MotionEvent.ACTION_CANCEL -> { touching = false; tapCount = 0 }
         }
         return r
     }
 
-    private fun countTap(e: android.view.MotionEvent) {
-        val vc = android.view.ViewConfiguration.get(context)
-        val quick = e.eventTime - e.downTime < android.view.ViewConfiguration.getLongPressTimeout()
-        val near = kotlin.math.hypot(e.x - lastTapX, e.y - lastTapY) < vc.scaledDoubleTapSlop
-        val soon = e.eventTime - lastTapUp < android.view.ViewConfiguration.getDoubleTapTimeout() + 120
-        tapCount = if (quick && near && soon) tapCount + 1 else if (quick) 1 else 0
-        lastTapUp = e.eventTime; lastTapX = e.x; lastTapY = e.y
-        if (tapCount >= 3) {
-            tapCount = 0
-            val off = getOffsetForPosition(e.x, e.y)
-            post { selectSentence(off) }      // sesudah Editor selesai memproses ketukan ketiga
+    override fun performLongClick(): Boolean {
+        // tekan-lama = pilih kata, lalu geser jari untuk memperluas (TANPA pengendali Editor bawaan)
+        if (!touching) return super.performLongClick()       // aksesibilitas / keyboard: perilaku bawaan
+        val off = getOffsetForPosition(downX, downY)
+        if (!selectWord(off, false)) return super.performLongClick()
+        anchorA = selectionStart; anchorB = selectionEnd
+        longDrag = true
+        handleDragging(true)
+        loupeAt(off, downX)
+        performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        return true
+    }
+
+    /** Kaca pembesar di posisi jari [x], tegak dikunci ke tengah baris [off]. */
+    private fun loupeAt(off: Int, x: Float) {
+        val l = layout ?: return
+        val line = l.getLineForOffset(off.coerceIn(0, text?.length ?: 0))
+        SelectionKit.showLoupe(this, x, (l.getLineTop(line) + l.getLineBottom(line)) / 2f + totalPaddingTop - scrollY)
+    }
+
+    /** Pilih kata di sekitar [off]. [menu] = langsung tampilkan menu kaca. false bila tidak ada teks. */
+    private fun selectWord(off: Int, menu: Boolean): Boolean {
+        val t = text ?: return false
+        if (t.isEmpty()) return false
+        val o = off.coerceIn(0, t.length)
+        val bi = java.text.BreakIterator.getWordInstance()
+        bi.setText(t.toString())
+        var s = if (bi.isBoundary(o)) o else bi.preceding(o)
+        var e = bi.following(s).let { if (it == java.text.BreakIterator.DONE) t.length else it }
+        // di spasi / tanda baca: ambil kata sebelumnya (seperti Android)
+        if (e <= s || t.substring(s, e).isBlank()) {
+            val p = bi.preceding(s.coerceAtLeast(1)).coerceAtLeast(0)
+            if (p < s) { e = s; s = p }
         }
+        while (e > s && t[e - 1].isWhitespace()) e--
+        if (e <= s) return false
+        if (!isFocused) requestFocus()
+        setSelection(s, e)
+        SelectionKit.showSelection(this)
+        if (menu) showSelectionMenu()
+        return true
+    }
+
+    /** Pegangan / tekan-lama sedang digeser: menu kaca menyingkir; dilepas → menu kembali. */
+    fun handleDragging(on: Boolean) {
+        dragActive = on
+        if (on) { removeCallbacks(glassShow); SelectionGlass.hide(this) }
+        else if (selectionStart != selectionEnd) { SelectionKit.showSelection(this); showSelectionMenu() }
     }
 
     /** Pilih satu kalimat di sekitar [off]: dari sesudah tanda akhir kalimat sebelumnya sampai titik/!/? berikutnya. */
@@ -322,6 +482,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         if (en <= s) return
         if (!isFocused) requestFocus()
         setSelection(s, en)
+        SelectionKit.showSelection(this)
         showSelectionMenu()
     }
 
@@ -351,7 +512,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
 
     /** Tampilkan / pindahkan menu kaca ke seleksi (atau kursor) saat ini. */
     private fun showGlass() {
-        if ((sysMode == null && !manualGlass) || !isFocused || !isAttachedToWindow) return
+        if ((sysMode == null && !manualGlass) || dragActive || !isFocused || !isAttachedToWindow) return
         val l = layout ?: return
         val n = text?.length ?: 0
         val a = selectionStart.coerceIn(0, n); val b = selectionEnd.coerceIn(0, n)
@@ -396,11 +557,6 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         if (rapid) { SelectionGlass.hide(this); postDelayed(glassShow, 280) } else postDelayed(glassShow, 30)
     }
 
-    override fun performLongClick(): Boolean {
-        val was = touching
-        touching = true
-        try { return super.performLongClick() } finally { touching = was }
-    }
 
     lateinit var para: EPara
     var base: CharFmt = CharFmt(sz = 22)
@@ -428,7 +584,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         }
 
         override fun afterTextChanged(e: Editable) {
-            if (!binding) { dirty = true; version++; lastChange = android.os.SystemClock.uptimeMillis() }
+            if (!binding) { dirty = true; version++; lastChange = android.os.SystemClock.uptimeMillis(); SelectionKit.typed(this@ParaEdit) }
             if (suppress || !::para.isInitialized) return
             host.pending?.let { pd ->
                 if (pd.editor === this@ParaEdit && insCount > 0) {
@@ -456,6 +612,10 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         // Dokumen terkunci: Salin/Potong tidak pernah ada di menu kaca (dan tetap ditolak di onTextContextMenuItem).
         customSelectionActionModeCallback = glassCallback(false)
         customInsertionActionModeCallback = glassCallback(true)
+        // kursor & pegangan bawaan mati (kursor digambar sendiri, pegangan & loupe oleh SelectionKit)
+        isCursorVisible = false
+        val none = android.graphics.drawable.GradientDrawable().apply { setColor(Color.TRANSPARENT); setSize(1, 1) }
+        setTextSelectHandle(none); setTextSelectHandleLeft(none); setTextSelectHandleRight(none)
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         // lanskap: keyboard tidak mengambil alih layar penuh — dokumen tetap terlihat saat mengetik
         imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
@@ -579,7 +739,13 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
-        if (!suppress && !binding) { selChangedAnim(selStart, selEnd); glassOnSelChanged(selStart, selEnd) } else { lastSelA = selStart; lastSelB = selEnd }
+        if (!suppress && !binding) {
+            val tapMove = selStart == selEnd && lastSelA == lastSelB && selStart != lastSelA && touching
+            selChangedAnim(selStart, selEnd); glassOnSelChanged(selStart, selEnd)
+            if (tapMove) glideCaret()
+        } else { lastSelA = selStart; lastSelB = selEnd }
+        SelectionKit.refresh()       // pegangan mengikuti (seleksi lepas → pegangan seleksi tidak digambar)
+        wakeCaret()
         if (::para.isInitialized && !suppress) { lastChange = android.os.SystemClock.uptimeMillis(); host.onSel(this) }
     }
 
@@ -589,8 +755,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         if (!focused && !spellAll) text?.let { t -> for (sp in t.getSpans(0, t.length, android.text.style.SuggestionSpan::class.java)) t.removeSpan(sp) }
         if (!focused) { manualGlass = false; removeCallbacks(glassShow); SelectionGlass.hide(this) }
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
-        // baru fokus: kini boleh mengaku editor → hidupkan pengendali seleksi (lihat armSelection)
-        if (focused) armSelection()
+        if (focused) { caretOn = true; caretA = 1f; removeCallbacks(blink); postDelayed(blink, 530) } else { removeCallbacks(blink); SelectionKit.hide(this) }
         // lepas fokus: hitung ulang pelacakan (menyetel ini memanggil updatePositionUpdateListener) → pendengar dibuang
         if (!focused && trackGuard && android.os.Build.VERSION.SDK_INT >= 33) isAutoHandwritingEnabled = false
         if (focused && ::para.isInitialized) host.onSel(this)
@@ -710,7 +875,7 @@ class EditorScroll(ctx: Context) : GlassScrollView(ctx) {
     private var pinching = false
     private val scaleDet = android.view.ScaleGestureDetector(ctx, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: android.view.ScaleGestureDetector): Boolean {
-            zoomFrame?.zoomBy(d.scaleFactor, d.focusX, d.focusY); return true
+            zoomFrame?.zoomBy(d.scaleFactor, d.focusX, d.focusY); SelectionKit.refresh(); return true
         }
     }).apply { isQuickScaleEnabled = false }
 
@@ -1193,6 +1358,7 @@ class ZoomFrame(ctx: Context) : android.widget.FrameLayout(ctx) {
     fun zoomBy(f: Float, fx: Float, fy: Float) = zoomTo(zoom * f, fx, fy)
 
     fun zoomTo(z: Float, fx: Float, fy: Float) {
+        SelectionKit.refresh()   // pegangan seleksi ikut posisi baru
         val nz = z.coerceIn(minZoom, maxZoom)
         if (Math.abs(nz - zoom) < 1e-4f) return
         val c = getChildAt(0) ?: return
