@@ -52,7 +52,14 @@ object GlassToast {
 
     private fun attach(act: Activity, msg: String, long: Boolean) {
         val decor = act.window.decorView as? ViewGroup ?: throw IllegalStateException()
-        current?.get()?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        current?.get()?.let { old ->
+            val p = old.parent
+            if (p is GlassScaffold && old is GlassSurface) p.removeFloating(old) else (p as? ViewGroup)?.removeView(old)
+        }
+        // Layar berkaca: kapsul jadi kaca HIDUP yang membaca isi layar real-time (ikut bergerak saat isi di
+        // belakangnya bergulir/berubah), bukan tangkapan layar diam.
+        val sc = GlassContent.find(decor)?.parent as? GlassScaffold
+        if (sc != null && sc.isAttachedToWindow && sc.height > 0) { attachLive(act, sc, msg, long); return }
 
         val ctx = act
         val dark = C.dark
@@ -138,14 +145,67 @@ object GlassToast {
         }
     }
 
+    /** Kapsul kaca hidup di dalam [sc] (lihat [GlassScaffold.addFloating]). */
+    private fun attachLive(act: Activity, sc: GlassScaffold, msg: String, long: Boolean) {
+        val ctx = act
+        val cap = GlassSurface(ctx).apply {
+            tintColor = { C.PANEL }
+            tintAlpha = Glass.toneAlpha(224)
+            liquidTint = Glass.toneTint(0.5f)
+            corner = ctx.dp(100).toFloat()      // bentuk kapsul: dibatasi setengah tinggi
+            alpha = 0f
+            elevation = ctx.dp(6).toFloat()
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        val text = TextView(ctx).apply {
+            this.text = msg
+            textSize = 14f
+            setTextColor(C.ON_PANEL)
+            gravity = Gravity.CENTER
+            maxLines = 4
+            setPadding(ctx.dp(20), ctx.dp(12), ctx.dp(20), ctx.dp(12))
+            try { typeface = Fonts.label(ctx) } catch (_: Throwable) {}
+        }
+        cap.addView(text, FrameLayout.LayoutParams(WRAP, WRAP))
+        val loc = IntArray(2); sc.getLocationInWindow(loc)
+        val insets = ViewCompat.getRootWindowInsets(sc)
+            ?.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+        val scBottom = loc[1] + sc.height
+        val glassTop = sc.floatingTop()
+        val navGap = max(0, (insets?.bottom ?: 0) - ((act.window.decorView.height - scBottom).coerceAtLeast(0)))
+        val bottom = max(navGap + ctx.dp(84), if (glassTop != null) scBottom - glassTop + ctx.dp(12) else 0)
+        val side = ctx.dp(24)
+        text.maxWidth = min(sc.width - side * 2, ctx.dp(440)).coerceAtLeast(ctx.dp(120))
+        sc.addFloating(cap, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = bottom })
+        current = WeakReference(cap)
+        cap.setOnClickListener { dismiss(cap) }
+        cap.post {
+            if (!cap.isAttachedToWindow) return@post
+            // naik dari bawah dengan pegas, sedikit membesar lalu mendarat memantul lembut — kacanya tetap hidup
+            cap.translationY = ctx.dp(18).toFloat(); cap.scaleX = 0.88f; cap.scaleY = 0.88f
+            sc.holdWhole(Motion.SPRING_MS + 200L)
+            cap.animate().translationY(0f).scaleX(1f).scaleY(1f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
+            android.animation.ObjectAnimator.ofFloat(cap, View.ALPHA, 1f).apply { duration = Motion.FAST + 30L }.start()
+            cap.announceForAccessibility(msg)
+        }
+        main.postDelayed({ dismiss(cap) }, if (long) 3200L else 2000L)
+    }
+
     private fun dismiss(v: View) {
         if (!v.isAttachedToWindow) return
-        ((v.parent as? ViewGroup)?.let { GlassContent.find(it) }?.parent as? GlassScaffold)?.holdWhole(Motion.FAST + 200L)
+        val sc = (v.parent as? GlassScaffold) ?: ((v.parent as? ViewGroup)?.let { GlassContent.find(it) }?.parent as? GlassScaffold)
+        sc?.holdWhole(Motion.FAST + 200L)
         v.animate().cancel()
-        v.animate().alpha(0f).translationY(v.dp(8).toFloat()).setDuration(Motion.FAST).setInterpolator(Motion.EXIT).withEndAction {
-            (v.parent as? ViewGroup)?.removeView(v)
+        val gone = {
+            val p = v.parent
+            if (p is GlassScaffold && v is GlassSurface) p.removeFloating(v) else (p as? ViewGroup)?.removeView(v)
             ((v as? ViewGroup)?.getChildAt(0) as? ImageView)?.setImageDrawable(null)
-        }.start()
+        }
+        if (!Motion.on()) { gone(); return }
+        // turun & mengecil sedikit sambil memudar (kebalikan saat muncul)
+        v.animate().alpha(0f).translationY(v.dp(10).toFloat()).scaleX(0.94f).scaleY(0.94f)
+            .setDuration(Motion.MED).setInterpolator(Motion.EXIT).withEndAction { gone() }.start()
+        v.postDelayed({ if (v.parent != null) gone() }, Motion.MED + 200L)   // pengaman bila animasi terpotong
     }
 
     /** Salin area layar di belakang kapsul (kapsul masih transparan), perkecil, lalu blur. */

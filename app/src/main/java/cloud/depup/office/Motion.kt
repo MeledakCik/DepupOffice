@@ -271,21 +271,50 @@ fun View.beforeDraw(block: () -> Unit) {
  * jarak & waktu sama), jadi tidak ada yang tertinggal atau bergelombang. Tidak pernah ada satu frame pun kosong.
  */
 fun ViewGroup.swapContent(dxDp: Int = 0, dyDp: Int = 6, rebuild: () -> Unit) {
+    // Isi lama dari pergantian SEBELUMNYA yang masih memudar dibuang dulu — ganti cepat beruntun tidak pernah
+    // menumpuk "hantu" (dulu: animasi terpotong → withEndAction tak jalan → isi lama tertinggal di lapisan atas).
+    clearGhosts()
     if (!Motion.on() || !isAttachedToWindow || width == 0 || !isShown) { rebuild(); return }
     val olds = ArrayList<View>(childCount)
     for (i in 0 until childCount) olds.add(getChildAt(i))
     rebuild()
     val ov = overlay
+    val ghosts = ArrayList<View>()
     for (v in olds) {
         if (v.parent != null) continue            // dipakai ulang oleh rebuild
         v.animate().cancel()
         try { ov.add(v) } catch (_: Throwable) { continue }
         v.noLayer()
-        v.animate().alpha(0f).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD).setUpdateListener(null)
-            .withEndAction { ov.remove(v) }.start()
+        ghosts.add(v)
+    }
+    if (ghosts.isNotEmpty()) {
+        // satu animator milik wadah (bukan ViewPropertyAnimator per anak yang bisa dibatalkan pihak lain)
+        val a = ValueAnimator.ofFloat(1f, 0f)
+        a.duration = Motion.FAST
+        a.interpolator = Motion.STANDARD
+        val a0 = FloatArray(ghosts.size) { ghosts[it].alpha }
+        a.addUpdateListener { val f = it.animatedValue as Float; for (k in ghosts.indices) ghosts[k].alpha = a0[k] * f }
+        a.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) { clearGhosts() }
+            override fun onAnimationCancel(animation: Animator) { clearGhosts() }
+        })
+        setTag(R.id.swap_ghosts, ghosts)
+        setTag(R.id.swap_anim, a)
+        a.start()
+        postDelayed({ if (getTag(R.id.swap_ghosts) === ghosts) clearGhosts() }, Motion.FAST + 120L)   // pengaman mutlak
     }
     // isi baru masuk dalam gelombang singkat berpegas (hanya posisi: aman di wadah kaca, tidak pernah kosong)
     cascadeIn(dyDp = dyDp * 2, dxDp = dxDp * 2)
+}
+
+/** Buang semua sisa isi lama [swapContent] dari lapisan atas wadah ini, seketika. */
+fun ViewGroup.clearGhosts() {
+    @Suppress("UNCHECKED_CAST")
+    val g = getTag(R.id.swap_ghosts) as? ArrayList<View> ?: return
+    setTag(R.id.swap_ghosts, null)
+    (getTag(R.id.swap_anim) as? ValueAnimator)?.let { setTag(R.id.swap_anim, null); it.removeAllListeners(); it.cancel() }
+    for (v in g) { try { overlay.remove(v) } catch (_: Throwable) {}; v.alpha = 1f }
+    invalidate()
 }
 
 /**
