@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
+import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Matrix
@@ -36,10 +37,13 @@ import kotlin.math.sqrt
  * Liquid Glass: kaca yang mensimulasikan LENSA secara waktu-nyata, bukan sekadar blur transparan.
  *
  * Lapisan efek yang ditumpuk (satu shader AGSL, Android 13+):
- *  1. Refraksi — bentuk kaca didefinisikan sebagai SDF (signed distance field) rounded rectangle. Dari gradiennya
- *     dihitung kemiringan permukaan: di tengah datar (latar tidak bergeser), di dekat tepi melengkung (titik sampel
- *     latar digeser ke dalam sepanjang normal) → isi di belakang tampak membesar & membengkok di pinggiran seperti
- *     tepi lensa tebal. Lengkungnya monoton (isi tidak pernah terlipat/terbalik).
+ *  1. Refraksi — bentuk kaca didefinisikan sebagai SDF (signed distance field) rounded rectangle. Permukaannya
+ *     datar di tengah lalu melengkung turun di zona tepi (bezel) dengan profil squircle cembung; tiap piksel
+ *     dibiaskan dengan hukum Snell (n = 1,5) sesuai kemiringan permukaannya. Hasilnya seperti kaca tebal: pembiasan
+ *     menumpuk tepat di dekat tepi (garis di belakangnya membengkok tajam ke arah tepi) dan cepat hilang ke tengah.
+ *     Ketebalan kaca ikut ukurannya — elemen besar = kaca lebih tebal, pembiasan lebih kuat (seperti Liquid Glass).
+ *     Zona tepi digambar dari isi yang blurnya jauh lebih ringan (lapisan kedua, uniform `layer`) agar lengkungnya
+ *     benar-benar terlihat; bagian tengah tetap buram ("frosted") sesuai setelan blur.
  *  2. Warna tidak nyaru — blur + saturasi 160%, tint tipis putih/hitam, lalu kaca ADAPTIF per piksel: kecerahannya
  *     dijaga di pita yang kontras dengan ikon/teks di atasnya (latar gelap lewat → kaca terang menebal, dan
  *     sebaliknya), jadi isi bilah selalu terbaca.
@@ -52,7 +56,8 @@ import kotlin.math.sqrt
  *     dari titik sentuh (uniform `touch`); kelenturan bentuk & morph antar-state diatur komponennya.
  *
  * Tingkatan perangkat:
- *  - Android 13+: semua lapisan di atas (RuntimeShader lewat RenderEffect, dirantai SETELAH blur GPU).
+ *  - Android 13+: semua lapisan di atas (RuntimeShader lewat RenderEffect, dirantai SETELAH blur GPU; zona tepi
+ *    ditumpuk dari blur ringan kecuali di HP kelas bawah).
  *  - Android 12: blur GPU + saturasi + tint; highlight tepi, cahaya dalam & cahaya sentuh digambar kanvas.
  *  - Android 10–11: blur perangkat lunak (bitmap 1/8) + lapisan kanvas yang sama.
  *  - Blur mati / isi tidak bisa direkam: warna semi-transparan pekat + garis tepi.
@@ -146,7 +151,7 @@ uniform float2 size;        // ukuran bentuk kaca (px)
 uniform float radius;       // radius sudut (px)
 uniform float slab;         // 0 = kapsul; 1 = hanya tepi bawah nyata (bilah atas); -1 = hanya tepi atas nyata
 uniform float bezel;        // lebar zona tepi yang melengkung (px)
-uniform float refraction;   // pergeseran sampel maksimum di tepi (px); <= bezel/2 agar lengkungnya monoton
+uniform float thick;        // tebal kaca (px) di bagian datar; makin tebal, makin kuat pembiasan di tepi
 uniform float dispersion;   // kekuatan dispersi kromatik (0..1)
 uniform float2 light;       // arah ke sumber cahaya (vektor satuan, y ke bawah)
 uniform float4 tint;        // rgb tint + kekuatan
@@ -157,6 +162,7 @@ uniform float px;           // 1 dp dalam px
 uniform float4 box;         // batas aman sampel = area kaca yang tampil (kiri, atas, kanan, bawah)
 uniform float2 band;        // pita kontras adaptif dari setelan transparansi: (min. kaca terang, maks. kaca gelap)
 uniform float mag;          // pembesaran lensa ke arah pusat bentuk (0 = datar; 0,15 ≈ isi tampak 1,18×)
+uniform float layer;        // 0 = kaca utuh; 1 = lapisan TEPI saja (isi blur ringan, alfa memudar ke dalam)
 
 float sdRoundRect(float2 p, float2 b, float r) {
     float2 q = abs(p) - b + float2(r, r);
@@ -191,26 +197,37 @@ float3 over(half4 s, float3 under) {
 }
 
 half4 main(float2 xy) {
-    half4 here = content.eval(xy);
     float d = shapeDist(xy);
-    if (d > 1.5) { return here; }
-    float3 c0 = over(here, tint.rgb);
     float bz = max(bezel, 1.0);
     float inside = max(-d, 0.0);
+    // lapisan tepi: hanya zona lengkung yang digambar; sisanya transparan (kaca utuh di bawahnya yang tampil)
+    if (layer > 0.5 && (d > 1.5 || inside >= bz * 0.85)) { return half4(0.0); }
+    half4 here = content.eval(xy);
+    if (d > 1.5) { return here; }
+    float3 c0 = over(here, tint.rgb);
     // Hanya zona tepi (selebar bezel) yang punya lengkung & cahaya; bagian tengah kaca — sebagian besar piksel —
     // melewati semua perhitungan itu (hasilnya sama persis, GPU jauh lebih ringan).
     bool edge = inside < bz;
 
-    // 1. refraksi: tengah datar (k = 0), tepi melengkung (k -> 1). Sampel digeser KE DALAM: isi dekat tepi tampak
-    //    membesar seperti tepi lensa tebal, dan sampel tidak pernah keluar dari bentuk kaca yang tampil.
+    // 1. refraksi (hukum Snell, n = 1,5): permukaan squircle cembung — tinggi h = (1 - k^4)^(1/4), k = 1 di garis tepi,
+    //    0 di awal bagian datar. Sinar dari mata menembus permukaan miring lalu dibelokkan sebesar (θ1 − θ2) dan
+    //    menempuh tebal kaca di titik itu sebelum mengenai isi: sampel digeser KE DALAM sejauh h·thick·tan(θ1 − θ2).
+    //    Geseran menumpuk tepat di dekat tepi (garis membengkok tajam seperti kaca tebal) lalu cepat hilang ke tengah;
+    //    sampel tidak pernah keluar dari bentuk kaca yang tampil.
     float2 n = float2(0.0, -1.0);
     float slope = 0.0;
     float2 disp = float2(0.0, 0.0);
     if (edge) {
         n = shapeNormal(xy);
-        float k = clamp(1.0 + d / bz, 0.0, 1.0);
-        slope = k * k;
-        disp = -n * (refraction * slope);
+        float k = clamp(1.0 + d / bz, 0.0, 0.9995);
+        slope = k * k;                                    // faktor tepi untuk dispersi
+        float k3 = k * k * k;
+        float hgt = sqrt(sqrt(1.0 - k3 * k));             // tinggi permukaan (0 di garis tepi … 1 di bagian datar)
+        float s = k3 / (hgt * hgt * hgt) * (thick / bz);  // kemiringan permukaan = tan θ1
+        float s1 = s * inversesqrt(1.0 + s * s);          // sin θ1
+        float s2 = s1 * 0.6666667;                        // sin θ2 = sin θ1 / n
+        float t2 = s2 * inversesqrt(1.0 - s2 * s2);       // tan θ2
+        disp = -n * (hgt * thick * (s - t2) / (1.0 + s * t2));
     }
 
     // 6a. sentuhan: kaca di bawah jari sedikit menggembung seperti gel -> isi di bawahnya membesar (lensa)
@@ -278,7 +295,13 @@ half4 main(float2 xy) {
 
     // 6b. cahaya sentuh: menyala dari titik sentuh
     col += float3(1.0, 1.0, 1.0) * (tf * (dark > 0.5 ? 0.14 : 0.20));
-    return half4(half3(clamp(col, 0.0, 1.0)), 1.0);
+    col = clamp(col, 0.0, 1.0);
+    // lapisan tepi: alfa penuh di tepi, memudar ke dalam → menyatu mulus dengan kaca utuh (yang lebih buram) di bawahnya
+    if (layer > 0.5) {
+        float a = 1.0 - smoothstep(0.25 * bz, 0.85 * bz, inside);
+        return half4(half3(col * a), half(a));
+    }
+    return half4(half3(col), 1.0);
 }
 """
 }
@@ -291,25 +314,44 @@ half4 main(float2 xy) {
 @android.annotation.TargetApi(33)
 internal class LiquidFx {
     private val shader = RuntimeShader(LiquidGlass.SRC)   // galat kompilasi → dilempar ke pemanggil
+    private var rimShader: RuntimeShader? = null           // lapisan tepi — dibuat saat pertama dipakai
     private val last = FloatArray(LiquidGlass.U)
     private var lastBlur = -1f
+    private var lastEdge = -1f
     var effect: RenderEffect? = null
         private set
 
     /**
-     * [u] berisi: origin(2) size(2) radius slab bezel refraction dispersion light(2) tint(4) dark touch(4) spec px
-     * box(4) band(2) mag. Mengembalikan true bila efek baru dibuat (pasang ulang ke node / tampilan).
+     * [u] berisi: origin(2) size(2) radius slab bezel thick dispersion light(2) tint(4) dark touch(4) spec px
+     * box(4) band(2) mag. [blur] = radius blur isi (px). [edgeBlur] >= 0 (dan < [blur]): zona tepi ditumpuk lagi dari
+     * isi yang blurnya jauh lebih ringan, jadi lengkung lensanya terlihat walau bagian tengah buram — tepi membiaskan,
+     * tengah tetap "frosted", seperti Liquid Glass. Kedua lapisan satu efek GPU (dua cabang blur → shader → ditumpuk).
+     * Mengembalikan true bila efek baru dibuat (pasang ulang ke node / tampilan).
      */
-    fun update(u: FloatArray, blur: Float): Boolean {
-        if (effect != null && blur == lastBlur && u.contentEquals(last)) return false
-        u.copyInto(last); lastBlur = blur
-        val s = shader
+    fun update(u: FloatArray, blur: Float, edgeBlur: Float = -1f): Boolean {
+        if (effect != null && blur == lastBlur && edgeBlur == lastEdge && u.contentEquals(last)) return false
+        u.copyInto(last); lastBlur = blur; lastEdge = edgeBlur
+        load(shader, u, 0f)
+        val glass = RenderEffect.createRuntimeShaderEffect(shader, "content")
+        var fx = if (blur > 0f) RenderEffect.createChainEffect(glass, blurFx(blur)) else glass
+        if (edgeBlur >= 0f && edgeBlur < blur) {
+            val rs = rimShader ?: RuntimeShader(LiquidGlass.SRC).also { rimShader = it }
+            load(rs, u, 1f)
+            val rim = RenderEffect.createRuntimeShaderEffect(rs, "content")
+            val rimFx = if (edgeBlur > 0f) RenderEffect.createChainEffect(rim, rimBlurFx(edgeBlur)) else rim
+            fx = RenderEffect.createBlendModeEffect(fx, rimFx, BlendMode.SRC_OVER)
+        }
+        effect = fx
+        return true
+    }
+
+    private fun load(s: RuntimeShader, u: FloatArray, layer: Float) {
         s.setFloatUniform("origin", u[0], u[1])
         s.setFloatUniform("size", u[2], u[3])
         s.setFloatUniform("radius", u[4])
         s.setFloatUniform("slab", u[5])
         s.setFloatUniform("bezel", u[6])
-        s.setFloatUniform("refraction", u[7])
+        s.setFloatUniform("thick", u[7])
         s.setFloatUniform("dispersion", u[8])
         s.setFloatUniform("light", u[9], u[10])
         s.setFloatUniform("tint", u[11], u[12], u[13], u[14])
@@ -320,9 +362,7 @@ internal class LiquidFx {
         s.setFloatUniform("box", u[22], u[23], u[24], u[25])
         s.setFloatUniform("band", u[26], u[27])
         s.setFloatUniform("mag", u[28])
-        val glass = RenderEffect.createRuntimeShaderEffect(s, "content")
-        effect = if (blur > 0f) RenderEffect.createChainEffect(glass, blurFx(blur)) else glass
-        return true
+        s.setFloatUniform("layer", layer)
     }
 
     // Blur tidak berubah saat cahaya/sentuhan bergeser: dibuat sekali saja, hanya lapisan lensanya yang dibuat ulang.
@@ -331,6 +371,12 @@ internal class LiquidFx {
     private fun blurFx(r: Float): RenderEffect {
         blurEffect?.let { if (blurEffectR == r) return it }
         return RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP).also { blurEffect = it; blurEffectR = r }
+    }
+    private var rimBlur: RenderEffect? = null
+    private var rimBlurR = -1f
+    private fun rimBlurFx(r: Float): RenderEffect {
+        rimBlur?.let { if (rimBlurR == r) return it }
+        return RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP).also { rimBlur = it; rimBlurR = r }
     }
 }
 
@@ -372,7 +418,7 @@ internal class LensDrawable(
         s.setFloatUniform("radius", h / 2f)
         s.setFloatUniform("slab", 0f)
         s.setFloatUniform("bezel", bezel)
-        s.setFloatUniform("refraction", bezel * 0.5f)
+        s.setFloatUniform("thick", bezel * 0.7f)
         s.setFloatUniform("dispersion", LiquidGlass.dispersionAmount())
         s.setFloatUniform("light", GlassLight.x, GlassLight.y)
         s.setFloatUniform("tint", android.graphics.Color.red(tintColor) / 255f, android.graphics.Color.green(tintColor) / 255f,
@@ -384,6 +430,7 @@ internal class LensDrawable(
         s.setFloatUniform("box", b.left + 0.5f, b.top + 0.5f, b.right - 0.5f, b.bottom - 0.5f)
         s.setFloatUniform("band", Glass.toneFloor(), Glass.toneCap())
         s.setFloatUniform("mag", 0f)
+        s.setFloatUniform("layer", 0f)
         paint.shader = s
     }
 

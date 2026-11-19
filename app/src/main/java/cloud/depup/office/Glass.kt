@@ -270,9 +270,18 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         val f = fx as? LiquidFx ?: try { LiquidFx().also { fx = it } } catch (_: Throwable) { LiquidGlass.fail(); return false }
         return try {
             fillUniforms()
-            if (f.update(u, radius) || mode != 2) { n.setRenderEffect(f.effect); mode = 2 }
+            if (f.update(u, radius, rimBlur()) || mode != 2) { n.setRenderEffect(f.effect); mode = 2 }
             true
         } catch (_: Throwable) { LiquidGlass.fail(); mode = 0; false }
+    }
+
+    /**
+     * Blur zona tepi kaca cair (px): jauh lebih ringan dari blur isi, agar lengkung lensa di tepi terlihat jelas seperti
+     * Liquid Glass. -1 = satu lapisan saja: blur isi sudah ringan, atau HP kelas bawah (hemat GPU).
+     */
+    private fun rimBlur(): Float {
+        val d = resources.displayMetrics.density
+        return if (Perf.low || radius < 6f * d) -1f else min(radius * 0.3f, 5f * d)
     }
 
     /** Nilai uniform shader (urutan: lihat [LiquidFx.update]). Semua dalam koordinat node (px). */
@@ -287,11 +296,13 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         u[2] = w; u[3] = h
         u[4] = if (cap) min(corner, h / 2f) else 0f
         u[5] = if (cap) 0f else if (edge > 0) -1f else 1f
-        // zona tepi melengkung & pergeseran maksimum = setengahnya: lengkung lensa monoton (isi membesar di tepi,
-        // tidak pernah terlipat/terbalik)
-        val bezel = if (cap) min(18f * d, h * 0.42f) else 12f * d
+        // Zona tepi melengkung (bezel) & tebal kaca ikut ukuran, seperti Liquid Glass: kapsul/bilah kecil = kaca tipis,
+        // panel/menu besar = kaca lebih tebal dengan pembiasan tepi lebih kuat. Pembiasannya dihitung shader (Snell).
+        val m = min(w, h) / d
+        val grow = ((m - 44f) / 196f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        val bezel = if (cap) min((0.32f * m).coerceIn(12f, 24f) * d, h * 0.45f) else 14f * d
         u[6] = bezel
-        u[7] = bezel * 0.5f
+        u[7] = bezel * (0.6f + 0.4f * grow)
         u[8] = LiquidGlass.dispersionAmount()   // mati / HP kelas bawah: satu sampel saja (lebih ringan)
         u[9] = GlassLight.x; u[10] = GlassLight.y
         val base = tintColor?.invoke() ?: (baseColor ?: C.BG)
