@@ -479,6 +479,7 @@ fun Context.navCircle(res: Int, desc: String, tint: Int = C.TEXT, onClick: (View
         isClickable = true; isFocusable = true
         background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
         setOnClickListener { onClick(it) }
+        springPress(0.88f)
     }
 
 /** Kapsul pengelompok tombol ikon (mis. urungkan/ulangi, aksi pembaca) — isi dengan [capsuleBtn]. */
@@ -500,6 +501,7 @@ fun Context.capsuleBtn(res: Int, desc: String, tint: Int = C.TEXT, padDp: Int = 
         isClickable = true; isFocusable = true
         background = rippleBg(100)
         setOnClickListener { onClick(it) }
+        springPress(0.86f)
     }
 
 /** Aksi utama bilah atas (Simpan, Ekspor): kapsul tinta setinggi tombol lain. */
@@ -510,6 +512,7 @@ fun Context.navPrimary(label: String, onClick: () -> Unit): TextView = tv(label,
     background = RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), shape(C.PRIMARY, 100), null)
     isClickable = true; isFocusable = true
     setOnClickListener { onClick() }
+    springPress(0.94f)
 }
 
 /** Tombol ikon 48x48dp dengan label pembaca layar & tooltip (tekan lama). */
@@ -527,6 +530,7 @@ fun Context.iconBtn(res: Int, desc: String, tint: Int = C.TEXT, sizeDp: Int = 24
         minimumWidth = dp(48); minimumHeight = dp(48)
         setOnClickListener { onClick(it) }
         layoutParams = ViewGroup.LayoutParams(dp(48), dp(48))
+        springPress(0.86f)
     }
 
 /** Jadikan View bisa diketuk dengan umpan balik ripple, target sentuh >= 48dp, dan label opsional. */
@@ -538,6 +542,7 @@ fun View.tappable(desc: String? = null, onClick: () -> Unit) {
     if (background == null) background = context.rippleBg(12)
     else if (background !is RippleDrawable) background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), background, null)
     setOnClickListener { onClick() }
+    springPress(0.975f)
 }
 
 fun Context.vbox(pad: Int = 0): LinearLayout = LinearLayout(this).apply {
@@ -585,19 +590,6 @@ fun Context.pressable(label: String, iconRes: Int, fg: Int, bg: android.graphics
 /** Getar sentuh ringan (ikut setelan getar sentuh di HP). */
 fun haptic(v: View) {
     v.performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-}
-
-/** Mengecil sedikit saat ditekan lalu kembali mulus (tanpa pantulan). Tidak mengganggu klik/ripple. */
-fun View.springPress(to: Float = 0.97f) {
-    setOnTouchListener { v, e ->
-        when (e.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> v.animate().scaleX(to).scaleY(to).setStartDelay(0).setDuration(Motion.PRESS_DOWN)
-                .setInterpolator(Motion.STANDARD).start()
-            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL ->
-                v.animate().scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.PRESS_UP).setInterpolator(Motion.STANDARD).start()
-        }
-        false
-    }
 }
 
 /** Tombol utama (terisi) atau sekunder (tonal). Warna teks dipilih otomatis agar selalu kontras. */
@@ -651,6 +643,7 @@ fun Context.actionRow(
         isFocusable = true
         contentDescription = if (sub.isBlank()) title else "$title. $sub"
         setOnClickListener { onClick() }
+        springPress(0.975f)
     }
     r.add(iconBadge(iconRes, tint, tintBg, 12), w = dp(40), h = dp(40))
     val col = vbox()
@@ -947,6 +940,7 @@ fun Context.filterChip(label: String, on: Boolean, iconRes: Int = 0, onClick: ()
         else if (iconRes != 0) add(icon(iconRes, fg, 16), w = dp(16), h = dp(16))
         add(tv(label, 14f, fg, true), w = WRAP, side = if (on || iconRes != 0) 6 else 0)
         setOnClickListener { onClick() }
+        springPress(0.93f)
     }
 
 /** Keadaan kosong yang ramah: ikon, judul, penjelasan, dan aksi opsional. */
@@ -954,7 +948,7 @@ fun Context.emptyState(iconRes: Int, title: String, msg: String, action: String?
     vbox(20).apply {
         gravity = Gravity.CENTER_HORIZONTAL
         background = squircle(C.SURFACE, 22)
-        add(iconBadge(iconRes, C.MUTED, C.SURFACE2, 100, 26), w = dp(56), h = dp(56))
+        add(iconBadge(iconRes, C.MUTED, C.SURFACE2, 100, 26).apply { post { if (isShown) boing(0.7f, 80L) } }, w = dp(56), h = dp(56))
         add(tv(title, 16f, C.TEXT, true).apply { gravity = Gravity.CENTER }, top = 12, w = WRAP)
         add(tv(msg, 14f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 4)
         if (action != null && onAction != null) add(btn(action, false, C.ACCENT) { onAction() }, top = 14, w = WRAP)
@@ -1009,13 +1003,15 @@ fun AppCompatActivity.sheet(build: (body: LinearLayout, dismiss: () -> Unit) -> 
         setDimAmount(if (C.dark) 0.6f else 0.4f)
         setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     }
-    // Masuk: seluruh lembar naik sebagai satu bagian & menebal cepat — mendarat lembut, tanpa pantulan
+    // Masuk: lembar naik dengan pegas lembut (mendarat sedikit memantul), isinya menyusul dalam gelombang singkat
     if (Motion.on()) {
-        body.translationY = dp(48).toFloat()
+        body.translationY = dp(72).toFloat()
         body.alpha = 0f
         d.setOnShowListener {
-            body.animate().translationY(0f).alpha(1f).setStartDelay(0).setDuration(Motion.SLOW).setInterpolator(Motion.ENTER)
-                .setUpdateListener(null).withLayer().start()
+            body.animate().translationY(0f).setStartDelay(0).setDuration(Motion.SPRING_SOFT_MS).setInterpolator(Motion.SPRING_SOFT)
+                .setUpdateListener(null).start()
+            android.animation.ObjectAnimator.ofFloat(body, View.ALPHA, 1f).apply { duration = Motion.FAST + 40L }.start()
+            body.cascadeIn(dyDp = 14, fade = true, delay = 40L, skip = 1)   // anak ke-0 = pegangan lembar
         }
     }
     d.show()
@@ -1028,7 +1024,7 @@ fun AppCompatActivity.sheetHeader(body: LinearLayout, iconRes: Int, tint: Int, b
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(20), dp(8), dp(20), dp(14))
     }
-    h.add(iconBadge(iconRes, tint, bg, 12), w = dp(44), h = dp(44))
+    h.add(iconBadge(iconRes, tint, bg, 12).apply { boing(0.6f, 120L) }, w = dp(44), h = dp(44))
     val c = vbox()
     c.add(headingTv(title, 19f))
     if (sub.isNotBlank()) c.add(tv(sub, 13f, C.MUTED).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, top = 2)

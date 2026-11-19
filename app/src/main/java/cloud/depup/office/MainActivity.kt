@@ -772,8 +772,7 @@ class MainActivity : AppCompatActivity() {
         val gen = ++swapGen
         if (animate && from != null && Motion.on() && !splashing) {
             swapping = true
-            hold(Motion.SLOW + 450L)
-            val shift = dp(Motion.SHIFT_DP).toFloat()
+            hold(Motion.SPRING_SOFT_MS + Motion.CASCADE_MAX * Motion.CASCADE_STEP + 250L)
             if (to.visibility == View.VISIBLE && from.alpha < 1f) {
                 // berbalik di tengah transisi: halaman yang sedang menebal memudar kembali, tujuan sudah ada di bawahnya
                 from.animate().alpha(0f).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD).setUpdateListener(null)
@@ -789,12 +788,11 @@ class MainActivity : AppCompatActivity() {
                 to.visibility = View.VISIBLE
                 to.animate().alpha(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).setUpdateListener(null)
                     .withEndAction { if (gen == swapGen) settlePages() }.start()
-                // seluruh isi halaman tujuan bergeser masuk sebagai satu blok, seirama dengan pil navigasi
+                // bagian-bagian halaman tujuan masuk BERGELOMBANG dari arah tab tujuan (pegas lembut), seirama lensa tab
                 (to.getChildAt(0) as? ViewGroup)?.let { pg ->
                     pg.animate().cancel()
-                    pg.translationX = dir * shift
-                    pg.animate().translationX(0f).setStartDelay(0).setDuration(Motion.SLOW).setInterpolator(Motion.STANDARD)
-                        .setUpdateListener(null).withEndAction { pg.translationX = 0f }.start()
+                    pg.translationX = 0f
+                    pg.cascadeIn(dyDp = 4, dxDp = dir * (Motion.SHIFT_DP + 8))
                 }
             }
         } else settlePages()
@@ -1222,15 +1220,17 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(14), dp(12), dp(8), dp(12))
             minimumHeight = dp(64)
             fun state() = "$title, ${if (sw.isChecked) "aktif" else "nonaktif"}. $sub"
+            val badge = iconBadge(res, C.PRIMARY, C.PRIMARY_C, 10, 22)
             tappable(state()) {
                 if (!isEnabled) return@tappable
                 isEnabled = false
                 haptic(this)
                 sw.toggle()
+                badge.boing(0.78f)   // ikon baris berdenyut mengikuti sakelar
                 contentDescription = state()
                 onChange(sw.isChecked)
             }
-            add(iconBadge(res, C.PRIMARY, C.PRIMARY_C, 10, 22), w = dp(40), h = dp(40))
+            add(badge, w = dp(40), h = dp(40))
             val c = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
             c.add(tv(title, 15f, C.TEXT, true))
             c.add(tv(sub, 13f, C.MUTED), top = 1)

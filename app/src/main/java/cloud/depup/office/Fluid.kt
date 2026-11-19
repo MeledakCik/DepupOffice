@@ -312,7 +312,7 @@ class PillIndicator(private val host: View) {
     }
 }
 
-/** Umpan balik tekan: mengecil sedikit, dilepas kembali mulus (tanpa pantulan). [onFrame] dipanggil tiap frame. */
+/** Umpan balik tekan: mengecil sedikit, dilepas memantul kembali seperti jeli ([Motion.SPRING]). [onFrame] tiap frame. */
 @SuppressLint("ClickableViewAccessibility")
 internal fun View.squish(to: Float = 0.95f, onFrame: (() -> Unit)? = null) {
     setOnTouchListener { v, e ->
@@ -320,7 +320,7 @@ internal fun View.squish(to: Float = 0.95f, onFrame: (() -> Unit)? = null) {
             MotionEvent.ACTION_DOWN -> v.animate().scaleX(to).scaleY(to).setStartDelay(0).setDuration(Motion.PRESS_DOWN)
                 .setInterpolator(Motion.STANDARD).setUpdateListener { onFrame?.invoke() }.start()
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.animate().scaleX(1f).scaleY(1f).setStartDelay(0)
-                .setDuration(Motion.PRESS_UP).setInterpolator(Motion.STANDARD).setUpdateListener { onFrame?.invoke() }.start()
+                .setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).setUpdateListener { onFrame?.invoke() }.start()
         }
         false
     }
