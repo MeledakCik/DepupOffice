@@ -247,7 +247,7 @@ class VaultActivity : AppCompatActivity() {
         holder.cascadeIn(dyDp = 14, skip = 1)
     }
 
-    private val rowOf = HashMap<File, View>()
+    private val rowOf = HashMap<File, android.view.View>()
 
     /** [enter] = isi brankas meluncur masuk satu per satu (sesudah terbuka / file ditambah). */
     private fun showList(enter: Boolean = true) {
