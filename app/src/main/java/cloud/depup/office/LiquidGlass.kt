@@ -162,7 +162,9 @@ uniform float px;           // 1 dp dalam px
 uniform float4 box;         // batas aman sampel = area kaca yang tampil (kiri, atas, kanan, bawah)
 uniform float2 band;        // pita kontras adaptif dari setelan transparansi: (min. kaca terang, maks. kaca gelap)
 uniform float mag;          // pembesaran lensa ke arah pusat bentuk (0 = datar; 0,15 ≈ isi tampak 1,18×)
-uniform float layer;        // 0 = kaca utuh; 1 = lapisan TEPI saja (isi blur ringan, alfa memudar ke dalam)
+uniform float layer;        // 0 = kaca utuh; > 0 = lapisan TEPI saja (isi blur ringan), alfa maks = nilai ini, memudar ke dalam
+uniform float stage;        // 0 = lengkap; 1 = hanya lensa (warna mentah hasil pembiasan); 2 = hanya warna & cahaya
+                            //   (isi sudah dibiaskan lalu di-blur lagi — lihat LiquidFx: blur sesudah lensa)
 
 float sdRoundRect(float2 p, float2 b, float r) {
     float2 q = abs(p) - b + float2(r, r);
@@ -201,7 +203,8 @@ half4 main(float2 xy) {
     float bz = max(bezel, 1.0);
     float inside = max(-d, 0.0);
     // lapisan tepi: hanya zona lengkung yang digambar; sisanya transparan (kaca utuh di bawahnya yang tampil)
-    if (layer > 0.5 && (d > 1.5 || inside >= bz * 0.9)) { return half4(0.0); }
+    if (layer > 0.0 && (d > 1.5 || inside >= bz * 0.9)) { return half4(0.0); }
+    bool lens = stage < 1.5;   // tahap 2: isi sudah dibiaskan — tidak digeser lagi
     half4 here = content.eval(xy);
     if (d > 1.5) { return here; }
     float3 c0 = over(here, tint.rgb);
@@ -221,6 +224,7 @@ half4 main(float2 xy) {
         n = shapeNormal(xy);
         float k = clamp(1.0 + d / bz, 0.0, 0.9995);
         slope = k * k;                                    // faktor tepi untuk dispersi
+        if (lens) {
         float k3 = k * k * k;
         float hgt = sqrt(sqrt(1.0 - k3 * k));             // tinggi permukaan (0 di garis tepi … 1 di bagian datar)
         float s = k3 / (hgt * hgt * hgt) * (thick / bz);  // kemiringan permukaan = tan θ1
@@ -228,6 +232,7 @@ half4 main(float2 xy) {
         float s2 = s1 * 0.6666667;                        // sin θ2 = sin θ1 / n
         float t2 = s2 * inversesqrt(1.0 - s2 * s2);       // tan θ2
         disp = -n * (hgt * thick * (s - t2) / (1.0 + s * t2));
+        }
     }
 
     // 6a. sentuhan: kaca di bawah jari sedikit menggembung seperti gel -> isi di bawahnya membesar (lensa)
@@ -235,10 +240,10 @@ half4 main(float2 xy) {
     if (touch.z > 0.001) {
         float2 dv = xy - touch.xy;
         tf = touch.z * exp(-dot(dv, dv) / (2.0 * touch.w * touch.w));
-        disp -= dv * (0.16 * tf);
+        if (lens) { disp -= dv * (0.16 * tf); }
     }
     // 6c. lensa pembesar (lensa tab): seluruh isi di dalam bentuk ditarik ke pusat -> tampak membesar
-    if (mag > 0.0001) { disp -= (xy - origin - size * 0.5) * mag; }
+    if (lens && mag > 0.0001) { disp -= (xy - origin - size * 0.5) * mag; }
     float2 lo = box.xy;
     float2 hi = box.zw;
 
@@ -254,6 +259,9 @@ half4 main(float2 xy) {
             col = over(content.eval(clamp(xy + disp, lo, hi)), c0);
         }
     }
+
+    // tahap 1: keluarkan warna hasil pembiasan apa adanya — di-blur lagi, lalu warna & cahaya di tahap 2
+    if (stage > 0.5 && stage < 1.5) { return half4(half3(col), 1.0); }
 
     // 2. warna: saturasi 160% (blur saja membuat warna keruh), tint tipis, lalu jaga kontras (adaptif)
     float3 W = float3(0.2126, 0.7152, 0.0722);
@@ -297,8 +305,8 @@ half4 main(float2 xy) {
     col += float3(1.0, 1.0, 1.0) * (tf * (dark > 0.5 ? 0.14 : 0.20));
     col = clamp(col, 0.0, 1.0);
     // lapisan tepi: alfa penuh di tepi, memudar ke dalam → menyatu mulus dengan kaca utuh (yang lebih buram) di bawahnya
-    if (layer > 0.5) {
-        float a = 1.0 - smoothstep(0.3 * bz, 0.9 * bz, inside);
+    if (layer > 0.0) {
+        float a = (1.0 - smoothstep(0.3 * bz, 0.9 * bz, inside)) * min(layer, 1.0);
         return half4(half3(col * a), half(a));
     }
     return half4(half3(col), 1.0);
@@ -315,6 +323,9 @@ half4 main(float2 xy) {
 internal class LiquidFx {
     private val shader = RuntimeShader(LiquidGlass.SRC)   // galat kompilasi → dilempar ke pemanggil
     private var rimShader: RuntimeShader? = null           // lapisan tepi — dibuat saat pertama dipakai
+    private var lookShader: RuntimeShader? = null          // tahap warna & cahaya (blur sesudah lensa)
+    private var lastPost = -1f
+    private var lastRim = -1f
     private val last = FloatArray(LiquidGlass.U)
     private var lastBlur = -1f
     private var lastEdge = -1f
@@ -328,15 +339,30 @@ internal class LiquidFx {
      * tengah tetap "frosted", seperti Liquid Glass. Kedua lapisan satu efek GPU (dua cabang blur → shader → ditumpuk).
      * Mengembalikan true bila efek baru dibuat (pasang ulang ke node / tampilan).
      */
-    fun update(u: FloatArray, blur: Float, edgeBlur: Float = -1f): Boolean {
-        if (effect != null && blur == lastBlur && edgeBlur == lastEdge && u.contentEquals(last)) return false
-        u.copyInto(last); lastBlur = blur; lastEdge = edgeBlur
-        load(shader, u, 0f)
-        val glass = RenderEffect.createRuntimeShaderEffect(shader, "content")
-        var fx = if (blur > 0f) RenderEffect.createChainEffect(glass, blurFx(blur)) else glass
-        if (edgeBlur >= 0f && edgeBlur < blur) {
+    fun update(u: FloatArray, blur: Float, edgeBlur: Float = -1f, post: Float = 0f, rimAmt: Float = 1f): Boolean {
+        if (effect != null && blur == lastBlur && edgeBlur == lastEdge && post == lastPost && rimAmt == lastRim &&
+            u.contentEquals(last)) return false
+        u.copyInto(last); lastBlur = blur; lastEdge = edgeBlur; lastPost = post; lastRim = rimAmt
+        var fx: RenderEffect
+        if (post >= 0.5f) {
+            // Blur SESUDAH lensa: di tepi, lensa memampatkan isi yang jauh ke pita tipis — isi yang dimampatkan ikut
+            // menipis blurnya (tampak tajam walau blur maksimal). Dibiaskan dulu (tahap 1), di-blur lagi, baru warna &
+            // cahaya (tahap 2, garis cahaya tepi tetap tajam) → seluruh kaca buram rata sampai ke pinggir.
+            load(shader, u, 0f, 1f)
+            val bent = RenderEffect.createRuntimeShaderEffect(shader, "content")
+            val pre = if (blur > 0f) RenderEffect.createChainEffect(bent, blurFx(blur)) else bent
+            val ls = lookShader ?: RuntimeShader(LiquidGlass.SRC).also { lookShader = it }
+            load(ls, u, 0f, 2f)
+            fx = RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(ls, "content"),
+                RenderEffect.createChainEffect(postBlurFx(post), pre))
+        } else {
+            load(shader, u, 0f, 0f)
+            val glass = RenderEffect.createRuntimeShaderEffect(shader, "content")
+            fx = if (blur > 0f) RenderEffect.createChainEffect(glass, blurFx(blur)) else glass
+        }
+        if (edgeBlur >= 0f && rimAmt > 0.02f) {
             val rs = rimShader ?: RuntimeShader(LiquidGlass.SRC).also { rimShader = it }
-            load(rs, u, 1f)
+            load(rs, u, rimAmt.coerceAtMost(1f), 0f)
             val rim = RenderEffect.createRuntimeShaderEffect(rs, "content")
             val rimFx = if (edgeBlur > 0f) RenderEffect.createChainEffect(rim, rimBlurFx(edgeBlur)) else rim
             fx = RenderEffect.createBlendModeEffect(fx, rimFx, BlendMode.SRC_OVER)
@@ -345,7 +371,7 @@ internal class LiquidFx {
         return true
     }
 
-    private fun load(s: RuntimeShader, u: FloatArray, layer: Float) {
+    private fun load(s: RuntimeShader, u: FloatArray, layer: Float, stage: Float) {
         s.setFloatUniform("origin", u[0], u[1])
         s.setFloatUniform("size", u[2], u[3])
         s.setFloatUniform("radius", u[4])
@@ -363,6 +389,7 @@ internal class LiquidFx {
         s.setFloatUniform("band", u[26], u[27])
         s.setFloatUniform("mag", u[28])
         s.setFloatUniform("layer", layer)
+        s.setFloatUniform("stage", stage)
     }
 
     // Blur tidak berubah saat cahaya/sentuhan bergeser: dibuat sekali saja, hanya lapisan lensanya yang dibuat ulang.
@@ -371,6 +398,12 @@ internal class LiquidFx {
     private fun blurFx(r: Float): RenderEffect {
         blurEffect?.let { if (blurEffectR == r) return it }
         return RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP).also { blurEffect = it; blurEffectR = r }
+    }
+    private var postBlur: RenderEffect? = null
+    private var postBlurR = -1f
+    private fun postBlurFx(r: Float): RenderEffect {
+        postBlur?.let { if (postBlurR == r) return it }
+        return RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP).also { postBlur = it; postBlurR = r }
     }
     private var rimBlur: RenderEffect? = null
     private var rimBlurR = -1f
@@ -431,6 +464,7 @@ internal class LensDrawable(
         s.setFloatUniform("band", Glass.toneFloor(), Glass.toneCap())
         s.setFloatUniform("mag", 0f)
         s.setFloatUniform("layer", 0f)
+        s.setFloatUniform("stage", 0f)
         paint.shader = s
     }
 
