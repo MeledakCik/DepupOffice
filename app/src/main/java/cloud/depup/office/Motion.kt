@@ -104,6 +104,79 @@ fun View.springPress(to: Float = 0.97f) {
     }
 }
 
+/**
+ * Tampilkan/sembunyikan dengan membuka-melipat seperti akordeon: tinggi tumbuh/menyusut halus, isi menebal sesudah
+ * ada ruang (dan memudar sebelum dilipat). Belum tampil di layar / animasi mati → langsung. Selalu berakhir di
+ * VISIBLE + tinggi asli, atau GONE.
+ */
+fun View.showIf(show: Boolean) {
+    val isShown0 = visibility == View.VISIBLE
+    val running = getTag(R.id.reveal_anim) as? ValueAnimator
+    if (show == isShown0 && running == null) return
+    running?.cancel()
+    val p = parent as? View
+    if (!Motion.on() || !isAttachedToWindow || p == null || !p.isShown || p.width == 0) {
+        visibility = if (show) View.VISIBLE else View.GONE; alpha = 1f; return
+    }
+    val lp = layoutParams ?: run { visibility = if (show) View.VISIBLE else View.GONE; return }
+    val keepH = (getTag(R.id.reveal_h) as? Int) ?: lp.height
+    setTag(R.id.reveal_h, keepH)
+    val avail = p.width - p.paddingLeft - p.paddingRight - ((lp as? ViewGroup.MarginLayoutParams)?.let { it.leftMargin + it.rightMargin } ?: 0)
+    measure(View.MeasureSpec.makeMeasureSpec(maxOf(0, avail), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+    val full = measuredHeight
+    val from = if (isShown0) height else 0
+    val to = if (show) full else 0
+    visibility = View.VISIBLE
+    noLayer()
+    val a0 = alpha
+    val a = ValueAnimator.ofFloat(0f, 1f)
+    a.duration = if (show) Motion.SLOW else Motion.MED
+    a.interpolator = Motion.STANDARD
+    a.addUpdateListener {
+        val f = it.animatedValue as Float
+        lp.height = (from + (to - from) * f).toInt().coerceAtLeast(0)
+        alpha = if (show) (a0 + (1f - a0) * ((f - 0.3f) / 0.7f).coerceIn(0f, 1f)) else a0 * (1f - (f / 0.6f).coerceIn(0f, 1f))
+        layoutParams = lp
+        glassAncestor()?.invalidate()
+    }
+    var cancelled = false
+    a.addListener(object : AnimatorListenerAdapter() {
+        override fun onAnimationCancel(animation: Animator) { cancelled = true }
+        override fun onAnimationEnd(animation: Animator) {
+            setTag(R.id.reveal_anim, null)
+            if (cancelled) return              // animasi baru mengambil alih dari titik ini
+            lp.height = keepH; layoutParams = lp
+            setTag(R.id.reveal_h, null)
+            alpha = 1f
+            visibility = if (show) View.VISIBLE else View.GONE
+        }
+    })
+    setTag(R.id.reveal_anim, a)
+    a.start()
+}
+
+/**
+ * Geleng "salah" ala iOS: bergoyang mendatar makin lemah lalu diam tepat di tempat (PIN salah, isian tidak sah).
+ * Ikut getar penolakan bila tersedia.
+ */
+fun View.shake(ampDp: Int = 10) {
+    performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.REJECT
+        else android.view.HapticFeedbackConstants.LONG_PRESS)
+    if (!Motion.on()) return
+    val amp = dp(ampDp).toFloat()
+    (getTag(R.id.shake_anim) as? ValueAnimator)?.cancel()
+    val a = ValueAnimator.ofFloat(0f, 1f)
+    a.duration = 460
+    a.interpolator = android.view.animation.LinearInterpolator()
+    a.addUpdateListener {
+        val t = it.animatedValue as Float
+        translationX = amp * kotlin.math.sin(t * Math.PI * 8).toFloat() * (1f - t) * (1f - t)
+    }
+    a.addListener(object : AnimatorListenerAdapter() { override fun onAnimationEnd(animation: Animator) { translationX = 0f } })
+    setTag(R.id.shake_anim, a)
+    a.start()
+}
+
 /** Muncul memantul dari [from] ke ukuran asli (ikon, lencana, tanda sukses). */
 fun View.boing(from: Float = 0.82f, delay: Long = 0L) {
     if (!Motion.on()) return

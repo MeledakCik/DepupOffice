@@ -1373,7 +1373,7 @@ class MainActivity : AppCompatActivity() {
                 // memudar di atas daftar baru yang hanyut halus ke tempatnya
                 docsMode = it
                 pageKey[1] = keyFor(1)
-                outNote.visibility = if (it == 2) View.VISIBLE else View.GONE
+                outNote.showIf(it == 2)
                 listBox.swapContent { refresh() }
             }
         }, top = 12)
@@ -2080,8 +2080,8 @@ class MainActivity : AppCompatActivity() {
 
         modeHolder.add(segmented(listOf("Rentang Halaman", "Pecah per N Hal"), splitMode) { mode ->
             splitMode = mode
-            rangeBox.visibility = if (mode == 0) View.VISIBLE else View.GONE
-            chunkBox.visibility = if (mode == 1) View.VISIBLE else View.GONE
+            rangeBox.showIf(mode == 0)
+            chunkBox.showIf(mode == 1)
         })
 
         box.add(modeHolder, top = 10)
@@ -2705,7 +2705,7 @@ class MainActivity : AppCompatActivity() {
             add(tv("Izin setelah dibuka (dihormati Adobe Reader & pembaca resmi):", 12f, C.MUTED), top = 10)
             add(canPrint, top = 2); add(canCopy); add(canEdit)
         }
-        fun sync() { pwBox.visibility = if (useLock.isChecked) View.VISIBLE else View.GONE }
+        fun sync() { pwBox.showIf(useLock.isChecked) }
         useLock.setOnCheckedChangeListener { _, _ -> sync() }
         box.add(tv(if (lock) "$pages halaman. Dikunci AES-256 TANPA mengubah isi: teks tetap asli & bisa dicari, ukuran tetap kecil. " +
                 "Bisa dibuka di Adobe Reader, Chrome, Depup Office, dan pembaca PDF lain dengan password."
