@@ -300,9 +300,9 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         // panel/menu besar = kaca lebih tebal dengan pembiasan tepi lebih kuat. Pembiasannya dihitung shader (Snell).
         val m = min(w, h) / d
         val grow = ((m - 44f) / 196f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
-        val bezel = if (cap) min((0.32f * m).coerceIn(12f, 24f) * d, h * 0.45f) else 14f * d
+        val bezel = if (cap) min((0.34f * m).coerceIn(13f, 26f) * d, h * 0.45f) else 16f * d
         u[6] = bezel
-        u[7] = bezel * (0.6f + 0.4f * grow)
+        u[7] = bezel * (0.8f + 0.4f * grow)
         u[8] = LiquidGlass.dispersionAmount()   // mati / HP kelas bawah: satu sampel saja (lebih ringan)
         u[9] = GlassLight.x; u[10] = GlassLight.y
         val base = tintColor?.invoke() ?: (baseColor ?: C.BG)
