@@ -90,7 +90,6 @@ class PillIndicator(private val host: View) {
     private var vw = 0f
     private var l = 0f
     private var vl = 0f
-    private var dir = 1f
     /** Posisi jari saat lensa diseret (NaN = tidak diseret). */
     private var dragX = Float.NaN
     private var running = false
@@ -160,46 +159,25 @@ class PillIndicator(private val host: View) {
     }
 
     /**
-     * Tepi lensa, digambar DI ATAS isi & ikon: garis luar tipis, tepi pelangi (setelan Dispersi), dan — bila [real]
-     * false (tanpa shader kaca) — kilau & tepi terang tiruan. Dengan shader ([real] = true) kilau, cahaya tepi &
-     * refraksi sudah dihitung shader kaca cair yang sama dengan navigasi.
+     * Tepi lensa tiruan, digambar DI ATAS isi & ikon — hanya bila shader kaca cair TIDAK dipakai ([real] = false):
+     * kilau lembut di separuh atas & tepi terang tipis. Dengan shader ([real] = true) tidak ada yang digambar di sini:
+     * refraksi, kilau, cahaya tepi & dispersi sudah dihitung shader yang sama dengan navigasi. Garis luar gelap & cincin
+     * pelangi lukisan dulu menumpuk di atas hasil shader dan membuat kapsul tampak ber-outline — dihapus.
      */
     fun drawEdges(c: Canvas, real: Boolean) {
         val lf = lift
-        if (lf < 0.01f) return
+        if (lf < 0.01f || real) return
         val r = rect() ?: return
         val rad = r.height() / 2f
-        // garis luar tipis supaya kaca bening tetap terlihat di atas bilah terang
-        if (!C.dark) {
-            rim.strokeWidth = 1f * dp
-            rim.color = Color.argb(((if (real) 26 else 34) * lf).roundToInt(), 0, 0, 0)
-            c.drawRoundRect(r, rad, rad, rim)
-        }
-        if (!real) {
-            // kilau kaca tiruan: pantulan lembut di separuh atas
-            sheen.shader = LinearGradient(0f, r.top, 0f, r.centerY(),
-                Color.argb((64 * lf).roundToInt(), 255, 255, 255), 0, Shader.TileMode.CLAMP)
-            c.drawRoundRect(r, rad, rad, sheen)
-        }
-        // dispersi: tepi pelangi tipis, bergeser searah gerak (lebih kuat saat melaju)
-        if (LiquidGlass.DISPERSION && !Perf.low) {
-            val k = if (real) 0.8f else 1f
-            val off = (1.2f + 2.4f * speed()) * dp * lf * dir
-            rim.strokeWidth = 1.6f * dp
-            rim.color = Color.argb((120 * lf * k).roundToInt(), 255, 64, 160)
-            c.drawRoundRect(r.left + off, r.top, r.right + off, r.bottom, rad, rad, rim)
-            rim.color = Color.argb((120 * lf * k).roundToInt(), 40, 200, 255)
-            c.drawRoundRect(r.left - off, r.top, r.right - off, r.bottom, rad, rad, rim)
-            rim.color = Color.argb((90 * lf * k).roundToInt(), 255, 220, 60)
-            c.drawRoundRect(r.left + off * 0.35f, r.top - 0.6f * dp * lf, r.right + off * 0.35f, r.bottom - 0.6f * dp * lf, rad, rad, rim)
-        }
-        if (!real) {
-            // tepi kaca terang tiruan
-            rim.strokeWidth = 1.2f * dp
-            rim.color = Color.argb((150 * lf).roundToInt(), 255, 255, 255)
-            tmp.set(r); tmp.inset(0.6f * dp, 0.6f * dp)
-            c.drawRoundRect(tmp, rad, rad, rim)
-        }
+        // kilau kaca tiruan: pantulan lembut di separuh atas
+        sheen.shader = LinearGradient(0f, r.top, 0f, r.centerY(),
+            Color.argb((64 * lf).roundToInt(), 255, 255, 255), 0, Shader.TileMode.CLAMP)
+        c.drawRoundRect(r, rad, rad, sheen)
+        // tepi kaca terang tiruan, tipis & lembut (bukan garis luar)
+        rim.strokeWidth = 1f * dp
+        rim.color = Color.argb((70 * lf).roundToInt(), 255, 255, 255)
+        tmp.set(r); tmp.inset(0.5f * dp, 0.5f * dp)
+        c.drawRoundRect(tmp, rad, rad, rim)
     }
 
     /** Pindah ke [v]. Tanpa animasi bila [animate] false / belum ada posisi awal / animasi HP dimatikan. */
@@ -267,7 +245,6 @@ class PillIndicator(private val host: View) {
             val lt = if (dragging) 1f else min(abs(gx - x) / (28f * dp), 1f)
             vl += (KL * (lt - l) - cl * vl) * h; l += vl * h
         }
-        if (abs(vx) > 20f * dp) dir = if (vx > 0f) 1f else -1f
         val lGoal = if (dragging) 1f else 0f
         val still = abs(gx - x) < 0.4f && abs(vx) < 4f * dp && abs(gw - w) < 0.4f && abs(vw) < 4f * dp &&
             abs(lGoal - l) < 0.004f && abs(vl) < 0.02f
