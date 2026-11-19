@@ -15,6 +15,8 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RenderEffect
@@ -129,6 +131,14 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
 
     var blocked = false
         set(v) { if (field != v) { field = v; invalidate() } }
+
+    /**
+     * Blur progresif (bilah atas ala iOS): makin ke atas makin buram, lalu memudar halus ke isi yang tajam di bagian
+     * bawah — tanpa garis tepi, tanpa lensa. Dua lapisan blur (berat di atas, ringan di tengah) bertumpuk di atas isi
+     * asli, masing-masing dengan topeng gradien, jadi peralihannya terasa sebagai blur yang menipis, bukan dua gambar.
+     */
+    var fade = false
+        set(v) { if (field != v) { field = v; fadeH = -1; invalidate() } }
 
     /** Cahaya sentuh (koordinat permukaan) dan kekuatannya 0..1. */
     internal var touchX = 0f
@@ -248,7 +258,7 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         if (!cn.hasDisplayList()) { postInvalidateOnAnimation(); return false }
         if (!relate(c)) return false
         syncBlur()
-        liquidNow = Build.VERSION.SDK_INT >= 33 && LiquidGlass.active() && liquid(n)
+        liquidNow = !fade && Build.VERSION.SDK_INT >= 33 && LiquidGlass.active() && liquid(n)
         if (!liquidNow && (mode != 1 || appliedR != radius)) { GlassFx31.apply(n, radius); mode = 1; appliedR = radius }
         n.setPosition(-mx, -my, width + mx, height + my)
         val rc = n.beginRecording(width + mx * 2, height + my * 2)
@@ -390,7 +400,65 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         }
     }
 
+    // ---- blur progresif ([fade]) ----
+    private val fadeNodes: Array<RenderNode>? = if (node != null) arrayOf(RenderNode("fadeHeavy"), RenderNode("fadeLight")) else null
+    private val fadeR = floatArrayOf(-1f, -1f)
+    private val fadeMasks = arrayOf(Paint(), Paint()).onEach { it.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    private val fadeTint = Paint()
+    private var fadeH = -1
+    private var fadeBase = 0
+
+    private fun drawFade(canvas: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        val base = tintColor?.invoke() ?: C.BG
+        if (fadeH != height || fadeBase != base) {
+            fadeH = height; fadeBase = base
+            fun a(v: Float) = Color.argb((v * 255).roundToInt(), 0, 0, 0)
+            // berat: penuh di atas (bilah status), habis di 65% tinggi; ringan: penuh sampai 40%, habis di dasar bilah
+            fadeMasks[0].shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(a(1f), a(0.85f), a(0f)), floatArrayOf(0f, 0.35f, 0.65f), Shader.TileMode.CLAMP)
+            fadeMasks[1].shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(a(1f), a(1f), a(0f)), floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP)
+            fun t(v: Float) = Color.argb((v * 255).roundToInt(), Color.red(base), Color.green(base), Color.blue(base))
+            fadeTint.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(t(0.78f), t(0.5f), t(0f)), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+        }
+        val c = content
+        if (Glass.BLUR && c != null && !blocked) {
+            try {
+                if (gpu) drawFadeGpu(canvas, c, w, h)
+                else { val s = canvas.saveLayer(0f, 0f, w, h, null); if (drawSoft(canvas)) canvas.drawRect(0f, 0f, w, h, fadeMasks[1]); canvas.restoreToCount(s) }
+            } catch (_: Throwable) { blocked = true }
+        }
+        canvas.drawRect(0f, 0f, w, h, fadeTint)
+    }
+
+    private fun drawFadeGpu(canvas: Canvas, c: GlassContent, w: Float, h: Float) {
+        val ns = fadeNodes ?: return
+        val cn = c.node ?: return
+        if (Build.VERSION.SDK_INT < 31 || c.direct || !canvas.isHardwareAccelerated) return
+        if (!cn.hasDisplayList()) { postInvalidateOnAnimation(); return }
+        if (!relate(c)) return
+        syncBlur()
+        val radii = floatArrayOf(max(radius, 8f * density) * 1.4f, max(radius, 8f * density) * 0.4f)
+        for (i in 1 downTo 0) {   // ringan dulu, berat di atasnya
+            val n = ns[i]
+            if (fadeR[i] != radii[i]) { GlassFx31.apply(n, radii[i]); fadeR[i] = radii[i] }
+            n.setPosition(-mx, -my, width + mx, height + my)
+            val rc = n.beginRecording(width + mx * 2, height + my * 2)
+            try {
+                rc.drawColor(baseColor ?: C.BG)
+                rc.translate(mx.toFloat(), my.toFloat())
+                rc.concat(rel)
+                rc.drawRenderNode(cn)
+            } finally { n.endRecording() }
+            val s = canvas.saveLayer(0f, 0f, w, h, null)
+            canvas.drawRenderNode(n)
+            canvas.drawRect(0f, 0f, w, h, fadeMasks[i])
+            canvas.restoreToCount(s)
+        }
+    }
+
     override fun dispatchDraw(canvas: Canvas) {
+        if (fade) { liquidNow = false; backdropOk = false; drawFade(canvas); super.dispatchDraw(canvas); return }
         val dark = C.dark
         val c = content
         val top = revealTop().toFloat()

@@ -82,7 +82,6 @@ class MainActivity : AppCompatActivity() {
     // ================= KERANGKA: bilah atas + konten + navigasi bawah =================
     private lateinit var content: FrameLayout
     private lateinit var barTitle: TextView
-    private lateinit var barLogo: View
     private lateinit var tabBar: TabBar
     /** Layar pembuka sedang tampil: isi pertama belum dianimasikan (menunggu [intro]). */
     private var splashing = false
@@ -129,6 +128,7 @@ class MainActivity : AppCompatActivity() {
         // Navigasi = kapsul liquid glass ala iOS 26 (terang di tema terang, gelap di tema gelap); panel tinta
         // kontras tinggi dipakai di isi halaman (kartu Scan & ubin angka).
         glass?.bottomBar?.apply { tintColor = { C.SURFACE }; tintAlpha = 232 }
+        glass?.topBar?.fade = true   // bilah atas: blur progresif (makin atas makin buram), tanpa garis & lensa
         glass?.watchContent = true   // isi beranda tidak pernah kosong polos → ikut diawasi penjaga kaca
         root.addView(screen, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(root)
@@ -276,14 +276,9 @@ class MainActivity : AppCompatActivity() {
             minimumHeight = dp(60)
         }
         setBarCompact(bar)
-        barLogo = ImageView(this).apply { setImageResource(R.drawable.ic_logo_tile); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-        bar.add(FrameLayout(this).apply { addView(barLogo, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER_VERTICAL)) }, w = dp(48), h = dp(44), side = 0)
         // Judul kecil di tengah: baru terlihat setelah judul besar halaman tergulir ke balik kaca.
         barTitle = tv("Beranda", 17f, C.TEXT, true).apply { gravity = Gravity.CENTER; maxLines = 1; alpha = 0f; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-        bar.add(barTitle, w = 0, weight = 1f, side = 0)
-        bar.add(iconBtn(R.drawable.ic_search, "Cari dokumen", C.TEXT, 20) { openSearch() }.apply {
-            background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), shape(C.SURFACE, 100, C.LINE, 1), null)
-        }, w = dp(44), h = dp(44), side = 0)
+        bar.add(barTitle, w = 0, weight = 1f, side = 0, h = dp(44))
         return bar
     }
 
@@ -292,7 +287,7 @@ class MainActivity : AppCompatActivity() {
         ((tile as? android.view.ViewGroup)?.getChildAt(0) as? android.view.ViewGroup)?.getChildAt(0) as? TextView
 
     private fun setBarCompact(bar: LinearLayout) {
-        bar.setPadding(dp(12), dp(2), dp(4), dp(2))
+        bar.setPadding(dp(16), dp(2), dp(16), dp(2))
         bar.minimumHeight = dp(48)
     }
 
@@ -601,7 +596,6 @@ class MainActivity : AppCompatActivity() {
         val changed = i != tab
         if (changed && ::content.isInitialized) content.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
         tab = i
-        showLogo(i == 0, changed)
         tabBar.select(i, changed)
         switchTo(i, changed)
         setBarTitle(tabNames[i], sv?.let { barAlpha(it.scrollY) } ?: 0f, changed)
@@ -628,26 +622,6 @@ class MainActivity : AppCompatActivity() {
         } else {
             barTitle.text = text
             barTitle.animate().alpha(target).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).withEndAction(done).start()
-        }
-    }
-
-    /** Logo di bilah atas (khusus Beranda) menebal sambil membesar sedikit, pergi dengan kebalikannya — tanpa pantulan. */
-    private fun showLogo(show: Boolean, animate: Boolean) {
-        val v = barLogo
-        v.animate().cancel()
-        if (!animate || !Motion.on()) {
-            v.visibility = if (show) View.VISIBLE else View.INVISIBLE
-            v.alpha = 1f; v.scaleX = 1f; v.scaleY = 1f
-            return
-        }
-        if (show) {
-            if (v.visibility != View.VISIBLE) { v.alpha = 0f; v.scaleX = 0.9f; v.scaleY = 0.9f }
-            v.visibility = View.VISIBLE
-            v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.MED).setInterpolator(Motion.STANDARD)
-                .setUpdateListener(null).start()
-        } else {
-            v.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setStartDelay(0).setDuration(Motion.FAST).setInterpolator(Motion.STANDARD)
-                .setUpdateListener(null).withEndAction { v.visibility = View.INVISIBLE; v.alpha = 1f; v.scaleX = 1f; v.scaleY = 1f }.start()
         }
     }
 
@@ -702,10 +676,18 @@ class MainActivity : AppCompatActivity() {
             // Judul besar ala pustaka (Beranda diawali tanggal). Dibungkus satu wadah: wadahnya ikut gerak halaman,
             // isinya dipakai efek menyusut saat digulir — keduanya tidak bentrok.
             val head = vbox()
+            // Beranda: logo Depup sebaris dengan salam di paling atas, lalu "mau kerjakan apa?", lalu tanggal
+            val big: View = if (t == 0) vbox().apply {
+                val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.add(ImageView(this@MainActivity).apply { setImageResource(R.drawable.ic_logo_tile); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO },
+                    w = dp(34), h = dp(34))
+                row.add(largeTitle("${greeting()},").apply { maxLines = 1 }, w = 0, weight = 1f, side = 12)
+                add(row)
+                add(largeTitle("mau kerjakan apa?").apply { setTextColor(C.MUTED) }, top = 2)
+            } else largeTitle(tabNames[t])
+            head.add(big)
             val date: View? = if (t == 0) tv(java.text.SimpleDateFormat("EEEE, d MMMM", java.util.Locale("id")).format(java.util.Date()), 14f, C.MUTED)
-                .also { head.add(it) } else null
-            val big = if (t == 0) largeTitle("${greeting()},", "mau kerjakan apa?") else largeTitle(tabNames[t])
-            head.add(big, top = if (t == 0) 4 else 0)
+                .also { head.add(it, top = 6) } else null
             page.add(head, top = 4)
             when (t) {
                 0 -> buildHome(page)
