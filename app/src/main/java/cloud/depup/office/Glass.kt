@@ -140,6 +140,16 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
     var fade = false
         set(v) { if (field != v) { field = v; fadeH = -1; invalidate() } }
 
+    /**
+     * Ekor pudar [fade] (px). > 0: blur & tint PENUH di belakang isi bilah (tombol & judul tetap terbaca), baru menipis
+     * di ekor selebar ini di bawah bilah — seperti tepi gulir iOS. 0: menipis sepanjang tinggi bilah (bilah kosong).
+     */
+    var fadeTail = 0
+        set(v) { if (field != v) { field = v; fadeH = -1; onFadeTail(v); invalidate() } }
+
+    /** Bilah menyediakan ruang untuk ekor pudar (lihat [GlassBar]). */
+    protected open fun onFadeTail(px: Int) {}
+
     /** Cahaya sentuh (koordinat permukaan) dan kekuatannya 0..1. */
     internal var touchX = 0f
     internal var touchY = 0f
@@ -440,12 +450,17 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         val w = width.toFloat(); val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
         val base = tintColor?.invoke() ?: C.BG
-        if (fadeH != height || fadeBase != base) {
-            fadeH = height; fadeBase = base
+        val tintA = if (fadeTail > 0) Glass.toneAlpha(if (C.dark) 150 else 160) / 255f else 0.8f
+        val key = base xor (tintA * 1000).roundToInt()
+        if (fadeH != height || fadeBase != key) {
+            fadeH = height; fadeBase = key
+            // dengan ekor: semua lapisan penuh sampai awal ekor, pita pudarnya dipetakan ke dalam ekor saja
+            val f0 = if (fadeTail > 0) ((h - fadeTail) / h).coerceIn(0f, 0.95f) else 0f
+            fun at(p: Float) = f0 + p * (1f - f0)
             val black = { v: Float -> Color.argb((v * 255).roundToInt(), 0, 0, 0) }
-            fadeBands.forEachIndexed { i, b -> fadeMasks[i].shader = easeDown(h, b[1], b[2], black) }
-            fadeMasks[fadeBands.size].shader = easeDown(h, 0.2f, 1f, black)   // satu lapisan (Android 10–11)
-            fadeTint.shader = easeDown(h, 0f, 1f) { v -> Color.argb((v * 0.8f * 255).roundToInt(), Color.red(base), Color.green(base), Color.blue(base)) }
+            fadeBands.forEachIndexed { i, b -> fadeMasks[i].shader = easeDown(h, at(b[1]), at(b[2]), black) }
+            fadeMasks[fadeBands.size].shader = easeDown(h, at(0.2f), 1f, black)   // satu lapisan (Android 10–11)
+            fadeTint.shader = easeDown(h, f0, 1f) { v -> Color.argb((v * tintA * 255).roundToInt(), Color.red(base), Color.green(base), Color.blue(base)) }
         }
         val c = content
         if (Glass.BLUR && c != null && !blocked) {
@@ -614,6 +629,8 @@ private object GlassFx31 {
 @SuppressLint("ViewConstructor")
 class GlassBar(ctx: Context, private val atTop: Boolean) : GlassSurface(ctx) {
     val box = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+
+    override fun onFadeTail(px: Int) { box.setPadding(box.paddingLeft, box.paddingTop, box.paddingRight, px) }
 
     init {
         addView(box, LayoutParams(MATCH, WRAP))
@@ -1273,6 +1290,10 @@ object Glass {
         if (ci < 0) return root
         root.removeAllViews()
         val sc = GlassScaffold(root.context, kids[ci], floatBottom)
+        // Bilah atas semua layar: blur progresif ala iOS — penuh di belakang tombol & judul, menipis di ekor 16 dp,
+        // tanpa garis pemisah. (Beranda memakai versi tanpa ekor: bilahnya kosong.)
+        sc.topBar.fade = true
+        sc.topBar.fadeTail = root.context.dp(16)
         sc.background = root.background
         (root.background as? ColorDrawable)?.color?.let { sc.topBar.baseColor = it; sc.bottomBar.baseColor = it; sc.miniBar.baseColor = it }
         val thin = root.context.dp(2)

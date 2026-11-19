@@ -129,6 +129,7 @@ class MainActivity : AppCompatActivity() {
         // kontras tinggi dipakai di isi halaman (kartu Scan & ubin angka).
         glass?.bottomBar?.apply { tintColor = { C.SURFACE }; tintAlpha = 232 }
         glass?.topBar?.fade = true   // bilah atas: blur progresif (makin atas makin buram), tanpa garis & lensa
+        glass?.topBar?.fadeTail = 0  // bilah Beranda kosong: menipis sepanjang tinggi bilah (ekornya padding bilah)
         glass?.watchContent = true   // isi beranda tidak pernah kosong polos → ikut diawasi penjaga kaca
         root.addView(screen, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(root)
