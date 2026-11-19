@@ -32,6 +32,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /** CameraX sudah disiapkan di proses ini (lihat [MainActivity.warmCamera]). */
@@ -212,6 +214,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        window.decorView.removeCallbacks(draftCheck)
+        window.decorView.postDelayed(draftCheck, 900L)   // setelah layar tenang & editor yang ditutup selesai
         if (freshlyBuilt) { freshlyBuilt = false; return }
         if (!::content.isInitialized) return
         prefetchSizes()   // berkas bisa berubah selama di layar lain (mis. disunting): ukurannya diperbarui di latar
@@ -220,6 +224,29 @@ class MainActivity : AppCompatActivity() {
         for (t in 0..3) if (t != tab) pageKey[t] = null
         content.removeCallbacks(resumeRefresh)
         content.postDelayed(resumeRefresh, 420L)
+    }
+
+    /** Tawaran pemulihan sudah ditampilkan di layar ini ("Nanti" = tanya lagi saat aplikasi dibuka berikutnya). */
+    private var draftAsked = false
+
+    /**
+     * Editor Word sempat tertutup (Android mematikan aplikasi / aplikasi diusap dari daftar terbaru) dengan perubahan
+     * yang belum disimpan: tawarkan memulihkannya dari draf ([DocDrafts]).
+     */
+    private val draftCheck = Runnable {
+        if (draftAsked || isFinishing || isDestroyed) return@Runnable
+        val d = DocDrafts.latestOrphan(this) ?: return@Runnable
+        draftAsked = true
+        val whenTxt = SimpleDateFormat("d MMM, HH:mm", Locale("id")).format(Date(d.time))
+        AlertDialog.Builder(this)
+            .setTitle("Pulihkan dokumen?")
+            .setMessage("“${d.name}” punya perubahan yang belum disimpan (terakhir $whenTxt). Pulihkan dan lanjutkan mengedit?")
+            .setPositiveButton("Pulihkan") { _, _ ->
+                startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_DRAFT, d.id))
+            }
+            .setNegativeButton("Buang") { _, _ -> DocDrafts.clear(this, d.id) }
+            .setNeutralButton("Nanti", null)
+            .show()
     }
 
     /** Ukuran berkas di riwayat dibaca di thread latar, jadi daftar Dokumen dibangun tanpa menunggu penyedia berkas. */
