@@ -67,8 +67,8 @@ class ZoomImageView @JvmOverloads constructor(
         if (Math.abs(startScale - finalScale) < 0.01f) return
 
         zoomAnimator = android.animation.ValueAnimator.ofFloat(startScale, finalScale).apply {
-            duration = 220L
-            interpolator = Motion.STANDARD
+            duration = Motion.SPRING_SOFT_MS - 120L   // pegas lembut: mendarat halus, sedikit "mengendap"
+            interpolator = Motion.SPRING_SOFT
             addUpdateListener { anim ->
                 val currScale = anim.animatedValue as Float
                 val factor = currScale / zoomScale

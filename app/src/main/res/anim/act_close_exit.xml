@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Layar ditutup: bergeser ke kanan dengan kurva yang SAMA dengan layar di bawahnya (seirama), lalu memudar
-     — layar di bawahnya sudah tampak, jadi tidak ada jeda gelap. Tanpa skala. -->
+<!-- Layar yang ditutup pergi ke kanan sambil menyusut ke 94% & memudar. -->
 <set xmlns:android="http://schemas.android.com/apk/res/android" android:shareInterpolator="false" android:zAdjustment="top">
-    <translate android:fromXDelta="0" android:toXDelta="6%" android:duration="300"
-        android:interpolator="@interpolator/emphasized_decelerate" />
-    <alpha android:fromAlpha="1" android:toAlpha="0" android:startOffset="50" android:duration="200"
+    <translate android:fromXDelta="0" android:toXDelta="22%" android:duration="300"
+        android:interpolator="@interpolator/emphasized_accelerate" />
+    <scale android:fromXScale="1" android:toXScale="0.94" android:fromYScale="1" android:toYScale="0.94"
+        android:pivotX="50%" android:pivotY="50%" android:duration="300"
+        android:interpolator="@interpolator/emphasized_accelerate" />
+    <alpha android:fromAlpha="1" android:toAlpha="0" android:startOffset="60" android:duration="240"
         android:interpolator="@interpolator/standard" />
 </set>

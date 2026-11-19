@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Menu pop-up tumbuh dari tombol pemicu dengan pantulan pegas (lihat MenuPop.kt). Tanpa android:duration. -->
+<transition xmlns:android="http://schemas.android.com/apk/res/android" class="cloud.depup.office.MenuPop" />
