@@ -10,12 +10,15 @@ from shapely.geometry import Point, Polygon, LineString, box, MultiPolygon
 from shapely.ops import unary_union
 from shapely import affinity
 
-Q = 8           # ruas per seperempat lingkaran (cukup halus di 24dp; titik sedikit = APK kecil)
+Q = 32          # ruas per seperempat lingkaran SAAT MEMBANGUN (rapat → smooth.py mengenali busur dengan tepat;
+                # keluaran akhir berupa garis lurus + kurva Bezier, jumlah titik tetap sedikit)
 # Ukuran mengikuti sampel "Depup Office Element Pack" (512 px → grid 24): area ikon 18,75 (tepi 2,6), garis 2,8,
 # sudut ubin 2,65 (lingkaran, bukan squircle), lubang/detail ±2,6–2,95, celah antar-bagian 1,4.
-SW = 2.8        # tebal garis untuk ikon garis
-KW = 2.6        # tebal lubang garis di dalam bentuk solid
-GAP = 1.4       # celah antar-bagian
+# Diseragamkan (Nov 2026) mengikuti ikon share buatan Ival: SEMUA garis 2,5 — garis terbuka, lubang di dalam bentuk
+# solid, dan garis bingkai; celah antar-bagian 1,5 (coakan share).
+SW = 2.5        # tebal garis untuk ikon garis
+KW = 2.5        # tebal lubang garis di dalam bentuk solid (= SW)
+GAP = 1.5       # celah antar-bagian
 TR = 2.65       # radius sudut ubin (persegi panjang penuh) ukuran penuh
 
 
@@ -66,7 +69,10 @@ def smooth(g, r):
     return g.buffer(r * 0.6, quad_segs=Q).buffer(-r * 0.6, quad_segs=Q)
 
 
-def arc(cx, cy, r, a0, a1, n=48):
+def arc(cx, cy, r, a0, a1, n=None):
+    """Titik-titik busur; dicacah ≤ 1° per langkah supaya garis yang mengikutinya tetap lingkaran sempurna
+    (tepi hasil buffer dikenali smooth.py sebagai busur, bukan rangkaian ruas)."""
+    n = max(n or 0, int(math.ceil(abs(a1 - a0) / 1.0)), 2)
     return [(cx + r * math.cos(math.radians(a0 + (a1 - a0) * i / n)),
              cy + r * math.sin(math.radians(a0 + (a1 - a0) * i / n))) for i in range(n + 1)]
 
@@ -111,8 +117,8 @@ def spark(cx, cy, r, waist=0.26):
         # sisi cekung ke tip berikutnya
         a2 = math.radians(-90 + 90 * (q + 1))
         nxt = (cx + r * math.cos(a2), cy + r * math.sin(a2))
-        for i in range(1, 12):
-            t = i / 12
+        for i in range(1, 48):
+            t = i / 48
             # kurva kuadratik dengan titik kendali dekat pusat
             ctrl = (cx + (tip[0] + nxt[0] - 2 * cx) * waist, cy + (tip[1] + nxt[1] - 2 * cy) * waist)
             x = (1 - t) ** 2 * tip[0] + 2 * (1 - t) * t * ctrl[0] + t ** 2 * nxt[0]
@@ -156,12 +162,12 @@ def _():
 
 @icon("back")
 def _():
-    return line([(14.8, 5.2), (8.0, 12), (14.8, 18.8)], 3.05)
+    return line([(14.8, 5.2), (8.0, 12), (14.8, 18.8)], SW)
 
 
 @icon("next")
 def _():
-    return line([(9.2, 5.2), (16.0, 12), (9.2, 18.8)], 3.05)
+    return line([(9.2, 5.2), (16.0, 12), (9.2, 18.8)], SW)
 
 
 @icon("chev")
@@ -171,12 +177,12 @@ def _():
 
 @icon("down")
 def _():
-    return line([(6.4, 9.4), (12, 15.0), (17.6, 9.4)], 3.05)
+    return line([(6.4, 9.4), (12, 15.0), (17.6, 9.4)], SW)
 
 
 @icon("up")
 def _():
-    return line([(6.4, 14.6), (12, 9.0), (17.6, 14.6)], 3.05)
+    return line([(6.4, 14.6), (12, 9.0), (17.6, 14.6)], SW)
 
 
 @icon("bell")
@@ -184,8 +190,8 @@ def _():
     dome = unary_union([circle(12, 9.4, 6.0), box(6.0, 9.4, 18.0, 15.0)])
     base = squircle(3.8, 14.2, 20.2, 17.6, 1.7)
     body = smooth(unary_union([dome, base, poly([(6.0, 14.0), (18.0, 14.0), (19.4, 15.6), (4.6, 15.6)], 0)]), 0.8)
-    top = line([(12, 2.6), (12, 3.6)], 3.31)
-    clap = line([(10.4, 20.2), (13.6, 20.2)], 3.31)
+    top = line([(12, 2.6), (12, 3.6)], SW)
+    clap = line([(10.4, 20.2), (13.6, 20.2)], SW)
     return unary_union([body, top, clap])
 
 
@@ -220,7 +226,7 @@ def _():
     for k in range(8):
         a = math.radians(45 * k)
         parts.append(line([(12 + 7.1 * math.cos(a), 12 + 7.1 * math.sin(a)),
-                           (12 + 9.0 * math.cos(a), 12 + 9.0 * math.sin(a))], 2.8))
+                           (12 + 9.0 * math.cos(a), 12 + 9.0 * math.sin(a))], SW))
     return unary_union(parts)
 
 
@@ -228,8 +234,8 @@ def _():
 def _():
     glass = smooth(unary_union([circle(12, 9.2, 6.6),
                                 poly([(7.4, 12.6), (16.6, 12.6), (15.4, 16.8), (8.6, 16.8)], 0.4)]), 0.6)
-    glass = knock(glass, line([(9.6, 8.6), (9.6 + 0.01, 8.6)], 2.42))
-    base = line([(9.6, 19.6), (14.4, 19.6)], 3.05)
+    glass = knock(glass, line([(9.6, 8.6), (9.6 + 0.01, 8.6)], SW))
+    base = line([(9.6, 19.6), (14.4, 19.6)], SW)
     return unary_union([glass, base])
 
 
@@ -243,7 +249,7 @@ def _():
 
 @icon("check")
 def _():
-    return line([(4.8, 12.6), (9.6, 17.2), (19.2, 7.2)], 3.18)
+    return line([(4.8, 12.6), (9.6, 17.2), (19.2, 7.2)], SW)
 
 
 @icon("check_ok")
@@ -253,12 +259,12 @@ def _():
 
 @icon("clock")
 def _():
-    return knock(circle(12, 12, 9.6), line([(12, 6.9), (12, 12.4), (15.4, 14.4)], 2.48))
+    return knock(circle(12, 12, 9.6), line([(12, 6.9), (12, 12.4), (15.4, 14.4)], SW))
 
 
 @icon("close")
 def _():
-    return unary_union([line([(6.2, 6.2), (17.8, 17.8)], 3.05), line([(17.8, 6.2), (6.2, 17.8)], 3.05)])
+    return unary_union([line([(6.2, 6.2), (17.8, 17.8)], SW), line([(17.8, 6.2), (6.2, 17.8)], SW)])
 
 
 @icon("plus")
@@ -280,8 +286,8 @@ def _():
 
 @icon("offline")
 def _():
-    slash = line([(3.4, 3.4), (20.6, 20.6)], 2.8)
-    body = smooth(cloud_shape().difference(slash.buffer(1.3, quad_segs=Q)), 0.6)   # potongan tidak tajam
+    slash = line([(3.4, 3.4), (20.6, 20.6)], SW)
+    body = smooth(cloud_shape().difference(slash.buffer(GAP, quad_segs=Q)), 0.6)   # potongan tidak tajam
     return unary_union([body, slash])
 
 
@@ -339,21 +345,21 @@ def _():
     body, flap = page()
     band = squircle(6.8, 11.4, 17.2, 17.4, 2.0)
     body = knock(body, band)
-    return unary_union([body.difference(flap.buffer(GAP)), flap, line([(9.6, 14.4), (14.4, 14.4)], 2.16)])
+    return unary_union([body.difference(flap.buffer(GAP)), flap, line([(9.6, 14.4), (14.4, 14.4)], SW)])
 
 
 @icon("download")
 def _():
     tray = squircle(3.2, 14.6, 20.8, 20.8, 2.8)
     arrow = unary_union([line([(12, 3.2), (12, 11.6)]), line([(8.2, 8.0), (12, 11.8), (15.8, 8.0)])])
-    return gap(tray, arrow, 1.3)
+    return gap(tray, arrow, GAP)
 
 
 @icon("upload")
 def _():
     tray = squircle(3.2, 14.6, 20.8, 20.8, 2.8)
     arrow = unary_union([line([(12, 4.0), (12, 12.4)]), line([(8.2, 7.6), (12, 3.8), (15.8, 7.6)])])
-    return gap(tray, arrow, 1.3)
+    return gap(tray, arrow, GAP)
 
 
 @icon("share")
@@ -362,7 +368,7 @@ def _():
     tray = tray.difference(box(9.0, 0, 15.0, 11.2).buffer(0.0))
     tray = smooth(tray, 0.7)
     arrow = unary_union([line([(12, 3.0), (12, 14.0)]), line([(8.4, 6.6), (12, 3.0), (15.6, 6.6)])])
-    return gap(tray, arrow, 1.2)
+    return gap(tray, arrow, GAP)
 
 
 def pencil(x0, y0, x1, y1, w):
@@ -383,7 +389,7 @@ def pencil(x0, y0, x1, y1, w):
     p = unary_union([p, end])
     # potongan penghapus
     cut = LineString([(x1 - ux * w * 1.25 + nx * w, y1 - uy * w * 1.25 + ny * w),
-                      (x1 - ux * w * 1.25 - nx * w, y1 - uy * w * 1.25 - ny * w)]).buffer(0.62, cap_style="flat")
+                      (x1 - ux * w * 1.25 - nx * w, y1 - uy * w * 1.25 - ny * w)]).buffer(GAP / 2, cap_style="flat")
     return p.difference(cut)
 
 
@@ -397,7 +403,7 @@ def _():
     pad = squircle(3.0, 4.4, 18.6, 20.6, 3.8)
     pad = knock(pad, line([(6.8, 15.8), (10.4, 15.8)], KW))
     pen = pencil(11.0, 14.2, 20.4, 4.8, 3.6)
-    return gap(pad, pen, 1.25)
+    return gap(pad, pen, GAP)
 
 
 @icon("flash")
@@ -409,7 +415,7 @@ def _():
 def _():
     l = poly([(10.0, 4.6), (10.0, 19.0), (2.8, 19.0)], 1.5)
     r = poly([(14.0, 4.6), (14.0, 19.0), (21.2, 19.0)], 1.5)
-    dashes = unary_union([line([(12, y), (12, y + 1.2)], 2.29) for y in (2.8, 7.4, 12.0, 16.6, 20.6)])
+    dashes = unary_union([line([(12, y), (12, y + 1.2)], SW) for y in (2.8, 7.4, 12.0, 16.6, 20.6)])
     return unary_union([l, r, dashes])
 
 
@@ -428,7 +434,7 @@ def _():
 @icon("format_clear")
 def _():
     t = unary_union([line([(4.6, 4.8), (16.4, 4.8)]), line([(10.5, 4.8), (8.6, 19.2)])])
-    x = unary_union([line([(14.6, 14.2), (19.6, 19.2)], 2.67), line([(19.6, 14.2), (14.6, 19.2)], 2.67)])
+    x = unary_union([line([(14.6, 14.2), (19.6, 19.2)], SW), line([(19.6, 14.2), (14.6, 19.2)], SW)])
     return unary_union([t, x])
 
 
@@ -477,7 +483,7 @@ def _():
 @icon("home")
 def _():
     h = poly([(2.8, 10.6), (12, 3.0), (21.2, 10.6), (21.2, 21.0), (2.8, 21.0)], 2.0)
-    return knock(h, line([(12, 15.4), (12, 24)], 3.4))
+    return knock(h, line([(12, 15.4), (12, 24)], SW))
 
 
 def picture(x0, y0, x1, y1, r):
@@ -498,7 +504,7 @@ def _():
 def _():
     pic = picture(2.6, 5.2, 18.4, 21.0, 4.0)
     p = plus(18.8, 5.2, 3.0, 2.2)
-    return gap(pic, p, 1.3)
+    return gap(pic, p, GAP)
 
 
 @icon("line_break")
@@ -510,7 +516,7 @@ def _():
 @icon("lock")
 def _():
     body = squircle(4.0, 9.8, 20.0, 21.4, 3.8)
-    body = knock(body, line([(12, 14.2), (12, 16.8)], 2.93))
+    body = knock(body, line([(12, 14.2), (12, 16.8)], SW))
     shackle = line([(7.9, 10.2), (7.9, 7.2)] + arc(12, 7.2, 4.1, 180, 360, 24)[1:] + [(16.1, 10.2)], 2.3)
     return unary_union([body, shackle.difference(body.buffer(0.0))])
 
@@ -541,7 +547,7 @@ def _():
 def _():
     m = crescent(10.4, 13.6, 8.0, 4.8, -4.4, 6.4)
     s = spark(18.2, 5.6, 3.8)
-    return gap(m, s, 1.0)
+    return gap(m, s, GAP)
 
 
 @icon("more")
@@ -576,7 +582,7 @@ def _():
     body = squircle(2.6, 8.2, 21.4, 17.4, TR)
     body = knock(body, circle(18.4, 10.9, 1.0))     # lampu: jauh dari celah kertas (dulu menyatu → takik)
     paper = squircle(6.8, 13.4, 17.2, 21.4, 1.8)
-    return unary_union([top, gap(body, paper, 1.2)])
+    return unary_union([top, gap(body, paper, GAP)])
 
 
 @icon("qr")
@@ -625,35 +631,35 @@ def _():
 @icon("search")
 def _():
     lens = ring(10.6, 10.6, 7.6, 2.5)
-    handle = line([(16.4, 16.4), (20.2, 20.2)], 3.4)
+    handle = line([(16.4, 16.4), (20.2, 20.2)], SW)
     return unary_union([lens, handle])
 
 
 def magnifier(sym):
     lens = knock(circle(10.4, 10.4, 7.9), sym)
-    handle = line([(17.0, 17.0), (20.4, 20.4)], 3.4)
-    return gap(lens, handle, 1.0)
+    handle = line([(17.0, 17.0), (20.4, 20.4)], SW)
+    return gap(lens, handle, GAP)
 
 
 # zoom = lensa CINCIN yang sama dengan ikon cari dari sampel (bukan lensa penuh), tanda +/− di dalam lubangnya
-_LX, _LY = 9.72, 9.75     # pusat lensa ikon cari sampel (lubang r ≈ 4,14)
+_LX, _LY = 9.72, 9.75     # pusat lensa ikon cari sampel (lubang r ≈ 4,37 sesudah garis 2,5)
 
 
 @icon("zoom_in")
 def _():
-    return unary_union([I["search"](), plus(_LX, _LY, 2.0, 2.2)])
+    return unary_union([I["search"](), plus(_LX, _LY, 1.9, SW)])     # celah ke cincin 1,2: plus tetap terbaca
 
 
 @icon("zoom_out")
 def _():
-    return unary_union([I["search"](), line([(_LX - 2.0, _LY), (_LX + 2.0, _LY)], 2.2)])
+    return unary_union([I["search"](), line([(_LX - 1.9, _LY), (_LX + 1.9, _LY)], SW)])
 
 
 def shield_shape():
     pts = [(12, 2.2), (20.2, 5.4), (20.2, 11.0)] + \
-          [(12 + 8.2 * math.cos(math.radians(a)), 11.0 + 10.6 * math.sin(math.radians(a))) for a in range(5, 90, 5)] + \
+          [(12 + 8.2 * math.cos(math.radians(a)), 11.0 + 10.6 * math.sin(math.radians(a))) for a in range(1, 90)] + \
           [(12, 21.8)] + \
-          [(12 - 8.2 * math.cos(math.radians(a)), 11.0 + 10.6 * math.sin(math.radians(a))) for a in range(85, 0, -5)] + \
+          [(12 - 8.2 * math.cos(math.radians(a)), 11.0 + 10.6 * math.sin(math.radians(a))) for a in range(89, 0, -1)] + \
           [(3.8, 11.0), (3.8, 5.4)]
     return poly(pts, 1.4)
 
@@ -673,12 +679,12 @@ def _():
 def _():
     sq = [(3.6, 15.8), (5.2, 12.0), (6.8, 9.2), (8.2, 8.6), (8.6, 10.2), (7.6, 15.0), (8.8, 15.6), (10.8, 12.4),
           (12.4, 11.8), (13.2, 13.8), (14.4, 14.4), (15.6, 12.8), (17.2, 13.4), (18.6, 13.0), (20.4, 11.8)]
-    return unary_union([line(sq, 2.0), line([(3.6, 19.8), (20.4, 19.8)], 3.05)])
+    return unary_union([line(sq, 2.0), line([(3.6, 19.8), (20.4, 19.8)], SW)])
 
 
 @icon("spark")
 def _():
-    return gap(spark(10.4, 13.2, 8.2), spark(18.6, 5.2, 3.4), 1.0)
+    return gap(spark(10.4, 13.2, 8.2), spark(18.6, 5.2, 3.4), GAP)
 
 
 @icon("star")
@@ -688,11 +694,11 @@ def _():
 
 @icon("trash")
 def _():
-    lid = line([(3.6, 6.2), (20.4, 6.2)], 3.05)
+    lid = line([(3.6, 6.2), (20.4, 6.2)], SW)
     handle = squircle(8.8, 2.2, 15.2, 5.8, 1.4)
     body = poly([(5.2, 8.6), (18.8, 8.6), (17.6, 21.4), (6.4, 21.4)], 2.0)
     body = knock(body, line([(10.0, 12.0), (10.0, 17.6)], KW), line([(14.0, 12.0), (14.0, 17.6)], KW))
-    return unary_union([gap(lid, handle, 0.0), body]) if False else unary_union([lid, handle, body])
+    return unary_union([gap(lid, handle, GAP), body]) if False else unary_union([lid, handle, body])
 
 
 @icon("tune")
@@ -722,36 +728,84 @@ def _():
 
 @icon("wand")
 def _():
-    stick = line([(4.0, 20.0), (14.6, 9.4)], 3.4)
+    stick = line([(4.0, 20.0), (14.6, 9.4)], SW)
     s1 = spark(17.8, 6.2, 4.0)
     s2 = spark(8.6, 4.6, 2.2)
     s3 = spark(20.0, 15.0, 2.0)
-    return unary_union([gap(stick, s1, 1.1), s2, s3])
+    return unary_union([gap(stick, s1, GAP), s2, s3])
 
 
 # ------------------------------------------------------------------ bentuk dari sampel
-def _from_path(d):
-    """Path M/L/Z (even-odd) → geometri shapely."""
-    import re as _re
+def _from_path(d, step=0.03):
+    """Path SVG (boleh kurva) → geometri shapely (even-odd). Kurva dicacah rapat (±0,03) supaya busurnya dikenali
+    kembali oleh smooth.py sebagai lingkaran."""
+    from svgelements import Path as SPath, Move, Close, Line as SLine
     g = None
-    for ring in _re.findall(r"M([^MZ]*)Z", d):
-        nums = [float(v) for v in _re.findall(r"-?[0-9.]+", ring)]
-        p = Polygon(list(zip(nums[0::2], nums[1::2]))).buffer(0)
+    for sub in SPath(d).as_subpaths():
+        pts = []
+        for seg in SPath(sub):
+            if isinstance(seg, Move):
+                pts.append((seg.end.x, seg.end.y))
+            elif isinstance(seg, SLine):
+                pts.append((seg.end.x, seg.end.y))
+            elif isinstance(seg, Close):
+                continue
+            else:
+                n = max(8, int(math.ceil(seg.length(error=1e-4) / step)))
+                pts.extend((seg.point(i / n).x, seg.point(i / n).y) for i in range(1, n + 1))
+        if len(pts) < 3:
+            continue
+        p = Polygon(pts).buffer(0)
         g = p if g is None else g.symmetric_difference(p)
     return g
+
+
+def _thin(g, by):
+    """Tipiskan bentuk garis (offset ke dalam): garis berujung bulat tetap berujung bulat, hanya lebih tipis."""
+    return g.buffer(-by, quad_segs=Q, join_style="round")
+
+
+def _shrink_holes(g, by):
+    """Lubang garis di dalam bentuk solid ditipiskan; bentuk luarnya tetap."""
+    polys = [g] if isinstance(g, Polygon) else list(g.geoms)
+    out = []
+    for p in polys:
+        holes = []
+        for h in p.interiors:
+            hp = Polygon(h).buffer(-by, quad_segs=Q, join_style="round")
+            for q in ([hp] if isinstance(hp, Polygon) else list(getattr(hp, "geoms", []))):
+                if not q.is_empty:
+                    holes.append(q.exterior.coords)
+        out.append(Polygon(p.exterior.coords, holes))
+    return unary_union(out)
 
 
 SAMPLE_NAMES = set()
 
 
 def _sample():
+    """Ikon dari sampel memakai kurva aslinya; tebal garisnya (±2,95) diseragamkan ke SW."""
     try:
         from sample24 import SAMPLE
     except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from sample24 import SAMPLE
+    thin = (2.95 - SW) / 2
+    line_icons = {"back", "next", "up", "down", "check", "close", "plus", "search", "scan"}
+    hole_icons = {"doc", "sheet", "check_ok"}
+    rebuilt = {"image", "img_add", "edit"}          # dibangun ulang di bawah (bingkai = garis SW)
     for n, d in SAMPLE.items():
-        I[n] = (lambda dd: (lambda: _from_path(dd)))(d)
+        if n in rebuilt:
+            continue
+
+        def make(dd=d, nn=n):
+            g = _from_path(dd)
+            if nn in line_icons:
+                return _thin(g, thin)
+            if nn in hole_icons:
+                return _shrink_holes(g, thin)
+            return g
+        I[n] = make
         SAMPLE_NAMES.add(n)
 
 
@@ -770,33 +824,95 @@ def _():
     return unary_union([leaf, sq1, sq2, dot])
 
 
+# ---- dibangun ulang dari sampel dengan garis SW (bingkai sampel ±2,95 → 2,5) ----
+def _frame_pic():
+    """Bingkai gambar sampel: ubin TR, jendela selebar garis SW, bukit busur (r 7,56) & sudut jendela membulat."""
+    outer = squircle(2.625, 2.625, 21.375, 21.375, TR)
+    win = squircle(2.625 + SW, 2.625 + SW, 21.375 - SW, 21.375 - SW, 0.5)
+    hill = circle(12.0, 20.36, 7.56).intersection(win)
+    return unary_union([outer.difference(win), hill])
+
+
+@icon("image")
+def _():
+    return unary_union([_frame_pic(), circle(9.28, 9.22, 2.16)])      # matahari sampel
+
+
+@icon("img_add")
+def _():
+    # plus bergaris SW tidak muat di dalam jendela dengan celah GAP → diletakkan di pojok kanan atas, memotong bingkai
+    p = plus(18.125, 5.875, 2.0, SW)
+    pic = unary_union([_frame_pic(), circle(9.28, 9.22, 2.16)])      # matahari sama dengan ikon image
+    return gap(pic, p)
+
+
+@icon("edit")
+def _():
+    # sampel: bingkai terbuka di kanan atas (garis SW, sudut luar = TR) + pensil diagonal
+    c = 2.625 + SW / 2; e = 21.375 - SW / 2; rc = TR - SW / 2
+    path = ([(11.0, c)] + arc(c + rc, c + rc, rc, 270, 180, 16)
+            + arc(c + rc, e - rc, rc, 180, 90, 16) + arc(e - rc, e - rc, rc, 90, 0, 16) + [(e, 13.0)])
+    frame = line(path, SW)
+    pen = pencil(9.2, 14.8, 18.7, 5.3, 4.14)
+    return gap(frame, pen)
+
+
+# ------------------------------------------------------------------ ikon gambar Ival (kurva asli, apa adanya)
+class RawPath(str):
+    """Path SVG jadi (sudah mulus) — tidak dibulatkan / di-fit ulang."""
+    is_valid = True
+
+
+def _user():
+    try:
+        from user24 import USER
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from user24 import USER
+    for n, d in USER.items():
+        I[n] = (lambda dd: (lambda: RawPath(dd)))(d)
+
+
+_user()
+
+
 # ------------------------------------------------------------------ keluaran
 def rings_of(g):
+    """Semua cincin (luar & lubang) — TANPA penyederhanaan: titik busur harus utuh agar dikenali smooth.py."""
     polys = [g] if isinstance(g, Polygon) else list(getattr(g, "geoms", []))
     out = []
     for p in polys:
         if p.is_empty:
             continue
-        p = p.simplify(0.045)
         out.append(list(p.exterior.coords))
         out.extend(list(r.coords) for r in p.interiors)
     return out
 
 
 def path_data(g):
-    parts = []
-    for r in rings_of(g):
-        r = r[:-1]
-        if len(r) < 3:
-            continue
-        s = "M%.2f %.2f" % r[0] + "".join("L%.2f %.2f" % p for p in r[1:]) + "Z"
-        parts.append(s)
-    return "".join(parts)
+    """Geometri → path MULUS (garis lurus + kurva Bezier, lihat smooth.py). Ikon gambar Ival dipakai apa adanya."""
+    if isinstance(g, RawPath):
+        return str(g)
+    try:
+        from smooth import path_d
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from smooth import path_d
+    return path_d(rings_of(g))
+
+
+def build(n):
+    """Bangun ikon [n] siap tulis: pembulatan halus seragam untuk SEMUA ikon (kecuali gambar Ival)."""
+    g = I[n]()
+    if not isinstance(g, RawPath):
+        g = round_all(g)
+        assert g.is_valid, n
+    return g
 
 
 HEADER = ('<?xml version="1.0" encoding="utf-8"?>\n'
-          '<!-- Depup Solid: ikon solid membulat 24dp — bentuk penuh bersudut squircle, detail berupa lubang, ujung garis\n'
-          '     bulat, celah antar-bagian. Dibuat oleh tools/icons/gen.py; warna diatur lewat tint di kode. -->\n'
+          '<!-- Depup Solid: ikon solid membulat 24dp — garis 2,5 berujung bulat, sudut lingkaran, detail berupa lubang,\n'
+          '     celah 1,5. Path mulus (garis + kurva Bezier). Dibuat oleh tools/icons/gen.py; warna lewat tint. -->\n'
           '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
           '    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">\n')
 
@@ -825,10 +941,7 @@ if __name__ == "__main__":
     for n, f in I.items():
         if only and n not in only:
             continue
-        g = f()
-        if n not in SAMPLE_NAMES:
-            g = round_all(g)        # tidak ada sudut tajam/patah tersisa
-        assert g.is_valid, n
+        g = build(n)
         open(os.path.join(out, "ic_%s.xml" % n), "w").write(vd(g))
         if svg_dir:   # .svg TIDAK boleh masuk res/drawable (build Android gagal)
             open(os.path.join(svg_dir, "ic_%s.svg" % n), "w").write(svg(g))
