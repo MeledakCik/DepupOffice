@@ -235,16 +235,23 @@ class MainActivity : AppCompatActivity() {
      */
     private val draftCheck = Runnable {
         if (draftAsked || isFinishing || isDestroyed) return@Runnable
-        val d = DocDrafts.latestOrphan(this) ?: return@Runnable
+        // draf terbaru dari editor Word atau Excel
+        val w = DocDrafts.latestOrphan(this)
+        val x = SheetDrafts.latestOrphan(this)
+        val sheet = x != null && (w == null || x.time > w.time)
+        val d = (if (sheet) x else w) ?: return@Runnable
         draftAsked = true
         val whenTxt = SimpleDateFormat("d MMM, HH:mm", Locale("id")).format(Date(d.time))
         AlertDialog.Builder(this)
-            .setTitle("Pulihkan dokumen?")
+            .setTitle(if (sheet) "Pulihkan spreadsheet?" else "Pulihkan dokumen?")
             .setMessage("“${d.name}” punya perubahan yang belum disimpan (terakhir $whenTxt). Pulihkan dan lanjutkan mengedit?")
             .setPositiveButton("Pulihkan") { _, _ ->
-                startActivity(Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_DRAFT, d.id))
+                startActivity(
+                    if (sheet) Intent(this, SheetEditorActivity::class.java).putExtra(SheetEditorActivity.EXTRA_DRAFT, d.id)
+                    else Intent(this, DocEditorActivity::class.java).putExtra(DocEditorActivity.EXTRA_DRAFT, d.id)
+                )
             }
-            .setNegativeButton("Buang") { _, _ -> DocDrafts.clear(this, d.id) }
+            .setNegativeButton("Buang") { _, _ -> if (sheet) SheetDrafts.clear(this, d.id) else DocDrafts.clear(this, d.id) }
             .setNeutralButton("Nanti", null)
             .show()
     }

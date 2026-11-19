@@ -117,7 +117,7 @@ class DocEditorActivity : AppCompatActivity() {
     /** Id draf pemulihan sesi editor ini ([DocDrafts]). */
     private var draftId = java.util.UUID.randomUUID().toString()
     /** Draf yang akan/telah dipulihkan saat membuka. */
-    private var restoreDraft: DocDrafts.Draft? = null
+    private var restoreDraft: DraftStore.Draft? = null
     /** Simpan manual (latar) & tulis draf (onStop) tidak boleh membaca model bersamaan. */
     private val saveLock = Any()
 
