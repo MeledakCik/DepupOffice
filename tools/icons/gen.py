@@ -30,6 +30,24 @@ def squircle(x0, y0, x1, y1, r, n=None):
     return box(x0 + r, y0 + r, x1 - r, y1 - r).buffer(r, quad_segs=Q)
 
 
+def rrect(x0, y0, x1, y1, rtl, rtr, rbr, rbl):
+    """Persegi panjang dengan radius sudut berbeda-beda (kiri-atas, kanan-atas, kanan-bawah, kiri-bawah)."""
+    pts = []
+    for cx, cy, r, a0 in ((x0 + rtl, y0 + rtl, rtl, 180), (x1 - rtr, y0 + rtr, rtr, 270),
+                          (x1 - rbr, y1 - rbr, rbr, 0), (x0 + rbl, y1 - rbl, rbl, 90)):
+        n = Q * 2
+        for i in range(n + 1):
+            t = math.radians(a0 + 90 * i / n)
+            pts.append((cx + r * math.cos(t), cy + r * math.sin(t)))
+    return Polygon(pts).buffer(0)
+
+
+def round_all(g, r=0.35):
+    """Pembulatan halus seragam: sudut cembung DAN cekung yang masih tajam dibulatkan r (tanpa mengubah ukuran)."""
+    g = g.buffer(-r, quad_segs=Q, join_style="round").buffer(r, quad_segs=Q, join_style="round")
+    return g.buffer(r, quad_segs=Q, join_style="round").buffer(-r, quad_segs=Q, join_style="round")
+
+
 def line(pts, w=SW):
     return LineString(pts).buffer(w / 2, quad_segs=Q, cap_style="round", join_style="round")
 
@@ -263,7 +281,8 @@ def _():
 @icon("offline")
 def _():
     slash = line([(3.4, 3.4), (20.6, 20.6)], 2.8)
-    return gap(cloud_shape(), slash, 1.2)
+    body = smooth(cloud_shape().difference(slash.buffer(1.3, quad_segs=Q)), 0.6)   # potongan tidak tajam
+    return unary_union([body, slash])
 
 
 @icon("compress")
@@ -302,9 +321,9 @@ def page(fold=True):
     ax, ay = x1 - k, y0          # ujung atas garis potong
     bx, by = x1, y0 + k          # ujung kanan garis potong
     corner = Polygon([(ax, ay - 5), (bx + 5, ay - 5), (bx + 5, by), (bx, by), (ax, ay)])
-    body = smooth(p.difference(corner), 0.7)
+    body = smooth(p.difference(corner), 1.0)
     flap = Polygon([(ax, ay), (bx, by), (ax, by)]).intersection(body)
-    flap = flap.buffer(-0.5, quad_segs=Q).buffer(0.5, quad_segs=Q)
+    flap = flap.buffer(-0.9, quad_segs=Q).buffer(0.9, quad_segs=Q)
     return body, flap
 
 
@@ -388,20 +407,22 @@ def _():
 
 @icon("flip")
 def _():
-    l = poly([(10.0, 5.0), (10.0, 18.8), (3.2, 18.8)], 1.0)
-    r = poly([(14.0, 5.0), (14.0, 18.8), (20.8, 18.8)], 1.0)
+    l = poly([(10.0, 4.6), (10.0, 19.0), (2.8, 19.0)], 1.5)
+    r = poly([(14.0, 4.6), (14.0, 19.0), (21.2, 19.0)], 1.5)
     dashes = unary_union([line([(12, y), (12, y + 1.2)], 2.29) for y in (2.8, 7.4, 12.0, 16.6, 20.6)])
     return unary_union([l, r, dashes])
 
 
 @icon("folder")
 def _():
-    # sampel: bagian belakang dengan tab (atas) dan badan depan selebar penuh, dipisah celah lurus
-    back = squircle(2.625, 3.25, 21.375, 12.0, 2.4)
-    tab_cut = poly([(11.2, 3.0), (24.0, 3.0), (24.0, 5.6), (13.4, 5.6)], 0.8)
-    back = smooth(back.difference(tab_cut), 0.5)
+    # sampel: bagian belakang bertab (atas) + badan depan selebar penuh, dipisah celah lurus. Semua sudut bulat.
+    tab = squircle(2.625, 3.25, 11.6, 9.0, 2.2)
+    back = squircle(2.625, 5.4, 21.375, 12.0, 2.2)
+    slope = poly([(8.0, 3.25), (10.2, 3.25), (13.4, 5.4), (13.4, 7.0), (8.0, 7.0)], 0)
+    b = smooth(unary_union([tab, back, slope]), 0.9)          # pertemuan tab–belakang melengkung lembut
+    b = b.difference(box(0, 9.63, 24, 24))
     front = squircle(2.625, 10.7, 21.375, 20.75, TR)
-    return unary_union([back.difference(box(0, 9.63, 24, 10.7)), front])
+    return unary_union([b, front])
 
 
 @icon("format_clear")
@@ -552,8 +573,8 @@ def _():
 @icon("print")
 def _():
     top = squircle(6.8, 2.6, 17.2, 7.0, 1.6)
-    body = squircle(2.6, 8.2, 21.4, 17.4, 3.4)
-    body = knock(body, circle(17.4, 11.6, 1.15))
+    body = squircle(2.6, 8.2, 21.4, 17.4, TR)
+    body = knock(body, circle(18.4, 10.9, 1.0))     # lampu: jauh dari celah kertas (dulu menyatu → takik)
     paper = squircle(6.8, 13.4, 17.2, 21.4, 1.8)
     return unary_union([top, gap(body, paper, 1.2)])
 
@@ -720,6 +741,9 @@ def _from_path(d):
     return g
 
 
+SAMPLE_NAMES = set()
+
+
 def _sample():
     try:
         from sample24 import SAMPLE
@@ -728,9 +752,22 @@ def _sample():
         from sample24 import SAMPLE
     for n, d in SAMPLE.items():
         I[n] = (lambda dd: (lambda: _from_path(dd)))(d)
+        SAMPLE_NAMES.add(n)
 
 
 _sample()
+
+
+@icon("tools")
+def _():
+    # sampel "tools": empat bentuk 8,86 — daun (sudut kiri-atas besar), dua kotak, satu lingkaran; semua sudut bulat
+    a, b = 2.625, 11.485
+    c, d = 12.515, 21.375
+    leaf = rrect(a, a, b, b, 7.9, 1.6, 1.6, 1.6)
+    sq1 = squircle(c, a, d, b, 1.6)
+    sq2 = squircle(a, c, b, d, 1.6)
+    dot = circle((c + d) / 2, (c + d) / 2, (d - c) / 2)
+    return unary_union([leaf, sq1, sq2, dot])
 
 
 # ------------------------------------------------------------------ keluaran
@@ -789,6 +826,8 @@ if __name__ == "__main__":
         if only and n not in only:
             continue
         g = f()
+        if n not in SAMPLE_NAMES:
+            g = round_all(g)        # tidak ada sudut tajam/patah tersisa
         assert g.is_valid, n
         open(os.path.join(out, "ic_%s.xml" % n), "w").write(vd(g))
         if svg_dir:   # .svg TIDAK boleh masuk res/drawable (build Android gagal)
