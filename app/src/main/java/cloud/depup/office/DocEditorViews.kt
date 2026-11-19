@@ -114,8 +114,109 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
 
     override fun onDraw(canvas: Canvas) {
         val t = System.nanoTime()
+        if (selPhase != 0) drawSelAnim(canvas)     // sorotan beranimasi di BAWAH teks (seperti sorotan bawaan)
         super.onDraw(canvas)
         EdPerf.paraDrawNs += System.nanoTime() - t; EdPerf.paraDraws++
+    }
+
+    // =========================================================================================
+    // Animasi seleksi. Selama animasi, sorotan bawaan disembunyikan (highlightColor transparan) dan digambar sendiri;
+    // setelahnya sorotan bawaan kembali — pegangan & menu tetap milik Android.
+    //  1 = muncul: sorotan meletup lembut (membesar sedikit lalu mengendap) sambil menebal
+    //  2 = mengalir: rentang lama → rentang baru (kata → kalimat, Pilih semua) dengan pegas lembut
+    //  3 = hilang: sorotan lama memudar & menyusut sedikit
+    // Menggeser pegangan (perubahan beruntun < 140 ms) TIDAK dianimasikan: sorotan harus menempel di jari.
+    // =========================================================================================
+    private var selPhase = 0
+    private var selF = 0f
+    private var selFromA = 0; private var selFromB = 0
+    private var selToA = 0; private var selToB = 0
+    private var selAnim: android.animation.ValueAnimator? = null
+    private var baseHl = 0
+    private var lastSelA = 0; private var lastSelB = 0
+    private var lastSelAt = 0L
+    private val selPath = android.graphics.Path()
+    private val selBounds = RectF()
+    private val selPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private fun drawSelAnim(c: Canvas) {
+        val l = layout ?: return
+        val n = text?.length ?: 0
+        val (a, b) = when (selPhase) {
+            2 -> (selFromA + (selToA - selFromA) * selF).toInt().coerceIn(0, n) to (selFromB + (selToB - selFromB) * selF).toInt().coerceIn(0, n)
+            3 -> selFromA.coerceIn(0, n) to selFromB.coerceIn(0, n)
+            else -> selToA.coerceIn(0, n) to selToB.coerceIn(0, n)
+        }
+        if (a == b) return
+        selPath.reset()
+        l.getSelectionPath(minOf(a, b), maxOf(a, b), selPath)
+        selPath.computeBounds(selBounds, true)
+        val alpha = when (selPhase) {
+            1 -> (selF / 0.55f).coerceIn(0f, 1f)
+            3 -> 1f - selF.coerceIn(0f, 1f)
+            else -> 1f
+        }
+        val scale = when (selPhase) {
+            1 -> 1.06f - 0.06f * selF      // pegas: sedikit melewati 1 lalu mengendap
+            3 -> 1f - 0.03f * selF
+            else -> 1f
+        }
+        selPaint.color = baseHl
+        selPaint.alpha = (Color.alpha(baseHl) * alpha).toInt().coerceIn(0, 255)
+        c.save()
+        c.translate(compoundPaddingLeft.toFloat(), extendedPaddingTop.toFloat())
+        c.scale(scale, scale, selBounds.centerX(), selBounds.centerY())
+        c.drawPath(selPath, selPaint)
+        c.restore()
+    }
+
+    private fun animateSel(phase: Int, fromA: Int, fromB: Int, toA: Int, toB: Int) {
+        selAnim?.cancel()
+        if (highlightColor != Color.TRANSPARENT) baseHl = highlightColor
+        if (baseHl == 0) return
+        selPhase = phase
+        selFromA = fromA; selFromB = fromB; selToA = toA; selToB = toB
+        selF = 0f
+        highlightColor = Color.TRANSPARENT
+        val a = android.animation.ValueAnimator.ofFloat(0f, 1f)
+        when (phase) {
+            1 -> { a.duration = Motion.SPRING_MS; a.interpolator = Motion.SPRING }
+            2 -> { a.duration = Motion.SPRING_SOFT_MS; a.interpolator = Motion.SPRING_SOFT }
+            else -> { a.duration = Motion.FAST + 40L; a.interpolator = Motion.STANDARD }
+        }
+        a.addUpdateListener { selF = it.animatedValue as Float; invalidate() }
+        a.addListener(object : android.animation.AnimatorListenerAdapter() {
+            private var cancelled = false
+            override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true; endSelAnim() }
+            override fun onAnimationEnd(animation: android.animation.Animator) { if (!cancelled) endSelAnim() }
+        })
+        selAnim = a
+        a.start()
+    }
+
+    private fun endSelAnim() {
+        selPhase = 0
+        if (baseHl != 0) highlightColor = baseHl
+        invalidate()
+    }
+
+    /** Dipanggil dari [onSelectionChanged]: pilih jenis animasi dari perubahan rentang. */
+    private fun selChangedAnim(s: Int, e: Int) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val wasRange = lastSelA != lastSelB
+        val isRange = s != e
+        val dragging = now - lastSelAt < 140      // pegangan / tekan-lama sedang digeser
+        val fa = lastSelA; val fb = lastSelB
+        lastSelA = s; lastSelB = e; lastSelAt = now
+        if (!Motion.on() || !isAttachedToWindow || layout == null) return
+        when {
+            !wasRange && isRange -> animateSel(1, s, e, s, e)
+            wasRange && !isRange && isFocused -> animateSel(3, fa, fb, fa, fb)
+            wasRange && isRange && !dragging && (fa != s || fb != e) -> animateSel(2, fa, fb, s, e)
+            // sedang digeser: sorotan yang masih meletup ikut ke rentang baru; animasi lain dihentikan — tanpa jeda
+            dragging && selPhase == 1 -> { selToA = s; selToB = e; invalidate() }
+            dragging && selPhase != 0 -> selAnim?.cancel()
+        }
     }
 
     companion object Follow {
@@ -447,6 +548,7 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
+        if (!suppress && !binding) selChangedAnim(selStart, selEnd) else { lastSelA = selStart; lastSelB = selEnd }
         if (::para.isInitialized && !suppress) { lastChange = android.os.SystemClock.uptimeMillis(); host.onSel(this) }
     }
 
