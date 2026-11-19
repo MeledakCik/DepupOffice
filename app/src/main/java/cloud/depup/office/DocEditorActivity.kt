@@ -67,6 +67,10 @@ class DocEditorActivity : AppCompatActivity() {
         private const val FRAME_BUDGET_MS = 6L
         const val EXTRA_URI = "uri"
         const val EXTRA_TEMPLATE = "template"
+        /** Buka dari draf pemulihan [DocDrafts] (id draf). */
+        const val EXTRA_DRAFT = "draft"
+        private const val STATE_DRAFT = "depup.draftId"
+        private const val STATE_SAVED = "depup.savedFile"
         const val TEMPLATE_SURAT = "surat"
         const val TEMPLATE_CV = "cv"
         const val TEMPLATE_BLANK = "blank"
@@ -110,6 +114,12 @@ class DocEditorActivity : AppCompatActivity() {
     private var docName = "Dokumen"
     private var savedFile: File? = null
     private var dirty = false
+    /** Id draf pemulihan sesi editor ini ([DocDrafts]). */
+    private var draftId = java.util.UUID.randomUUID().toString()
+    /** Draf yang akan/telah dipulihkan saat membuka. */
+    private var restoreDraft: DocDrafts.Draft? = null
+    /** Simpan manual (latar) & tulis draf (onStop) tidak boleh membaca model bersamaan. */
+    private val saveLock = Any()
 
     private lateinit var scroll: ScrollView
     private lateinit var pageCard: LinearLayout
@@ -188,7 +198,35 @@ class DocEditorActivity : AppCompatActivity() {
         loading.add(android.widget.ProgressBar(this), w = dp(40), h = dp(40))
         loading.add(tv("Membuka dokumen…", 13f, C.MUTED).apply { gravity = Gravity.CENTER }, top = 10)
         setContentView(loading)
+        // Pulihkan: (1) Android mematikan aplikasi saat di latar lalu membuat ulang layar ini → draf sesi ini;
+        // (2) dari layar utama ("Pulihkan dokumen?") → EXTRA_DRAFT.
+        val sid = savedInstanceState?.getString(STATE_DRAFT)
+        val want = sid ?: intent.getStringExtra(EXTRA_DRAFT)
+        want?.let { id -> DocDrafts.get(this, id)?.let { d -> draftId = id; restoreDraft = d } }
+        if (restoreDraft == null && sid != null) {
+            draftId = sid
+            savedInstanceState.getString(STATE_SAVED)?.let { p -> File(p).takeIf { it.isFile }?.let { savedFile = it } }
+        }
+        DocDrafts.markLive(draftId, true)
         startOpen()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_DRAFT, draftId)
+        savedFile?.let { outState.putString(STATE_SAVED, it.path) }
+    }
+
+    /**
+     * Ke latar dengan perubahan belum tersimpan → tulis draf pemulihan (Android bisa mematikan aplikasi kapan saja
+     * setelah ini). Ditutup (finish) → draf dibuang: pengguna sudah memilih Simpan / Jangan Simpan.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (isFinishing) { DocDrafts.clear(this, draftId); return }
+        if (!dirty || !::doc.isInitialized || secureMode || lockedProt != null) return
+        try { syncAll() } catch (_: Throwable) {}
+        DocDrafts.write(this, draftId, docName, savedFile?.path) { f -> synchronized(saveLock) { doc.save(f) } }
     }
 
     // ---------------- dokumen terkunci (Batasi Pengeditan Word): mengedit butuh password
@@ -217,6 +255,11 @@ class DocEditorActivity : AppCompatActivity() {
                 if (openedFlat) toast("Format dokumen tidak dikenali penuh; hanya teks yang dimuat.")
                 doc = opened
                 buildUi()
+                restoreDraft?.let { d ->
+                    d.savedPath?.let { p -> File(p).takeIf { it.isFile }?.let { savedFile = it } }
+                    markDirty()
+                    toast("Perubahan yang belum disimpan telah dipulihkan.")
+                }
             }
         }, "doc-open", 16L * 1024 * 1024).start()
     }
@@ -596,6 +639,8 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        DocDrafts.markLive(draftId, false)
+        if (isFinishing) DocDrafts.clear(this, draftId)
         guard.disable()
         Cull.releaseAll()
         handler.removeCallbacksAndMessages(null)
@@ -605,6 +650,18 @@ class DocEditorActivity : AppCompatActivity() {
     }
 
     private fun openDocument(): DocxDocument? {
+        restoreDraft?.let { d ->
+            docName = d.name
+            val f = try { File(cacheDir, "edit_${System.currentTimeMillis()}.docx").also { d.file.copyTo(it, overwrite = true) } } catch (_: Exception) { null }
+            f?.let { DocxDocument.open(it) }?.let { return it }
+            restoreDraft = null   // draf rusak: buka seperti biasa
+        }
+        // dibuat ulang setelah proses dimatikan, tanpa perubahan baru sejak disimpan: buka berkas tersimpan itu
+        // (bukan template awal / berkas asal versi lama)
+        savedFile?.takeIf { it.isFile }?.let { sf ->
+            val f = try { File(cacheDir, "edit_${System.currentTimeMillis()}.docx").also { sf.copyTo(it, overwrite = true) } } catch (_: Exception) { null }
+            f?.let { DocxDocument.open(it) }?.let { docName = Files.baseName(sf.name); return it }
+        }
         val rawUri = intent.getStringExtra(EXTRA_URI)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         if (rawUri != null) {
             docName = Files.baseName(Files.nameOf(this, rawUri)).removePrefix("open_").ifBlank { "Dokumen" }
@@ -2563,19 +2620,19 @@ class DocEditorActivity : AppCompatActivity() {
         val asNew = asNew0 && !secureMode
         if (secureMode && savedFile == null) {
             val out = Files.namedOut(this, docName, "docx")
-            work("Menyimpan…", { doc.save(out) }) { res -> res.onSuccess { onSaved(out, false); after?.invoke() }.onFailure { fail(it) } }
+            work("Menyimpan…", { synchronized(saveLock) { doc.save(out) } }) { res -> res.onSuccess { onSaved(out, false); after?.invoke() }.onFailure { fail(it) } }
             return
         }
         val target = savedFile
         if (!asNew && target != null) {
-            work("Menyimpan…", { doc.save(target) }) { res ->
+            work("Menyimpan…", { synchronized(saveLock) { doc.save(target) } }) { res ->
                 res.onSuccess { onSaved(target, false); after?.invoke() }.onFailure { fail(it) }
             }
             return
         }
         saveSheet("Simpan Dokumen Word", "Format asli dokumen tetap dipertahankan", docName, null, 0, "Simpan", ext = "docx") { name, _ ->
             val out = Files.namedOut(this, name, "docx")
-            work("Menyimpan dokumen…", { doc.save(out) }) { res ->
+            work("Menyimpan dokumen…", { synchronized(saveLock) { doc.save(out) } }) { res ->
                 res.onSuccess {
                     docName = name; titleTv.text = name
                     onSaved(out, after == null)
@@ -2588,6 +2645,7 @@ class DocEditorActivity : AppCompatActivity() {
     private fun onSaved(f: File, showSheet: Boolean) {
         savedFile = f
         dirty = false
+        DocDrafts.clear(this, draftId)   // tersimpan: draf pemulihan tidak diperlukan lagi
         setStatus("Tersimpan · ${SimpleDateFormat("HH:mm", Locale("id")).format(Date())}", C.SUCCESS)
         val uri = Files.uriFor(this, f)
         Recent.add(this, uri, f.name, DOCX)
@@ -2613,7 +2671,7 @@ class DocEditorActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setTitle("Simpan perubahan?")
             .setMessage("Ada perubahan yang belum disimpan pada “$docName”.")
             .setPositiveButton("Simpan") { _, _ -> save(false) { finish() } }
-            .setNegativeButton("Jangan Simpan") { _, _ -> finish() }
+            .setNegativeButton("Jangan Simpan") { _, _ -> DocDrafts.clear(this, draftId); finish() }
             .setNeutralButton("Batal", null).show()
     }
 }
