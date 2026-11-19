@@ -401,12 +401,30 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
     }
 
     // ---- blur progresif ([fade]) ----
-    private val fadeNodes: Array<RenderNode>? = if (node != null) arrayOf(RenderNode("fadeHeavy"), RenderNode("fadeLight")) else null
-    private val fadeR = floatArrayOf(-1f, -1f)
-    private val fadeMasks = arrayOf(Paint(), Paint()).onEach { it.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    // Empat lapisan blur (berat → sangat ringan) bertumpuk di atas isi asli. Topeng tiap lapisan memudar dengan kurva
+    // smoothstep (tanpa "lutut" linear yang tampak sebagai garis) dan pita pudarnya saling bertumpuk, jadi yang terlihat
+    // adalah blur yang menipis perlahan ke bawah — bukan batas antara gambar buram & tajam.
+    private val fadeBands = arrayOf(floatArrayOf(1.5f, 0f, 0.42f), floatArrayOf(0.8f, 0.12f, 0.64f),
+        floatArrayOf(0.38f, 0.3f, 0.84f), floatArrayOf(0.14f, 0.5f, 1f))   // (kali radius blur, penuh s/d, habis di)
+    private val fadeNodes: Array<RenderNode>? = if (node != null) Array(fadeBands.size) { RenderNode("fade$it") } else null
+    private val fadeR = FloatArray(fadeBands.size) { -1f }
+    private val fadeMasks = Array(fadeBands.size + 1) { Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) } }
     private val fadeTint = Paint()
     private var fadeH = -1
     private var fadeBase = 0
+
+    /** Gradien tegak: nilai 1 sampai [a], lalu turun ke 0 di [b] mengikuti smoothstep (16 titik, mulus). */
+    private fun easeDown(h: Float, a: Float, b: Float, color: (Float) -> Int): LinearGradient {
+        val n = 16
+        val pos = FloatArray(n + 2); val col = IntArray(n + 2)
+        pos[0] = 0f; col[0] = color(1f)
+        for (k in 0..n) {
+            val t = k / n.toFloat()
+            pos[k + 1] = a + (b - a) * t
+            col[k + 1] = color(1f - t * t * (3f - 2f * t))
+        }
+        return LinearGradient(0f, 0f, 0f, h, col, pos, Shader.TileMode.CLAMP)
+    }
 
     private fun drawFade(canvas: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
@@ -414,18 +432,16 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         val base = tintColor?.invoke() ?: C.BG
         if (fadeH != height || fadeBase != base) {
             fadeH = height; fadeBase = base
-            fun a(v: Float) = Color.argb((v * 255).roundToInt(), 0, 0, 0)
-            // berat: penuh di atas (bilah status), habis di 65% tinggi; ringan: penuh sampai 40%, habis di dasar bilah
-            fadeMasks[0].shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(a(1f), a(0.85f), a(0f)), floatArrayOf(0f, 0.35f, 0.65f), Shader.TileMode.CLAMP)
-            fadeMasks[1].shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(a(1f), a(1f), a(0f)), floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP)
-            fun t(v: Float) = Color.argb((v * 255).roundToInt(), Color.red(base), Color.green(base), Color.blue(base))
-            fadeTint.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(t(0.78f), t(0.5f), t(0f)), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+            val black = { v: Float -> Color.argb((v * 255).roundToInt(), 0, 0, 0) }
+            fadeBands.forEachIndexed { i, b -> fadeMasks[i].shader = easeDown(h, b[1], b[2], black) }
+            fadeMasks[fadeBands.size].shader = easeDown(h, 0.2f, 1f, black)   // satu lapisan (Android 10–11)
+            fadeTint.shader = easeDown(h, 0f, 1f) { v -> Color.argb((v * 0.8f * 255).roundToInt(), Color.red(base), Color.green(base), Color.blue(base)) }
         }
         val c = content
         if (Glass.BLUR && c != null && !blocked) {
             try {
                 if (gpu) drawFadeGpu(canvas, c, w, h)
-                else { val s = canvas.saveLayer(0f, 0f, w, h, null); if (drawSoft(canvas)) canvas.drawRect(0f, 0f, w, h, fadeMasks[1]); canvas.restoreToCount(s) }
+                else { val s = canvas.saveLayer(0f, 0f, w, h, null); if (drawSoft(canvas)) canvas.drawRect(0f, 0f, w, h, fadeMasks[fadeBands.size]); canvas.restoreToCount(s) }
             } catch (_: Throwable) { blocked = true }
         }
         canvas.drawRect(0f, 0f, w, h, fadeTint)
@@ -438,10 +454,13 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         if (!cn.hasDisplayList()) { postInvalidateOnAnimation(); return }
         if (!relate(c)) return
         syncBlur()
-        val radii = floatArrayOf(max(radius, 8f * density) * 1.4f, max(radius, 8f * density) * 0.4f)
-        for (i in 1 downTo 0) {   // ringan dulu, berat di atasnya
+        val r0 = max(radius, 10f * density)
+        // HP kelas bawah: dua lapisan saja (berat & ringan)
+        val use = if (Perf.low) intArrayOf(3, 0) else intArrayOf(3, 2, 1, 0)   // ringan dulu, berat paling atas
+        for (i in use) {
             val n = ns[i]
-            if (fadeR[i] != radii[i]) { GlassFx31.apply(n, radii[i]); fadeR[i] = radii[i] }
+            val r = r0 * fadeBands[i][0]
+            if (fadeR[i] != r) { GlassFx31.apply(n, r); fadeR[i] = r }
             n.setPosition(-mx, -my, width + mx, height + my)
             val rc = n.beginRecording(width + mx * 2, height + my * 2)
             try {

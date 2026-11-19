@@ -287,7 +287,8 @@ class MainActivity : AppCompatActivity() {
         ((tile as? android.view.ViewGroup)?.getChildAt(0) as? android.view.ViewGroup)?.getChildAt(0) as? TextView
 
     private fun setBarCompact(bar: LinearLayout) {
-        bar.setPadding(dp(16), dp(2), dp(16), dp(2))
+        // ekor bawah 20dp: ruang bagi blur progresif untuk menipis perlahan (bukan berhenti mendadak di dasar judul)
+        bar.setPadding(dp(16), dp(2), dp(16), dp(20))
         bar.minimumHeight = dp(48)
     }
 
