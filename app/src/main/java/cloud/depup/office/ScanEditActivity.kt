@@ -604,10 +604,16 @@ class ScanEditActivity : AppCompatActivity() {
                             }
                         }
                         2 -> {
-                            val pg = pages.getOrNull(cur)
-                            val bmp = if (pg != null) try { Export.process(this@ScanEditActivity, pg, mode, 1800, 0, 0) } catch (_: Exception) { null } else null
-                            if (bmp != null) PrintHelper.printBitmap(this@ScanEditActivity, bmp, "Hasil_Scan_${cur + 1}")
-                            else toast("Gagal memproses gambar untuk dicetak")
+                            // semua halaman jadi satu PDF (sama seperti simpan PDF), lalu lembar Cetak DepUp:
+                            // halaman tertentu, salinan, kertas, warna & bolak-balik dipilih di sana
+                            val all = pages.toList()
+                            val out = PrintKit.newFile(this@ScanEditActivity, "scan")
+                            work("Menyiapkan hasil scan…", {
+                                Export.pdf(this@ScanEditActivity, all, out, mode, bright, contrast, 0, Export.ASPECTS[0], false, null)
+                            }) { r ->
+                                if (r.isSuccess) printSheet(out, "Hasil Scan")
+                                else { out.delete(); toast("Gagal memproses gambar untuk dicetak") }
+                            }
                         }
                     }
                     true

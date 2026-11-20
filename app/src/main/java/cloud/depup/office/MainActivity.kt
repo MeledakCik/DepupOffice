@@ -1820,7 +1820,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             },
             tile(R.drawable.ic_download, C.PRIMARY, C.PRIMARY_C, "Simpan ke HP", "Salin ke Documents/DepUp Office") { exportFlow() },
             tile(R.drawable.ic_print, C.PRIMARY, C.PRIMARY_C, "Cetak", "Printer atau simpan PDF") {
-                pickFile(arrayOf(PDF)) { u -> Files.print(this, u, Files.nameOf(this, u)) }
+                pickFile(arrayOf(PDF)) { u -> printPdfUri(u, Files.nameOf(this, u)) }
             }
         )
     }

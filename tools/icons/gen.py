@@ -290,6 +290,12 @@ def _():
     return plus(12, 12, 7.2, 2.4)
 
 
+@icon("minus")
+def _():
+    # pasangan ic_plus (pengatur jumlah salinan cetak, dsb.)
+    return line([(4.8, 12), (19.2, 12)], 2.4)
+
+
 def cloud_shape():
     # tiga gelembung yang menyinggung garis dasar yang sama (y = 19.2) + badan di antaranya
     c = unary_union([circle(7.6, 14.8, 4.4), circle(12.6, 11.0, 5.9), circle(17.0, 15.0, 4.2),

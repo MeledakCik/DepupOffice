@@ -572,7 +572,14 @@ class SheetEditorActivity : AppCompatActivity() {
                 val title = sheetTitleEt.text.toString().ifBlank { "Spreadsheet Excel" }
                 when (m.itemId) {
                     1 -> VoiceReaderManager.showVoiceReaderDialog(this@SheetEditorActivity, title, getReadableGridText())
-                    2 -> PrintHelper.printSpreadsheet(this@SheetEditorActivity, title, getGridData())
+                    2 -> {
+                        val grid = getGridData()
+                        val out = PrintKit.newFile(this@SheetEditorActivity, "tabel")
+                        work("Menyiapkan tabel…", { PrintKit.spreadsheetPdf(title, grid, out) }) { r ->
+                            if (r.isSuccess) printSheet(out, title)
+                            else { out.delete(); toast("Tabel tidak bisa disiapkan untuk dicetak") }
+                        }
+                    }
                 }
                 true
             }

@@ -2543,7 +2543,10 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun readAloud() = VoiceReaderManager.showVoiceReaderDialog(this, docName, plainText())
 
-    /** "Cetak / PDF": lembar DepUp — simpan PDF langsung (tanpa dialog sistem) atau cetak ke printer. */
+    /**
+     * "Cetak / PDF": lembar DepUp — simpan PDF langsung (tanpa dialog sistem) atau cetak ke printer lewat lembar Cetak
+     * DepUp (halaman, salinan, kertas, warna, bolak-balik; layar printer Android tinggal pilih printer).
+     */
     private fun printDoc() = printChoiceSheet(docName, onPdf = { preparePrint(pdf = true) }, onPrint = { preparePrint(pdf = false) })
 
     private fun preparePrint(pdf: Boolean) {
@@ -2559,7 +2562,7 @@ class DocEditorActivity : AppCompatActivity() {
         }
         val wv = WebView(this)
         printView = wv
-        val waiting = if (pdf) busy("Membuat PDF…") else null
+        val waiting = busy(if (pdf) "Membuat PDF…" else "Menyiapkan cetak…")
         fun stopWaiting() { try { waiting?.dismiss() } catch (_: Exception) {} }
         wv.webViewClient = object : WebViewClient() {
             private var started = false
@@ -2577,14 +2580,16 @@ class DocEditorActivity : AppCompatActivity() {
                 }
                 val media = if (pg?.landscape == true) base.asLandscape() else base
                 fun system() = pm.print(docName, view.createPrintDocumentAdapter(docName), PrintAttributes.Builder().setMediaSize(media).build())
-                if (!pdf) { system(); return }
-                // beri waktu tata letak & font selesai, lalu tulis PDF langsung ke folder hasil
+                // beri waktu tata letak & font selesai, lalu tulis PDF langsung (ke folder hasil, atau berkas cetak sementara)
                 view.postDelayed({
                     if (isFinishing || isDestroyed) { stopWaiting(); return@postDelayed }
-                    PdfExport.write(this@DocEditorActivity, view, docName, media) { f ->
+                    if (pdf) PdfExport.write(this@DocEditorActivity, view, docName, media) { f ->
                         stopWaiting()
                         if (f != null) pdfReadySheet(f)
                         else { toast("Pilih “Simpan sebagai PDF” di dialog cetak"); system() }
+                    } else PdfExport.write(this@DocEditorActivity, view, docName, media, to = PrintKit.newFile(this@DocEditorActivity, "dok")) { f ->
+                        stopWaiting()
+                        if (f != null) printSheet(f, docName) else system()
                     }
                 }, 450L)
             }

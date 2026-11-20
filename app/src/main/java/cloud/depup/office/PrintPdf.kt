@@ -21,7 +21,8 @@ import kotlin.math.roundToInt
  * "Simpan sebagai PDF" TANPA dialog cetak sistem: dokumen yang tampil di WebView (Word, Excel, PowerPoint, editor
  * dokumen) ditulis langsung ke PDF lewat adaptor cetaknya ([android.print.DepupPdfWriter]) dengan ukuran halaman
  * dokumen itu sendiri — slide tetap lanskap penuh, bukan menempel di atas kertas A4 tegak. Hasilnya tampil di lembar
- * DepUp ([pdfReadySheet]). Dialog cetak sistem hanya dipakai untuk mencetak ke printer, atau bila cara ini gagal.
+ * DepUp ([pdfReadySheet]). Mencetak ke printer lewat lembar Cetak DepUp ([printSheet]); layar cetak sistem langsung
+ * hanya bila cara ini gagal.
  */
 object PdfExport {
     private val main = Handler(Looper.getMainLooper())
@@ -57,12 +58,13 @@ object PdfExport {
         .build()
 
     /**
-     * Tulis isi [wv] ke PDF baru di folder hasil (Documents/DepUp Office). [done] di thread utama: berkas PDF, atau
-     * null bila perangkat menolak / gagal — pemanggil lalu memakai dialog cetak sistem.
+     * Tulis isi [wv] ke PDF baru di folder hasil (Documents/DepUp Office), atau ke [to] (mis. berkas sementara untuk
+     * dicetak). [done] di thread utama: berkas PDF, atau null bila perangkat menolak / gagal — pemanggil lalu memakai
+     * dialog cetak sistem.
      */
-    fun write(a: AppCompatActivity, wv: WebView, name: String, media: PrintAttributes.MediaSize = mediaOf(wv), done: (File?) -> Unit) {
+    fun write(a: AppCompatActivity, wv: WebView, name: String, media: PrintAttributes.MediaSize = mediaOf(wv), to: File? = null, done: (File?) -> Unit) {
         val base = name.substringBeforeLast('.').ifBlank { "Dokumen" }
-        val out = Files.newOut(a, base, "pdf")
+        val out = to ?: Files.newOut(a, base, "pdf")
         var fired = false
         fun finish(ok: Boolean) {
             if (fired) return
@@ -91,7 +93,7 @@ fun AppCompatActivity.printChoiceSheet(name: String, onPdf: () -> Unit, onPrint:
     pad.add(actionRow(R.drawable.ic_pdf, "Simpan sebagai PDF", "Ukuran halaman sesuai dokumen · langsung jadi", C.PDF_FG, C.PDF_BG) {
         dismiss(); onPdf()
     })
-    pad.add(actionRow(R.drawable.ic_print, "Cetak ke printer", "Printer Wi-Fi / Mopria — pilih printer di langkah berikutnya", C.ACCENT, C.BLUE_BG) {
+    pad.add(actionRow(R.drawable.ic_print, "Cetak ke printer", "Atur halaman, salinan, kertas & warna, lalu pilih printer", C.ACCENT, C.BLUE_BG) {
         dismiss(); onPrint()
     }, top = 8)
     body.add(pad)
@@ -167,8 +169,8 @@ fun AppCompatActivity.pdfReadySheet(file: File, title: String = "PDF siap") {
         pad.add(actionRow(R.drawable.ic_chat, "Kirim via WhatsApp", "", C.TEAL, C.TEAL_BG) {
             dismiss(); Files.share(this, uri, PDF, true)
         }, top = 8)
-        pad.add(actionRow(R.drawable.ic_print, "Cetak ke printer", "Pilih printer di langkah berikutnya", C.ACCENT, C.BLUE_BG) {
-            dismiss(); PrintHelper.printPdf(this, uri, file.name)
+        pad.add(actionRow(R.drawable.ic_print, "Cetak ke printer", "Atur halaman, salinan, kertas & warna", C.ACCENT, C.BLUE_BG) {
+            dismiss(); printSheet(file, file.name)
         }, top = 8)
         pad.add(tv("Tersimpan di Documents/DepUp Office · ada di Dokumen → Hasil olahan", 12f, C.MUTED).apply {
             gravity = Gravity.CENTER
