@@ -189,10 +189,15 @@ object Theme {
     fun systemDark(): Boolean =
         (android.content.res.Resources.getSystem().configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
+    /**
+     * Tema gelap dipakai? "Ikuti HP" membaca tema HP dari konfigurasi SISTEM, bukan konfigurasi layar: konfigurasi
+     * layar ikut ditimpa mode malam AppCompat dan baru diperbarui di tengah onCreate, jadi bisa berbeda sesaat —
+     * dulu membuat halaman dibangun terang sementara bilah kaca & bilah status sudah gelap.
+     */
     fun isDark(ctx: Context): Boolean = when (mode(ctx)) {
         LIGHT -> false
         DARK -> true
-        else -> (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        else -> systemDark()
     }
 
     /** Hitung ulang token warna & warnai bilah status/navigasi sistem. */
