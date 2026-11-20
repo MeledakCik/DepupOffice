@@ -17,7 +17,9 @@ Alat pengembang — tidak ikut di-build ke APK.
   tembus cahaya); pengganggu bidang putih terang tepat di samping dokumen (lampu/jendela/silau) dan papan lain yang
   terpotong bingkai; foto terlalu terang. GT = masker dokumen utuh (bagian yang tertutup jari tetap dihitung).
 - `real/` — foto ASLI dari pengguna yang pernah gagal di HP (`real/cases.json`: sudut benar dalam pecahan 0..1,
-  urutan KA, KaA, KaB, KiB). **Wajib lolos** (juga diuji JVM: `app/src/test/.../AutoCropRealTest.kt`).
+  urutan KA, KaA, KaB, KiB). **Wajib lolos** (juga diuji JVM: `app/src/test/.../AutoCropRealTest.kt`, yang membaca
+  `<foto>.small.gz` — foto yang sudah diperkecil persis seperti ScanAi.small, karena classpath uji Android tidak memuat
+  javax.imageio). Setiap menambah foto asli: `java -cp h.jar HarnessKt new realsmall tools/autocrop/real`.
   - `user1.png` — kertas putih di atas kain putih, batas hanya garis bayangan tipis (15-11-2026).
   - `user2.png` — papan merah tergantung di plafon: dulu yang terpilih atap tembus cahaya putih di bawahnya (20-11-2026).
   - `user3.png` — struk dipegang tangan di bawah papan merah: dulu sisi kanannya melebar ke silau lampu (20-11-2026).
@@ -36,7 +38,7 @@ Set yang dipakai (folder env `CROP`, bawaan `/home/claude/crop`):
 ## Alat
 
 - `Harness.kt` — menjalankan `ScanCore.findDocument` dan menghitung IoU (berhasil bila ≥ 0,85) + rincian per kondisi:
-  `java -cp h.jar HarnessKt new 6` (… `7`–`11`, `real`). Env: `G=1` rincian per kondisi, `V=1` daftar yang gagal,
+  `java -cp h.jar HarnessKt new 6` (… `7`–`11`, `real`; `realsmall <folder>` menulis `.small.gz` untuk uji JVM). Env: `G=1` rincian per kondisi, `V=1` daftar yang gagal,
   `W=…` bobot pengganti, `MS=…` ambang yakin, `SEAM=a,b,c,d,e` parameter cutAtSeam, `NOSEAM=1` matikan cutAtSeam.
 - `Trainer.kt` — melatih bobot penilaian `DocFind.W` + `MIN_SCORE`, `ALIGN_DROP`, `MESSY` dengan **alur penuh di
   dalam lingkaran pelatihan**: kandidat & fiturnya disiapkan sekali per foto (`ScanCore.prepareFind`), lalu tiap set
