@@ -39,7 +39,7 @@ import java.util.Locale
 /** CameraX sudah disiapkan di proses ini (lihat [MainActivity.warmCamera]). */
 private var cameraWarm = false
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), ThemeFade.Host {
 
     private var onOne: ((Uri) -> Unit)? = null
     private var onMany: ((List<Uri>) -> Unit)? = null
@@ -111,28 +111,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, backToHome)
         prefetchSizes()
         restoreY = savedInstanceState?.getInt("scrollY", 0) ?: 0
-        val mainView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(C.BG)
-        }
-        mainView.add(topBar())
-        content = FrameLayout(this)
-        mainView.add(content, w = MATCH, h = 0, weight = 1f)
-        mainView.add(View(this).apply { setBackgroundColor(C.LINE) }, h = 1)
-        mainView.add(bottomNav())
-
-        val root = FrameLayout(this)
-        val screen = Glass.scaffold(mainView, floatBottom = true)
-        glass = screen as? GlassScaffold
-        // Navigasi = kapsul kaca tinta: kontras tinggi terhadap halaman (hitam di tema terang, terang di tema gelap).
-        // Navigasi = kapsul liquid glass ala iOS 26 (terang di tema terang, gelap di tema gelap); panel tinta
-        // kontras tinggi dipakai di isi halaman (kartu Scan & ubin angka).
-        glass?.bottomBar?.apply { tintColor = { C.SURFACE }; tintAlpha = 232 }
-        glass?.topBar?.fade = true   // bilah atas: blur progresif (makin atas makin buram), tanpa garis & lensa
-        glass?.topBar?.fadeTail = 0  // bilah Beranda kosong: menipis sepanjang tinggi bilah (ekornya padding bilah)
-        glass?.watchContent = true   // isi beranda tidak pernah kosong polos → ikut diawasi penjaga kaca
-        root.addView(screen, FrameLayout.LayoutParams(MATCH, MATCH))
-        setContentView(root)
+        val root = buildUi()
         splashing = savedInstanceState == null && Motion.on()
         select(tab)
         freshlyBuilt = true
@@ -160,6 +139,49 @@ class MainActivity : AppCompatActivity() {
             Theme.apply(this)
             window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(C.BG))
         }
+    }
+
+    /** Kerangka layar: bilah atas, wadah isi, navigasi bawah, dibungkus kaca. Dipakai onCreate & ganti tema. */
+    private fun buildUi(): FrameLayout {
+        val mainView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(C.BG)
+        }
+        mainView.add(topBar())
+        content = FrameLayout(this)
+        mainView.add(content, w = MATCH, h = 0, weight = 1f)
+        mainView.add(View(this).apply { setBackgroundColor(C.LINE) }, h = 1)
+        mainView.add(bottomNav())
+
+        val root = FrameLayout(this)
+        val screen = Glass.scaffold(mainView, floatBottom = true)
+        glass = screen as? GlassScaffold
+        // Navigasi = kapsul liquid glass ala iOS 26 (terang di tema terang, gelap di tema gelap); panel tinta
+        // kontras tinggi dipakai di isi halaman (kartu Scan & ubin angka).
+        glass?.bottomBar?.apply { tintColor = { C.SURFACE }; tintAlpha = 232 }
+        glass?.topBar?.fade = true   // bilah atas: blur progresif (makin atas makin buram), tanpa garis & lensa
+        glass?.topBar?.fadeTail = 0  // bilah Beranda kosong: menipis sepanjang tinggi bilah (ekornya padding bilah)
+        glass?.watchContent = true   // isi beranda tidak pernah kosong polos → ikut diawasi penjaga kaca
+        root.addView(screen, FrameLayout.LayoutParams(MATCH, MATCH))
+        setContentView(root)
+        return root
+    }
+
+    /**
+     * Tema berganti (lihat [ThemeFade]): seluruh tampilan dibangun ulang DI TEMPAT dengan token warna baru, di balik
+     * potret layar lama yang lalu memudar. Tanpa recreate: jendela, siklus hidup & state activity tetap — jauh lebih
+     * cepat, dan tab serta posisi gulir tidak berubah.
+     */
+    override fun rebuildForTheme() {
+        restoreY = sv?.scrollY ?: 0
+        if (::content.isInitialized) content.removeCallbacks(prebuild)
+        swapGen++; swapping = false; titleAnim = false; splashing = false
+        for (i in pages.indices) { pages[i] = null; pageKey[i] = null }
+        orphans.clear()
+        sv = null; renderedTab = -1; docsList = null; docsSearch = null; continueKey = null
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(C.BG))
+        buildUi()
+        select(tab)
     }
 
     /**
@@ -652,7 +674,6 @@ class MainActivity : AppCompatActivity() {
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         lastTouch = android.os.SystemClock.uptimeMillis()
         LaunchFrom.record(ev)
-        ThemeFade.touch(ev)
         return super.dispatchTouchEvent(ev)
     }
 
@@ -1860,8 +1881,8 @@ class MainActivity : AppCompatActivity() {
             if (willDark == C.dark) {
                 Theme.setMode(this, m); DepupApp.applyNightMode(m); render()
             } else {
-                // terang ↔ gelap: layar lama dipotret, tema diganti, lalu tema baru terbuka melingkar dari pilihan yang diketuk
-                ThemeFade.switchTo(this) { Theme.setMode(this, m); DepupApp.applyNightMode(m) }
+                // terang ↔ gelap: layar lama dipotret, tampilan dibangun ulang di tempat, lalu memudar (ala iOS)
+                ThemeFade.change(this) { Theme.setMode(this, m); DepupApp.applyNightMode(m) }
             }
         }, top = 12)
         tc.add(View(this).apply { setBackgroundColor(C.LINE) }, top = 14, h = 1)
