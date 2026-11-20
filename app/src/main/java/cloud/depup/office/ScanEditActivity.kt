@@ -18,6 +18,7 @@ import android.util.LruCache
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -72,6 +73,11 @@ class CropView(ctx: Context) : View(ctx) {
     var onChange: (() -> Unit)? = null
     /** Dipanggil saat jari diangkat setelah menggeser (untuk riwayat/hint). */
     var onRelease: (() -> Unit)? = null
+    /** Garis pindai di atas foto selama AI mendeteksi tepi kertas / meluruskan halaman. */
+    val sweep = ScanSweep(this)
+    /** Sedang mendeteksi: sentuhan diabaikan (hasil deteksi akan memasang titik sudut). */
+    var busy = false
+    private val scanDim = Paint().apply { color = Color.BLACK }
 
     private val img = RectF()
     private val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -306,6 +312,14 @@ class CropView(ctx: Context) : View(ctx) {
         }
         c.drawPath(outside, dim)
 
+        // Pindaian AI: foto sedikit diredupkan agar garis pindai menonjol; garis naik-turun di bawah titik sudut
+        // (titik & garis potong tetap tajam di atasnya)
+        if (sweep.level > 0.01f) {
+            scanDim.alpha = (sweep.level * 70).toInt()
+            c.drawRect(img, scanDim)
+            sweep.draw(c, img.left, img.top, img.right, img.bottom)
+        }
+
         // Kisi perspektif 3x3 di dalam area
         fun lerp(a: Float, b2: Float, t: Float) = a + (b2 - a) * t
         for (k in 1..2) {
@@ -405,7 +419,13 @@ class CropView(ctx: Context) : View(ctx) {
     private var startRy = 0f
     private var currentRedactRect: RectF? = null
 
+    override fun onDetachedFromWindow() {
+        sweep.cancel()
+        super.onDetachedFromWindow()
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (busy) return true
         if (e.actionMasked == MotionEvent.ACTION_DOWN) qAnim?.cancel()   // jari menang atas animasi
         if (isRedactMode) {
             when (e.actionMasked) {
@@ -518,6 +538,9 @@ class ScanEditActivity : AppCompatActivity() {
     private var contrast = 0
 
     private lateinit var cv: CropView
+    private lateinit var scanTag: TextView
+    private var detecting = false
+    private var blocker: View? = null
     private lateinit var sub: TextView
     private lateinit var chips: LinearLayout
     private lateinit var dots: LinearLayout
@@ -606,6 +629,14 @@ class ScanEditActivity : AppCompatActivity() {
         cv = CropView(this)
         val stage = FrameLayout(this)
         stage.addView(cv, FrameLayout.LayoutParams(MATCH, MATCH))
+        // keterangan saat AI memindai foto (garis pindai bergerak di kanvas)
+        scanTag = tv("", 13f, Color.WHITE, true).apply {
+            background = shape(0xB3141414.toInt(), 100, 0x33FFFFFF, 1)
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            visibility = View.GONE
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        stage.addView(scanTag, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(12) })
         body.add(stage, top = 12, h = dp(380))
         val quick = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         listOf(
@@ -1168,44 +1199,97 @@ class ScanEditActivity : AppCompatActivity() {
         }
     }
 
-    private fun autoDetect(list: List<ScanPage>, crop: Boolean, skew: Boolean, announce: Boolean) {
-        work(if (crop) "AI mendeteksi sudut dokumen…" else "Meluruskan halaman…", { list.map { detectFor(it, crop, skew) } }) { r ->
-            r.onSuccess { res ->
-                val curPg = pages.getOrNull(cur)
-                val oldQ = if (curPg != null && curPg in list) cv.quad.copyOf() else null
-                var found = 0; var fixed = 0; var full = 0; var split = false
-                list.forEachIndexed { i, pg ->
-                    val a = res[i]
-                    val q = a.quad
-                    if (q != null) {
-                        pg.skew = 0f
-                        pg.setQuad(q)
-                        if (Quad.isFull(q, 0.03f)) full++ else found++
-                        if (a.split) split = true
-                    } else if (skew && kotlin.math.abs(a.skew - pg.skew) > 0.05f) {
-                        // Titik sudut ikut berputar bersama gambar supaya tetap menempel di dokumen.
-                        val b = preview(pg)
-                        val (w, h) = if (b != null) {
-                            if ((pg.rot / 90) % 2 == 1) b.height to b.width else b.width to b.height
-                        } else 1000 to 1400
-                        pg.setQuad(Quad.rotate(pg.quad, a.skew - pg.skew, w, h))
-                        pg.skew = a.skew
-                        fixed++
-                    }
-                }
-                if (pages.isNotEmpty()) show()
-                // titik sudut meluncur dari tempat lama ke tepi dokumen yang terdeteksi
-                if (oldQ != null && pages.getOrNull(cur) === curPg) cv.morphQuadFrom(oldQ)
-                when {
-                    split -> toast("Buku terbuka terdeteksi — sudut dipasang pada halaman yang dituju (yang berisi / utuh). Geser titik bila ingin halaman lain.")
-                    crop && found > 0 && announce -> toast("Sudut dokumen terdeteksi di $found halaman. Geser titik sudut bila perlu.")
-                    crop && found > 0 -> toast("Sudut dokumen terdeteksi. Geser titik sudut bila perlu — hasil otomatis jadi kotak 90°.")
-                    crop && full > 0 && !announce -> toast("Dokumen sudah memenuhi bingkai.")
-                    crop && !announce -> toast("Sudut dokumen tidak terdeteksi. Geser 4 titik sudut ke ujung dokumen secara manual.")
-                    !crop && skew -> toast(if (fixed > 0) "Halaman diluruskan" else "Halaman sudah lurus")
-                }
-            }.onFailure { fail(it) }
+    /**
+     * Mulai / akhiri tampilan "AI sedang memindai": garis pindai naik-turun di atas foto + kapsul keterangan.
+     * Sentuhan di seluruh layar ditahan sementara (seperti dialog proses dulu) tanpa menutupi tampilan.
+     */
+    private fun scanUi(on: Boolean, msg: String = "") {
+        detecting = on
+        cv.busy = on
+        if (on) {
+            cv.sweep.start()
+            scanTag.text = msg
+            scanTag.visibility = View.VISIBLE
+            if (Motion.on()) {
+                scanTag.alpha = 0f; scanTag.translationY = -dp(6).toFloat()
+                scanTag.animate().alpha(1f).translationY(0f).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start()
+            } else scanTag.alpha = 1f
+            if (blocker == null) {
+                val content = findViewById<ViewGroup>(android.R.id.content)
+                blocker = View(this).apply {
+                    isClickable = true
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }.also { content?.addView(it, ViewGroup.LayoutParams(MATCH, MATCH)) }
+            }
+        } else {
+            cv.sweep.stop()
+            if (Motion.on()) scanTag.animate().alpha(0f).translationY(-dp(6).toFloat()).setDuration(Motion.FAST)
+                .setInterpolator(Motion.STANDARD).withEndAction { if (!detecting) scanTag.visibility = View.GONE }.start()
+            else scanTag.visibility = View.GONE
+            blocker?.let { (it.parent as? ViewGroup)?.removeView(it) }
+            blocker = null
         }
+    }
+
+    private fun autoDetect(list: List<ScanPage>, crop: Boolean, skew: Boolean, announce: Boolean) {
+        if (detecting || list.isEmpty()) return
+        val label = if (crop) "Mendeteksi tepi kertas…" else "Meluruskan halaman…"
+        scanUi(true, label)
+        val started = android.os.SystemClock.uptimeMillis()
+        Thread {
+            val r = runCatching {
+                list.mapIndexed { i, pg ->
+                    if (list.size > 1) runOnUiThread { if (detecting) scanTag.text = "$label ${i + 1}/${list.size}" }
+                    detectFor(pg, crop, skew)
+                }
+            }
+            // garis pindai tampil minimal satu lintasan penuh (deteksi sering < 0,5 detik)
+            val rest = 1100L - (android.os.SystemClock.uptimeMillis() - started)
+            if (rest > 0 && Motion.on()) try { Thread.sleep(rest) } catch (_: InterruptedException) {}
+            runOnUiThread {
+                scanUi(false)
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                afterDetect(list, crop, skew, announce, r)
+            }
+        }.start()
+    }
+
+    private fun afterDetect(list: List<ScanPage>, crop: Boolean, skew: Boolean, announce: Boolean, r: Result<List<Auto>>) {
+        r.onSuccess { res ->
+            val curPg = pages.getOrNull(cur)
+            val oldQ = if (curPg != null && curPg in list) cv.quad.copyOf() else null
+            var found = 0; var fixed = 0; var full = 0; var split = false
+            list.forEachIndexed { i, pg ->
+                val a = res[i]
+                val q = a.quad
+                if (q != null) {
+                    pg.skew = 0f
+                    pg.setQuad(q)
+                    if (Quad.isFull(q, 0.03f)) full++ else found++
+                    if (a.split) split = true
+                } else if (skew && kotlin.math.abs(a.skew - pg.skew) > 0.05f) {
+                    // Titik sudut ikut berputar bersama gambar supaya tetap menempel di dokumen.
+                    val b = preview(pg)
+                    val (w, h) = if (b != null) {
+                        if ((pg.rot / 90) % 2 == 1) b.height to b.width else b.width to b.height
+                    } else 1000 to 1400
+                    pg.setQuad(Quad.rotate(pg.quad, a.skew - pg.skew, w, h))
+                    pg.skew = a.skew
+                    fixed++
+                }
+            }
+            if (pages.isNotEmpty()) show()
+            // titik sudut meluncur dari tempat lama ke tepi dokumen yang terdeteksi
+            if (oldQ != null && pages.getOrNull(cur) === curPg) cv.morphQuadFrom(oldQ)
+            when {
+                split -> toast("Buku terbuka terdeteksi — sudut dipasang pada halaman yang dituju (yang berisi / utuh). Geser titik bila ingin halaman lain.")
+                crop && found > 0 && announce -> toast("Sudut dokumen terdeteksi di $found halaman. Geser titik sudut bila perlu.")
+                crop && found > 0 -> toast("Sudut dokumen terdeteksi. Geser titik sudut bila perlu — hasil otomatis jadi kotak 90°.")
+                crop && full > 0 && !announce -> toast("Dokumen sudah memenuhi bingkai.")
+                crop && !announce -> toast("Sudut dokumen tidak terdeteksi. Geser 4 titik sudut ke ujung dokumen secara manual.")
+                !crop && skew -> toast(if (fixed > 0) "Halaman diluruskan" else "Halaman sudah lurus")
+            }
+        }.onFailure { fail(it) }
     }
 
     /** Auto-crop AI ala CamScanner: pasang 4 titik sudut pada tepi dokumen (bisa disesuaikan pengguna). */
