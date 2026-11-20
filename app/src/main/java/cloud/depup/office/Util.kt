@@ -235,7 +235,7 @@ object Files {
     }
 
     /** File lokal di balik URI file:// atau FileProvider milik app ini; null bila bukan. */
-    private fun localFileOf(ctx: Context, uri: Uri): File? {
+    internal fun localFileOf(ctx: Context, uri: Uri): File? {
         if (uri.scheme == "file") return uri.path?.let { File(it) }
         if (uri.scheme == "content" && uri.authority == ctx.packageName + ".fileprovider") {
             val seg = uri.pathSegments
@@ -275,6 +275,7 @@ object Files {
                 MediaScannerConnection.scanFile(ctx, arrayOf(local.path, dest.path), null, null)
                 val newUri = if (uri.scheme == "file") Uri.fromFile(dest) else uriFor(ctx, dest)
                 Recent.replace(ctx, uri.toString(), newUri, dest.name, mimeOf(ctx, newUri))
+                Meta.renamed(ctx, uri.toString(), newUri, dest.name, mimeOf(ctx, newUri))
                 return Renamed(newUri, dest.name)
             }
             if (uri.scheme == "content") {
@@ -283,6 +284,7 @@ object Files {
                     if (ctx.contentResolver.update(uri, cv, null, null) > 0) {
                         val n = nameOf(ctx, uri)
                         Recent.replace(ctx, uri.toString(), uri, n, mimeOf(ctx, uri))
+                        Meta.renamed(ctx, uri.toString(), uri, n, mimeOf(ctx, uri))
                         return Renamed(uri, n)
                     }
                     return null
@@ -292,6 +294,7 @@ object Files {
                     if (nu != null) {
                         val n = nameOf(ctx, nu)
                         Recent.replace(ctx, uri.toString(), nu, n, mimeOf(ctx, nu))
+                        Meta.renamed(ctx, uri.toString(), nu, n, mimeOf(ctx, nu))
                         return Renamed(nu, n)
                     }
                 }
@@ -542,6 +545,53 @@ object Meta {
         sp(ctx).edit().putStringSet("marks", s).apply()
         return on
     }
+
+    // ---------------------------------------------------------------- sematan (deret "Disematkan" di Beranda)
+    const val MAX_PINS = 12
+
+    /** Berkas yang disematkan, terbaru di depan: [uri, nama, mime] (berdiri sendiri — tidak ikut hilang dari riwayat). */
+    fun pins(ctx: Context): List<List<String>> =
+        sp(ctx).getString("pins", "")!!.split("\n").filter { it.isNotBlank() }.map { it.split("\t") }.filter { it.size == 3 }
+
+    fun isPinned(ctx: Context, uri: String) = pins(ctx).any { it[0] == uri }
+
+    /** Kembalikan status baru (true = sekarang disematkan). Lebih dari [MAX_PINS] → yang terlama dilepas. */
+    fun togglePin(ctx: Context, uri: String, name: String, mime: String): Boolean {
+        val list = pins(ctx).toMutableList()
+        val i = list.indexOfFirst { it[0] == uri }
+        val on = i < 0
+        if (on) list.add(0, listOf(uri, clean(name), mime)) else list.removeAt(i)
+        savePins(ctx, list)
+        return on
+    }
+
+    fun unpin(ctx: Context, uri: String) = savePins(ctx, pins(ctx).filter { it[0] != uri })
+
+    private fun savePins(ctx: Context, list: List<List<String>>) =
+        sp(ctx).edit().putString("pins", list.take(MAX_PINS).joinToString("\n") { it.joinToString("\t") }).apply()
+
+    /** Berkas berganti nama / alamat: sematan & tandanya ikut pindah. */
+    fun renamed(ctx: Context, old: String, uri: Uri, name: String, mime: String) {
+        val n = uri.toString()
+        val list = pins(ctx)
+        if (list.any { it[0] == old }) savePins(ctx, list.map { if (it[0] == old) listOf(n, clean(name), mime) else it })
+        val m = marks(ctx)
+        if (old != n && m.contains(old)) sp(ctx).edit().putStringSet("marks", HashSet(m).apply { remove(old); add(n) }).apply()
+    }
+
+    // ---------------------------------------------------------------- riwayat pencarian (tab Dokumen)
+    fun searches(ctx: Context): List<String> = sp(ctx).getString("searches", "")!!.split("\n").filter { it.isNotBlank() }
+
+    fun addSearch(ctx: Context, q: String) {
+        val t = clean(q).trim()
+        if (t.isEmpty()) return
+        val list = listOf(t) + searches(ctx).filter { !it.equals(t, ignoreCase = true) }
+        sp(ctx).edit().putString("searches", list.take(8).joinToString("\n")).apply()
+    }
+
+    fun clearSearches(ctx: Context) = sp(ctx).edit().remove("searches").apply()
+
+    private fun clean(s: String) = s.replace("\t", " ").replace("\n", " ")
 
     /** Baris: nama, tujuan, ukuran, waktu. */
     fun shares(ctx: Context): List<List<String>> =

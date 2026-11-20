@@ -1296,10 +1296,11 @@ fun AppCompatActivity.resultSheet(
     body.add(View(this), h = dp(12))
 }
 
-fun AppCompatActivity.confirm(title: String, msg: String, ok: String, onOk: () -> Unit) {
+fun AppCompatActivity.confirm(title: String, msg: String, ok: String, onCancel: (() -> Unit)? = null, onOk: () -> Unit) {
     AlertDialog.Builder(this).setTitle(title).setMessage(msg)
         .setPositiveButton(ok) { _, _ -> onOk() }
-        .setNegativeButton("Batal", null).show()
+        .setNegativeButton("Batal") { _, _ -> onCancel?.invoke() }
+        .setOnCancelListener { onCancel?.invoke() }.show()
 }
 
 fun AppCompatActivity.fail(t: Throwable) {
