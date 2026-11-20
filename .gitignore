@@ -14,3 +14,7 @@ keystore.properties
 # Python
 __pycache__/
 *.pyc
+
+# Foto contoh auto-crop (desain milik orang lain) — hanya anotasinya yang di-commit
+/tools/autocrop/mock/*.png
+/tools/autocrop/mock/*.jpg

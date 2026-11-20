@@ -181,15 +181,16 @@ object DocFind {
     /**
      * Bobot penilaian kandidat — HASIL PELATIHAN (tools/autocrop/Trainer.kt): coordinate descent dengan ALUR PENUH di
      * dalam lingkaran pada ±700 foto sintetis (set 6 umum, 8 putih di atas putih, 10 dokumen berwarna & dipegang tangan)
-     * + foto asli pengguna, dipilih pada ±450 foto uji terpisah (set 7, 9, 11).
+     * + foto asli pengguna + 17 foto contoh label/kartu/brosur/koran (tools/autocrop/mock), dipilih pada ±450 foto uji
+     * terpisah (set 7, 9, 11).
      * [0] pangkat tepi, [1] bobot sisi terlemah, [2] bobot keseragaman isi, [3] bobot "mirip kertas putih" (kini ±0:
      * dokumen berwarna tidak lagi kalah oleh bidang putih), [4] pangkat penalti benda gelap, [5] bobot kontras,
      * [6] pangkat luas, [7] penalti jauh dari tengah, [8] penalti 2 sisi menempel bingkai, [9] bobot isi/tinta (bidang
      * polos — lampu, jendela, dinding — bukan dokumen), [10] pecahan tinta untuk nilai penuh, [11] bobot kesejajaran tepi
-     * rata-rata, [12] bobot kesejajaran sisi terlemah (keduanya kini 0: kesejajaran dipakai lewat aturan [ALIGN_DROP] &
+     * rata-rata, [12] bobot kesejajaran sisi terlemah (keduanya ±0: kesejajaran dipakai lewat aturan [ALIGN_DROP] &
      * [MESSY], yang ternyata lebih baik pada set uji daripada sebagai faktor nilai).
      */
-    @JvmField val W = floatArrayOf(1.945f, 0.013f, 0.686f, 0f, 0.6f, 0.285f, 0.49f, 0.321f, 0.916f, 0.903f, 0.12f, 0f, 0f)
+    @JvmField val W = floatArrayOf(1.945f, 0f, 0.662f, 0f, 0.6f, 0.285f, 0.49f, 0.299f, 0.916f, 0.95f, 0.12f, 0.047f, 0f)
 
     /**
      * Ambang perbandingan nilai antar-kandidat dirancang untuk skala lama (tepi pangkat 2). Setelah bobot dilatih,
@@ -342,6 +343,22 @@ object DocFind {
             }.maxByOrNull { it.s }
             if (inner != null) {
                 debugParts?.invoke("INNER %s s=%.3f hom=%.2f al=%.2f".format(key(inner.q), inner.s, inner.f[3], inner.f[11]))
+                win = inner
+            }
+        }
+        // Wilayah yang salah satu sisinya bukan tepi lurus nyata (koran + permukaan meja di sekitarnya) MEMUAT lembar
+        // yang keempat sisinya tepi lurus nyata, isinya lebih seragam & bertulisan, nilainya hampir sama → lembar itulah
+        // dokumennya — asal hampir seri, tidak kecil, dan tidak lebih jauh dari tengah. Isi dokumen (foto, tabel) jarang
+        // lolos: biasanya lebih ramai, bukan lebih seragam, dari kertasnya.
+        if (win.f[11] < 1f - INNER_AL) {
+            val cur = win
+            val inner = scored.filter {
+                it.area < cur.area * 0.9f && it.area > cur.area * 0.45f && it.edge >= 0.85f &&
+                    it.f[11] >= max(0.8f, cur.f[11] + INNER_AL) && it.f[3] >= cur.f[3] + 0.1f && it.f[9] >= 0.03f &&
+                    it.f[8] <= cur.f[8] + 0.05f && it.s >= cur.s * rr(0.95f, P) && contains(cur.q, it.q, 0.02f * max(w, h))
+            }.maxByOrNull { it.s }
+            if (inner != null) {
+                debugParts?.invoke("ALIGNED %s s=%.3f hom=%.2f al=%.2f".format(key(inner.q), inner.s, inner.f[3], inner.f[11]))
                 win = inner
             }
         }
@@ -786,10 +803,13 @@ object DocFind {
     private val ALIGN_OFF = floatArrayOf(-1.5f, -0.5f, 0.5f, 1.5f)
 
     /** Batas turunnya kesejajaran sisi terlemah saat pemenang diganti kandidat yang lebih besar / diperluas. */
-    @JvmField var ALIGN_DROP = 0.2f
+    @JvmField var ALIGN_DROP = 0.17f
 
     /** Keseragaman isi di bawah ini = wilayah campuran beberapa benda, bukan satu lembar dokumen. */
-    @JvmField var MESSY = 0.55f
+    @JvmField var MESSY = 0.63f
+
+    /** Selisih kesejajaran sisi terlemah minimum agar lembar bertepi nyata di dalam pemenang menggantikannya. */
+    @JvmField var INNER_AL = 0.4f
 
     /** Titik di dalam segi-empat cembung — tak peduli urutan sudutnya searah / berlawanan jarum jam. */
     private fun inside(q: FloatArray, x: Float, y: Float): Boolean {
@@ -837,7 +857,8 @@ object DocFind {
                     val i = y * w + x
                     vals.add(img.closed[i])
                     if (sat(img, i) < 55 && img.closed[i] > 110) paper++
-                    if (img.mx[i] - img.mn[i] >= 28) inkN++
+                    // ambang 18 (bukan 28): garis gambar & tulisan halus di label berwarna tetap terhitung isi
+                    if (img.mx[i] - img.mn[i] >= 18) inkN++
                     sumR += img.cr[i]; sumG += img.cg[i]; sumB += img.cb[i]
                 }
                 x += step
