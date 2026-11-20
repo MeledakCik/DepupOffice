@@ -4,10 +4,16 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ComposeShader
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -55,7 +61,8 @@ import kotlin.math.sqrt
 /**
  * Bingkai panduan dokumen/KTP + grid 3x3 di atas pratinjau kamera. Sudutnya melengkung (bukan siku tajam) dan
  * berubah ke biru DepUp seiring [progress] pindai otomatis. Bingkai selalu muat di antara kontrol atas & bawah
- * ([areaTop]..[areaBottom]) supaya tidak tertutup tombol.
+ * ([areaTop]..[areaBottom]) supaya tidak tertutup tombol. Selama pindai otomatis mencari kertas, garis pindai
+ * bergerak naik-turun di dalamnya ([scanning]).
  */
 class GuideView(ctx: Context) : View(ctx) {
     var ratio = 0.707f      // lebar / tinggi bingkai
@@ -76,6 +83,114 @@ class GuideView(ctx: Context) : View(ctx) {
         color = 0x47FFFFFF; style = Paint.Style.STROKE; strokeWidth = ctx.dp(1).toFloat()
     }
     private val corners = android.graphics.Path()
+
+    // ----- garis pindai -----
+    private var scanOn = false
+    private var scanPos = 0f                  // 0 = atas bingkai, 1 = bawah
+    private var scanDown = true               // arah gerak: jejak cahaya digambar di belakang garis
+    private var scanAlpha = 0f
+    private var sweep: ValueAnimator? = null
+    private var scanFade: ValueAnimator? = null
+    private val trailPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var shadeW = -1f
+    private var shadeH = -1f
+
+    /**
+     * Garis pindai seperti mesin pemindai: bergerak naik-turun di dalam bingkai (melambat di ujung) dengan jejak
+     * cahaya biru di belakangnya, selama pindai otomatis mencari kertas. Memudar masuk/keluar; tidak tampil bila
+     * animasi dimatikan di pengaturan HP.
+     */
+    fun scanning(on: Boolean) {
+        val want = on && Motion.on()
+        if (want == scanOn) return
+        scanOn = want
+        if (!Motion.on()) {
+            scanFade?.cancel(); sweep?.cancel(); sweep = null
+            scanAlpha = 0f; invalidate(); return
+        }
+        if (want && sweep?.isRunning != true) {
+            sweep = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 1400L
+                repeatCount = ValueAnimator.INFINITE
+                repeatMode = ValueAnimator.REVERSE
+                interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+                addUpdateListener {
+                    val v = it.animatedValue as Float
+                    if (v != scanPos) scanDown = v > scanPos
+                    scanPos = v
+                    invalidate()
+                }
+                start()
+            }
+        }
+        scanFade?.removeAllListeners()   // pudar sebelumnya dibatalkan tanpa ikut menghentikan gerak garis
+        scanFade?.cancel()
+        scanFade = ValueAnimator.ofFloat(scanAlpha, if (want) 1f else 0f).apply {
+            duration = if (want) 320L else 200L
+            interpolator = Motion.STANDARD
+            addUpdateListener { scanAlpha = it.animatedValue as Float; invalidate() }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) { if (!scanOn) { sweep?.cancel(); sweep = null } }
+            })
+            start()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        sweep?.cancel(); sweep = null
+        scanFade?.cancel(); progAnim?.cancel()
+        super.onDetachedFromWindow()
+    }
+
+    private fun drawSweep(c: Canvas, l: Float, t: Float, r: Float, b: Float) {
+        val inset = context.dp(6).toFloat()
+        val x0 = l + inset; val x1 = r - inset
+        val top = t + inset; val bot = b - inset
+        val w = x1 - x0
+        if (w <= 0f || bot <= top) return
+        val trailH = minOf((bot - top) * 0.26f, context.dp(150).toFloat())
+        val glowH = context.dp(7).toFloat()
+        if (w != shadeW || trailH != shadeH) buildShades(w, trailH, glowH)
+        val y = top + (bot - top) * scanPos
+        val a = 255f * scanAlpha
+        val boost = 1f + 0.5f * progress          // menunggu stabil: cahayanya menguat
+        c.save()
+        c.clipRect(x0, top, x1, bot)
+        c.translate(x0, y)
+        // jejak cahaya di belakang garis: di atas saat turun, di bawah saat naik
+        c.save()
+        if (scanDown) c.scale(1f, -1f)
+        trailPaint.alpha = (a * minOf(1f, 0.8f * boost)).toInt()
+        c.drawRect(0f, 0f, w, trailH, trailPaint)
+        c.restore()
+        glowPaint.alpha = (a * minOf(1f, 0.75f * boost)).toInt()
+        c.drawRect(0f, -glowH, w, glowH, glowPaint)
+        val lh = context.dp(1).toFloat()
+        linePaint.alpha = a.toInt()
+        c.drawRoundRect(0f, -lh, w, lh, lh, lh, linePaint)
+        c.restore()
+    }
+
+    /** Gradasi garis, cahaya & jejak — dibuat ulang hanya saat ukuran bingkai berubah. Kedua ujungnya memudar. */
+    private fun buildShades(w: Float, trailH: Float, glowH: Float) {
+        shadeW = w; shadeH = trailH
+        val stops = floatArrayOf(0f, 0.14f, 0.86f, 1f)
+        val fade = intArrayOf(0x00000000, 0xFF000000.toInt(), 0xFF000000.toInt(), 0x00000000)
+        fun mask() = LinearGradient(0f, 0f, w, 0f, fade, stops, Shader.TileMode.CLAMP)
+        val blue = CAM_BRAND_LIGHT and 0x00FFFFFF
+        trailPaint.shader = ComposeShader(
+            LinearGradient(0f, 0f, 0f, trailH, intArrayOf(blue or 0x66000000, blue or 0x1A000000, blue),
+                floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP),
+            mask(), PorterDuff.Mode.DST_IN)
+        glowPaint.shader = ComposeShader(
+            LinearGradient(0f, -glowH, 0f, glowH, intArrayOf(blue, blue or 0xB3000000.toInt(), blue), null, Shader.TileMode.CLAMP),
+            mask(), PorterDuff.Mode.DST_IN)
+        val core = 0xFFE8EEFF.toInt()
+        linePaint.shader = LinearGradient(0f, 0f, w, 0f, intArrayOf(core and 0x00FFFFFF, core, core, core and 0x00FFFFFF),
+            stops, Shader.TileMode.CLAMP)
+    }
 
     /** Kemajuan meluncur ke [to] dalam [ms] (linier — terasa seperti hitung mundur). */
     fun runTo(to: Float, ms: Long) {
@@ -112,6 +227,7 @@ class GuideView(ctx: Context) : View(ctx) {
             c.drawLine(l + fw * i / 3f, t, l + fw * i / 3f, b, thin)
             c.drawLine(l, t + fh * i / 3f, r, t + fh * i / 3f, thin)
         }
+        if (scanAlpha > 0.01f) drawSweep(c, l, t, r, b)
         // sudut melengkung: garis pendek yang membelok mulus, putih → biru DepUp saat menunggu stabil
         val L = context.dp(28).toFloat(); val R = context.dp(12).toFloat()
         corners.reset()
@@ -243,6 +359,7 @@ class CameraActivity : AppCompatActivity(), FullBleed {
     @Volatile private var stableSince = 0L
     @Volatile private var armed = true            // false setelah jepret: tunggu kamera digerakkan dulu
     @Volatile private var busyShot = false
+    private var paused = false
     private var lastHint = 0L
     // Analisis cukup ±8x per detik; tiap frame kamera (30 fps) hanya membebani CPU HP kelas bawah.
     private var lastAnalyze = 0L
@@ -461,8 +578,14 @@ class CameraActivity : AppCompatActivity(), FullBleed {
         else askCam.launch(Manifest.permission.CAMERA)
     }
 
+    /** Garis pindai menyala selama pindai otomatis mencari kertas: kamera siap, layar tampil, tidak sedang memotret. */
+    private fun syncScan() {
+        if (::guide.isInitialized) guide.scanning(autoScan && camera != null && !busyShot && !paused)
+    }
+
     /** Kapsul pindai otomatis: biru DepUp + titik putih saat aktif, kaca gelap saat manual. */
     private fun paintAuto(animate: Boolean = false) {
+        syncScan()
         val t = if (autoScan) "Otomatis" else "Manual"
         autoPill.contentDescription = if (autoScan) "Pindai otomatis aktif. Ketuk untuk memotret manual"
             else "Pindai manual. Ketuk untuk menyalakan pindai otomatis"
@@ -623,6 +746,18 @@ class CameraActivity : AppCompatActivity(), FullBleed {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        paused = true
+        syncScan()          // garis pindai tidak berjalan di belakang layar lain
+    }
+
+    override fun onResume() {
+        super.onResume()
+        paused = false
+        syncScan()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         analyzer.shutdown()
@@ -738,6 +873,7 @@ class CameraActivity : AppCompatActivity(), FullBleed {
                 provider.unbindAll()
                 camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, cap, analysis)
                 setupFocusAndZoom()
+                syncScan()
             } catch (e: Exception) {
                 toast("Kamera tidak bisa dibuka: ${e.message}")
                 finish()
@@ -813,6 +949,7 @@ class CameraActivity : AppCompatActivity(), FullBleed {
         val cap = capture ?: return
         if (busyShot) return
         busyShot = true
+        syncScan()
         armed = false
         stableSince = 0L
         shutter.isEnabled = false
@@ -829,6 +966,7 @@ class CameraActivity : AppCompatActivity(), FullBleed {
                     ringBack()
                     shutter.isEnabled = true
                     busyShot = false
+                    syncScan()
                     shots.add(f)
                     // terbang ke gambar kecil hanya bila kamera tetap terbuka (multi-halaman / KTP sisi depan)
                     updateThumb(f, fly = modeIdx == 0 || (modeIdx == 1 && shots.size == 1))
@@ -847,6 +985,7 @@ class CameraActivity : AppCompatActivity(), FullBleed {
                     ringBack()
                     shutter.isEnabled = true
                     busyShot = false
+                    syncScan()
                     toast("Gagal mengambil foto: ${e.message}")
                 }
             }
