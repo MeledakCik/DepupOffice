@@ -573,9 +573,13 @@ class SheetEditorActivity : AppCompatActivity() {
                 when (m.itemId) {
                     1 -> VoiceReaderManager.showVoiceReaderDialog(this@SheetEditorActivity, title, getReadableGridText())
                     2 -> {
-                        val grid = getGridData()
+                        // lembar yang sedang tampil, SEMUA baris & kolom berisi (dulu hanya 28 baris × 4 kolom, dan rumus
+                        // tercetak sebagai teks "=SUM(…)"), lalu lembar Cetak DepUp
+                        val sheetName = sheetList.getOrNull(currentSheetIdx)?.first ?: title
+                        val grid = printGrid(if (sheetList.size > 1) sheetName else title, matrix, numCols)
                         val out = PrintKit.newFile(this@SheetEditorActivity, "tabel")
-                        work("Menyiapkan tabel…", { PrintKit.spreadsheetPdf(title, grid, out) }) { r ->
+                        val lines = currentGridlines
+                        work("Menyiapkan tabel…", { SheetPrint.pdf(title, listOf(grid), out, lines) }) { r ->
                             if (r.isSuccess) printSheet(out, title)
                             else { out.delete(); toast("Tabel tidak bisa disiapkan untuk dicetak") }
                         }
@@ -1352,7 +1356,7 @@ class SheetEditorActivity : AppCompatActivity() {
             // dengan penyuntingan di thread lain. SEMUA sheet diekspor (dulu hanya sheet yang sedang tampil — sheet
             // lain hilang dari berkas tanpa peringatan).
             val book = ArrayList<XlsxWriter.Sheet>()
-            val pdfText = StringBuilder("LAPORAN SPREADSHEET EXCEL\nJudul: $title\n")
+            val grids = ArrayList<SheetLayout.Grid>()
             val keepM = matrix
             val keepCols = numCols
             try {
@@ -1375,15 +1379,16 @@ class SheetEditorActivity : AppCompatActivity() {
                     }
                     val name = if (sheetList.size == 1) title else sheetName
                     book.add(XlsxWriter.Sheet(name, rows, boldRows, cols) { r, c -> formulas[r.toLong() * 100_000 + c] })
-                    if (sheetList.size > 1) pdfText.append("\n== ").append(sheetName).append(" ==\n") else pdfText.append('\n')
-                    pdfText.append(rows.joinToString("\n") { row -> row.joinToString(" | ") }).append('\n')
+                    // salinan PDF siap cetak: tabel sungguhan (dulu teks "a | b | c"), tiap lembar mulai di halaman baru
+                    grids.add(printGrid(name, m, cols))
                 }
             } finally {
                 matrix = keepM; numCols = keepCols
             }
+            val lines = currentGridlines
             work("Mengekspor Spreadsheet Excel…", {
                 XlsxWriter.writeBook(xlsxFile, book)
-                Pdf.text(pdfText.toString(), pdfFile)
+                SheetPrint.pdf(title, grids, pdfFile, lines)
             }) { res ->
                 res.onSuccess {
                     markClean(); SheetDrafts.clear(this, draftId)   // diekspor: draf tidak diperlukan lagi
@@ -1412,14 +1417,26 @@ class SheetEditorActivity : AppCompatActivity() {
         )
     }
 
-    private fun getGridData(): List<List<String>> {
-        val list = ArrayList<List<String>>()
-        matrix.forEach { row ->
-            val rList = ArrayList<String>()
-            row.forEach { cell -> rList.add(cell.valStr) }
-            list.add(rList)
-        }
-        return list
+    /**
+     * Isi lembar [m] untuk dicetak / PDF: nilai tampilan (rumus sudah dihitung, bukan teks "=SUM(…)"), tebal, angka
+     * rata kanan, latar sel (warna cetak muda). Thread UI — sama seperti saat ekspor.
+     */
+    private fun printGrid(name: String, m: MutableList<MutableList<SheetCell>>, cols: Int): SheetLayout.Grid {
+        val keepM = matrix; val keepCols = numCols
+        matrix = m; numCols = cols   // rumus dihitung terhadap lembarnya sendiri
+        try {
+            return evaluating {
+                SheetLayout.Grid(name, m.indices.map { r ->
+                    (0 until cols).map { c ->
+                        val cell = m[r].getOrNull(c)
+                        val raw = cell?.valStr?.trim().orEmpty()
+                        val shown = displayValue(r, c)
+                        val num = shown.isNotBlank() && shown != "#ERROR!" && (raw.startsWith("=") || parseNumber(raw) != null)
+                        SheetLayout.Cell(shown, cell?.isBold == true, num, SheetPrint.printFill(cell?.bgColor ?: 0))
+                    }
+                })
+            }
+        } finally { matrix = keepM; numCols = keepCols }
     }
 
     private fun getReadableGridText(): String {
