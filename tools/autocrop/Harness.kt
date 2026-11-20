@@ -64,6 +64,7 @@ fun main(args: Array<String>) {
     if (args.getOrElse(1) { "" } == "10") { runBig(mode, "cases10.json", "imgs10", "10"); return }
     if (args.getOrElse(1) { "" } == "11") { runBig(mode, "cases11.json", "imgs11", "11"); return }
     if (args.getOrElse(1) { "" } == "real") { runReal(); return }
+    if (args.getOrElse(1) { "" } == "realsmall") { writeRealSmall(File(args.getOrElse(2) { (System.getenv("CROP") ?: "/home/claude/crop") + "/real" })); return }
     val dir = File(System.getenv("CROP") ?: "/home/claude/crop")
     val cases = Regex("\\{\"file\": \"([^\"]+)\", \"quad\": \\[([^\\]]+)\\], \"w\": (\\d+), \"h\": (\\d+)\\}").findAll(File(dir, if (set2) "cases2.json" else "cases.json").readText()).toList()
     var ok = 0; var sum = 0f
@@ -149,6 +150,24 @@ fun runBig(mode: String, cj: String, dirName: String, tag: String) {
     if (System.getenv("G") != null) for ((k, g) in groups.toSortedMap()) println("  %-22s %3d/%3d  IoU %.2f".format(k, g[1].toInt(), g[0].toInt(), g[2] / g[0]))
     val n = cases.size
     println("== $mode set$tag: berhasil $ok/$n (%.0f%%), IoU %.3f, bocor %.1f%%".format(ok * 100f / n, sumI / n, sumL / n * 100))
+}
+
+/**
+ * Simpan versi kecil (persis masukan detektor, sama dengan ScanAi.small) tiap foto asli sebagai `<foto>.small.gz`:
+ * int lebar, int tinggi, lalu 3 byte RGB per piksel. Dipakai uji JVM aplikasi (AutoCropRealTest) — classpath uji
+ * Android tidak memuat javax.imageio/java.awt, jadi foto tidak bisa dibaca langsung di sana.
+ */
+fun writeRealSmall(dir: File) {
+    val re = Regex("\\{\"file\": \"([^\"]+)\"")
+    for (m in re.findAll(File(dir, "cases.json").readText())) {
+        val name = m.groupValues[1]
+        val (s, _, _) = loadSmall(File(dir, name))
+        java.io.DataOutputStream(java.util.zip.GZIPOutputStream(File(dir, "$name.small.gz").outputStream())).use { o ->
+            o.writeInt(s.w); o.writeInt(s.h)
+            for (p in s.argb) { o.writeByte((p shr 16) and 255); o.writeByte((p shr 8) and 255); o.writeByte(p and 255) }
+        }
+        println("$name -> $name.small.gz (${s.w}x${s.h})")
+    }
 }
 
 /**
