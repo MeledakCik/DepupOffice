@@ -309,15 +309,23 @@ object OfficeView {
                 return true
             }
         }
+        // ukuran halaman dokumen (@page, pt) untuk "Simpan sebagai PDF" & cetak — slide/halaman tidak dipaksa ke A4 tegak
+        Regex("@page\\{size:([0-9.]+)pt ([0-9.]+)pt").find(doc.html)?.let { m ->
+            val w = m.groupValues[1].toFloatOrNull(); val h = m.groupValues[2].toFloatOrNull()
+            if (w != null && h != null) wv.setTag(R.id.page_pt, floatArrayOf(w, h))
+        }
         wv.loadDataWithBaseURL("https://doc.local/", doc.html, "text/html", "utf-8", null)
         doc.dropHtml()          // HTML sudah disalin ke WebView: string besar ini tidak perlu ditahan
         return wv
     }
 
-    /** Cetak / simpan PDF persis seperti yang tampil (halaman Word, slide, lembar kerja). */
+    /**
+     * Cetak ke printer lewat dialog sistem, persis seperti yang tampil (halaman Word, slide, lembar kerja), dengan
+     * ukuran kertas dokumen sudah terpilih. "Simpan sebagai PDF" tidak lewat sini — lihat [PdfExport].
+     */
     fun print(ctx: Context, wv: WebView, name: String) {
         val pm = ctx.getSystemService(Context.PRINT_SERVICE) as PrintManager
         val job = name.substringBeforeLast('.').ifBlank { "Dokumen" }
-        pm.print(job, wv.createPrintDocumentAdapter(job), PrintAttributes.Builder().build())
+        pm.print(job, wv.createPrintDocumentAdapter(job), PrintAttributes.Builder().setMediaSize(PdfExport.mediaOf(wv)).build())
     }
 }

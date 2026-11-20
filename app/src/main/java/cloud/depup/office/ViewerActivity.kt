@@ -105,6 +105,23 @@ class ViewerActivity : AppCompatActivity() {
         const val EXTRA_AUTO_PRINT = "auto_print"
     }
 
+    /** Dokumen Office: lembar DepUp "Cetak & PDF" — simpan PDF langsung, atau cetak ke printer lewat dialog sistem. */
+    private fun officePrint(wv: android.webkit.WebView, name: String) =
+        printChoiceSheet(name, onPdf = { officeSavePdf(wv, name) }, onPrint = { OfficeView.print(this, wv, name) })
+
+    /** Simpan sebagai PDF tanpa dialog cetak sistem (ukuran halaman = dokumen); gagal → dialog sistem. */
+    private fun officeSavePdf(wv: android.webkit.WebView, name: String) {
+        val d = busy("Membuat PDF…")
+        PdfExport.write(this, wv, name) { f ->
+            try { d.dismiss() } catch (_: Exception) {}
+            if (f != null) pdfReadySheet(f)
+            else {
+                toast("Pilih “Simpan sebagai PDF” di dialog cetak")
+                OfficeView.print(this, wv, name)
+            }
+        }
+    }
+
     private var pfd: ParcelFileDescriptor? = null
     private var renderer: PdfRenderer? = null
     private val lock = Any()
@@ -509,7 +526,7 @@ class ViewerActivity : AppCompatActivity() {
         // aksi dokumen Office (diaktifkan oleh renderOffice) — dulu di strip kedua yang memakan tinggi layar
         editBtn = barBtn(icon(R.drawable.ic_edit, C.ACCENT, 22).asButton("Edit dokumen")).apply { visibility = View.GONE }
         printBtn = barBtn(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak / simpan PDF").apply {
-            setOnClickListener { requirePassword("Cetak Dokumen") { officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } ?: toast("Dokumen masih disiapkan") } }
+            setOnClickListener { requirePassword("Cetak Dokumen") { officeWeb?.let { officePrint(it, name) } ?: toast("Dokumen masih disiapkan") } }
         }).apply { visibility = View.GONE }
         marked = Meta.isMarked(this, uriStr)
         markBtn = icon(if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_off, if (marked) C.ACCENT else C.TEXT, 22).asButton(if (marked) "Hapus tanda" else "Tandai dokumen").apply {
@@ -549,7 +566,7 @@ class ViewerActivity : AppCompatActivity() {
                     try {
                         when (m.itemId) {
                             1 -> requirePassword("Bagikan Dokumen") { try { Files.share(this@ViewerActivity, shareTarget(uri), mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
-                            2 -> requirePassword("Cetak Dokumen") { if (office) officeWeb?.let { OfficeView.print(this@ViewerActivity, it, name) } else PrintHelper.printPdf(this@ViewerActivity, uri, name) }
+                            2 -> requirePassword("Cetak Dokumen") { if (office) officeWeb?.let { officePrint(it, name) } else PrintHelper.printPdf(this@ViewerActivity, uri, name) }
                             8 -> startVoiceReaderForPdf(uri, name)
                             3 -> requirePassword("Tanda Tangan & Edit PDF") { showPdfEditDialog(uri, name) }
                             4 -> showRenameDialog(rawUri, uri, name)
@@ -808,7 +825,7 @@ class ViewerActivity : AppCompatActivity() {
                     val auto = intent.getBooleanExtra(EXTRA_AUTO_PRINT, false) && Integrity.isInternal(intent) && !secure
                     val wv = try {
                         Result.success(OfficeView.load(ready ?: OfficeView.newWebView(this, doc.kind), doc, if (!auto) null else {
-                            { if (!isFinishing && !isDestroyed) officeWeb?.let { OfficeView.print(this, it, name) } }
+                            { if (!isFinishing && !isDestroyed) officeWeb?.let { officeSavePdf(it, name) } }
                         }, onCrash = {
                             officeWeb = null
                             if (!isFinishing && !isDestroyed) officeError(holder, uri, name, mime, stage, "Tampilan dokumen terhenti",

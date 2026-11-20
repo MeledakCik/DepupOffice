@@ -43,32 +43,61 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.sqrt
 
-/** Bingkai panduan dokumen/KTP + grid 3x3 di atas pratinjau kamera. */
+/**
+ * Bingkai panduan dokumen/KTP + grid 3x3 di atas pratinjau kamera. Sudutnya melengkung (bukan siku tajam) dan
+ * berubah ke biru DepUp seiring [progress] pindai otomatis. Bingkai selalu muat di antara kontrol atas & bawah
+ * ([areaTop]..[areaBottom]) supaya tidak tertutup tombol.
+ */
 class GuideView(ctx: Context) : View(ctx) {
     var ratio = 0.707f      // lebar / tinggi bingkai
     var grid = false
-    private val dim = Paint().apply { color = 0x66000000 }
+    /** Batas atas & bawah area bebas kontrol (px, koordinat view ini); 0 = seluruh tinggi. */
+    var areaTop = 0
+    var areaBottom = 0
+    /** 0..1: kemajuan "tahan stabil" pindai otomatis. */
+    var progress = 0f
+        set(v) { val n = v.coerceIn(0f, 1f); if (n != field) { field = n; invalidate() } }
+    private var progAnim: ValueAnimator? = null
+    private val dim = Paint().apply { color = 0x73000000 }
     private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = C.GOLD; style = Paint.Style.STROKE; strokeWidth = ctx.dp(3).toFloat(); strokeCap = Paint.Cap.ROUND
+        color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = ctx.dp(3).toFloat()
+        strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val thin = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x55FFFFFF; style = Paint.Style.STROKE; strokeWidth = ctx.dp(1).toFloat()
+        color = 0x47FFFFFF; style = Paint.Style.STROKE; strokeWidth = ctx.dp(1).toFloat()
+    }
+    private val corners = android.graphics.Path()
+
+    /** Kemajuan meluncur ke [to] dalam [ms] (linier — terasa seperti hitung mundur). */
+    fun runTo(to: Float, ms: Long) {
+        progAnim?.cancel()
+        if (!Motion.on() || ms <= 0L) { progress = to; return }
+        progAnim = ValueAnimator.ofFloat(progress, to).apply {
+            duration = ms; interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener { progress = it.animatedValue as Float }
+            start()
+        }
     }
 
     /** Bingkai saat ini (koordinat view ini) — juga titik awal foto yang "terbang" ke gambar kecil. */
     fun frame(): android.graphics.RectF {
         val w = width.toFloat(); val h = height.toFloat()
+        val top = if (areaBottom > areaTop + context.dp(120)) areaTop.toFloat() else 0f
+        val bottom = if (areaBottom > areaTop + context.dp(120)) areaBottom.toFloat() else h
+        val ah = bottom - top
         var fw = w * 0.86f
         var fh = fw / ratio
-        if (fh > h * 0.92f) { fh = h * 0.92f; fw = fh * ratio }
-        val l = (w - fw) / 2f; val t = (h - fh) / 2f
+        if (fh > ah * 0.96f) { fh = ah * 0.96f; fw = fh * ratio }
+        val l = (w - fw) / 2f; val t = top + (ah - fh) / 2f
         return android.graphics.RectF(l, t, l + fw, t + fh)
     }
 
@@ -83,13 +112,50 @@ class GuideView(ctx: Context) : View(ctx) {
             c.drawLine(l + fw * i / 3f, t, l + fw * i / 3f, b, thin)
             c.drawLine(l, t + fh * i / 3f, r, t + fh * i / 3f, thin)
         }
-        val L = context.dp(26).toFloat()
-        c.drawLines(floatArrayOf(
-            l, t + L, l, t, l, t, l + L, t,
-            r - L, t, r, t, r, t, r, t + L,
-            l, b - L, l, b, l, b, l + L, b,
-            r - L, b, r, b, r, b, r, b - L
-        ), edge)
+        // sudut melengkung: garis pendek yang membelok mulus, putih → biru DepUp saat menunggu stabil
+        val L = context.dp(28).toFloat(); val R = context.dp(12).toFloat()
+        corners.reset()
+        corners.moveTo(l, t + L); corners.lineTo(l, t + R); corners.quadTo(l, t, l + R, t); corners.lineTo(l + L, t)
+        corners.moveTo(r - L, t); corners.lineTo(r - R, t); corners.quadTo(r, t, r, t + R); corners.lineTo(r, t + L)
+        corners.moveTo(r, b - L); corners.lineTo(r, b - R); corners.quadTo(r, b, r - R, b); corners.lineTo(r - L, b)
+        corners.moveTo(l + L, b); corners.lineTo(l + R, b); corners.quadTo(l, b, l, b - R); corners.lineTo(l, b - L)
+        edge.color = android.graphics.Color.rgb(
+            (255 + (Color.red(CAM_BRAND_LIGHT) - 255) * progress).toInt(),
+            (255 + (Color.green(CAM_BRAND_LIGHT) - 255) * progress).toInt(),
+            (255 + (Color.blue(CAM_BRAND_LIGHT) - 255) * progress).toInt())
+        edge.strokeWidth = context.dp(3).toFloat() * (1f + 0.35f * progress)
+        c.drawPath(corners, edge)
+    }
+}
+
+/** Cincin rana: lingkar putih; saat pindai otomatis menunggu stabil, busur biru DepUp mengisi searah jarum jam. */
+class ShutterRing(ctx: Context) : FrameLayout(ctx) {
+    var progress = 0f
+        set(v) { val n = v.coerceIn(0f, 1f); if (n != field) { field = n; invalidate() } }
+    private var anim: ValueAnimator? = null
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.WHITE; strokeWidth = ctx.dp(4).toFloat() }
+    private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = CAM_BRAND_LIGHT; strokeWidth = ctx.dp(4).toFloat(); strokeCap = Paint.Cap.ROUND
+    }
+    private val oval = android.graphics.RectF()
+
+    init { setWillNotDraw(false) }
+
+    fun runTo(to: Float, ms: Long) {
+        anim?.cancel()
+        if (!Motion.on() || ms <= 0L) { progress = to; return }
+        anim = ValueAnimator.ofFloat(progress, to).apply {
+            duration = ms; interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener { progress = it.animatedValue as Float }
+            start()
+        }
+    }
+
+    override fun onDraw(c: Canvas) {
+        val sw = ring.strokeWidth / 2f
+        oval.set(sw, sw, width - sw, height - sw)
+        c.drawOval(oval, ring)
+        if (progress > 0.001f) c.drawArc(oval, -90f, 360f * progress, false, arc)
     }
 }
 
@@ -121,13 +187,21 @@ class FocusRing(ctx: Context) : View(ctx) {
     }
 }
 
-/** UI kamera selalu gelap (di atas pratinjau foto), jadi warnanya tidak ikut tema terang/gelap. */
-/** Kamera minimalis: putih di atas hitam (seperti kamera bawaan), tanpa warna merek. */
+/**
+ * UI kamera selalu gelap (di atas pratinjau foto), jadi warnanya tidak ikut tema terang/gelap: kapsul kaca gelap
+ * bertepi tipis seperti kamera iOS, putih untuk pilihan aktif, biru DepUp untuk pindai otomatis.
+ */
 private val CAM_ACCENT = 0xFFFFFFFF.toInt()
 private val CAM_ON_ACCENT = 0xFF111111.toInt()
+/** Biru merek DepUp yang dicerahkan agar terbaca di atas gelap. */
+private val CAM_BRAND_LIGHT = 0xFF4D7BFF.toInt()
+private const val CAM_GLASS = 0x59000000       // isi kapsul kaca gelap (±35%)
+private const val CAM_RIM = 0x33FFFFFF         // garis tepi tipis kapsul
+
+private fun Context.camGlass(radiusDp: Int = 100) = shape(CAM_GLASS, radiusDp, CAM_RIM, 1)
 
 /** Viewfinder sendiri (CameraX): mode multi-halaman / KTP / dokumen, flash, grid, filter bawaan. */
-class CameraActivity : AppCompatActivity() {
+class CameraActivity : AppCompatActivity(), FullBleed {
     private lateinit var previewView: PreviewView
     private lateinit var guide: GuideView
     private var capture: ImageCapture? = null
@@ -140,7 +214,10 @@ class CameraActivity : AppCompatActivity() {
     private val filters = intArrayOf(3, 2, 1, 0)
     private val filterNames = arrayOf("Magic Color", "B&W", "Grayscale", "Warna Asli")
 
-    private lateinit var flashLabel: TextView
+    private lateinit var flashBtn: FrameLayout
+    private lateinit var flashIcon: ImageView
+    private lateinit var flashSlash: View
+    private lateinit var flashBadge: TextView
     private lateinit var thumb: ImageView
     private lateinit var badge: TextView
     private lateinit var thumbLabel: TextView
@@ -148,7 +225,7 @@ class CameraActivity : AppCompatActivity() {
     private val tabs = mutableListOf<TextView>()
     private lateinit var hintPill: TextView
     private lateinit var shutter: View
-    private lateinit var shutterRing: View
+    private lateinit var shutterRing: ShutterRing
     private lateinit var modePill: View
     private lateinit var tabRow: LinearLayout
     private lateinit var focusRing: FocusRing
@@ -177,14 +254,19 @@ class CameraActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
+        // Hitam penuh sampai tepi layar: pratinjau di belakang bilah status, ikon bilah putih. (Dulu area bilah status
+        // memperlihatkan latar jendela yang terang — pita krem di atas kamera.)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.BLACK))
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        window.isNavigationBarContrastEnforced = false
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
         }
 
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); fitsSystemWindows = true }
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         previewView = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
         root.addView(previewView, FrameLayout.LayoutParams(MATCH, MATCH))
         guide = GuideView(this)
@@ -192,143 +274,177 @@ class CameraActivity : AppCompatActivity() {
         focusRing = FocusRing(this)
         root.addView(focusRing, FrameLayout.LayoutParams(dp(72), dp(72), Gravity.TOP or Gravity.START))
 
-        // ----- atas: tutup, flash, grid -----
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(10), dp(16), 0)
+        // bayang lembut di atas: kontrol putih tetap terbaca walau kertas putih memenuhi pratinjau
+        val scrim = View(this).apply {
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x8C000000.toInt(), 0x00000000))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        fun round(res: Int, desc: String, onClick: () -> Unit) = FrameLayout(this).apply {
-            background = shape(0x66000000, 100)
-            contentDescription = desc; isFocusable = true
-            addView(icon(res, Color.WHITE, 22), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        root.addView(scrim, FrameLayout.LayoutParams(MATCH, dp(150), Gravity.TOP))
+
+        // ----- atas: tutup · pindai otomatis (tengah) · lampu kilat & garis bantu -----
+        fun glassBtn(res: Int, desc: String, onClick: () -> Unit) = FrameLayout(this).apply {
+            background = camGlass()
+            contentDescription = desc; isFocusable = true; isClickable = true
+            addView(icon(res, Color.WHITE, 20), FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
             setOnClickListener { onClick() }
             springPress(0.86f)
         }
-        top.add(round(R.drawable.ic_close, "Tutup kamera") { cancel() }, w = dp(48), h = dp(48))
-        top.add(View(this), w = 0, weight = 1f)
-        val fp = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = shape(0x66000000, 100)
-            setPadding(dp(14), dp(8), dp(6), dp(8))
-            minimumHeight = dp(48)
-            contentDescription = "Ganti mode lampu kilat"
+        // FrameLayout (bukan baris berpengisi): View pengisi polos ber-tinggi WRAP mengambil SELURUH tinggi layar,
+        // sehingga tombol-tombol ini dulu jatuh ke tengah layar, menutupi bingkai.
+        val top = FrameLayout(this).apply { setPadding(dp(14), 0, dp(14), 0) }
+        top.addView(glassBtn(R.drawable.ic_close, "Tutup kamera") { cancel() },
+            FrameLayout.LayoutParams(dp(44), dp(44), Gravity.START or Gravity.CENTER_VERTICAL))
+        autoPill = tv("", 13f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(14), 0, dp(16), 0)
+            compoundDrawablePadding = dp(8)
+            isFocusable = true
+            setOnClickListener {
+                autoScan = !autoScan
+                if (stableSince != 0L) { stableSince = 0L; holdCancel() }
+                armed = true
+                paintAuto(true)
+            }
+            springPress(0.94f)
+        }
+        top.addView(autoPill, FrameLayout.LayoutParams(WRAP, dp(36), Gravity.CENTER))
+        val right = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        flashBtn = FrameLayout(this).apply {
+            background = camGlass()
+            isClickable = true; isFocusable = true
             setOnClickListener { cycleFlash() }
-            springPress(0.94f)
+            springPress(0.86f)
         }
-        fp.add(icon(R.drawable.ic_flash, Color.WHITE, 18), w = dp(18), h = dp(18))
-        flashLabel = tv("Otomatis", 13f, CAM_ON_ACCENT, true).apply {
-            background = shape(CAM_ACCENT, 100)
-            setPadding(dp(12), dp(5), dp(12), dp(5))
+        flashIcon = icon(R.drawable.ic_flash, Color.WHITE, 20)
+        flashBtn.addView(flashIcon, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
+        flashSlash = View(this).apply { setBackgroundColor(Color.WHITE); rotation = -45f; visibility = View.GONE }
+        flashBtn.addView(flashSlash, FrameLayout.LayoutParams(dp(2), dp(26), Gravity.CENTER))
+        flashBadge = tv("A", 9f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER; includeFontPadding = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        fp.add(flashLabel, w = WRAP, side = 8)
-        top.add(fp, w = WRAP)
-        top.add(View(this), w = 0, weight = 1f)
-        top.add(round(R.drawable.ic_grid, "Tampilkan atau sembunyikan garis bantu") { toggleGrid() }, w = dp(48), h = dp(48))
-        root.addView(top, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
+        flashBtn.addView(flashBadge, FrameLayout.LayoutParams(dp(13), dp(13), Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(7), dp(7)) })
+        right.add(flashBtn, w = dp(44), h = dp(44))
+        val gridBtn = glassBtn(R.drawable.ic_grid, "Tampilkan atau sembunyikan garis bantu") { toggleGrid() }
+        right.add(gridBtn, w = dp(44), h = dp(44))
+        (gridBtn.layoutParams as LinearLayout.LayoutParams).marginStart = dp(10)
+        top.addView(right, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL))
+        root.addView(top, FrameLayout.LayoutParams(MATCH, dp(48), Gravity.TOP))
+        paintFlash(false)
 
-        hintPill = tv("Letakkan dokumen di dalam bingkai & permukaan kontras", 12f, Color.WHITE).apply {
-            background = shape(0x99000000.toInt(), 100)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+        hintPill = tv("Letakkan dokumen di dalam bingkai & permukaan kontras", 13f, Color.WHITE).apply {
+            background = camGlass()
+            setPadding(dp(16), dp(8), dp(16), dp(8))
             gravity = Gravity.CENTER
+            maxWidth = resources.displayMetrics.widthPixels - dp(48)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        root.addView(hintPill, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(72) })
-
-        autoPill = tv("", 12f, Color.WHITE, true).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setOnClickListener { autoScan = !autoScan; stableSince = 0L; armed = true; paintAuto(true) }
-            springPress(0.94f)
-        }
-        root.addView(autoPill, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(112) })
+        root.addView(hintPill, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         paintAuto()
 
-        // ----- bawah -----
+        // ----- bawah: mode · gambar kecil · rana · filter -----
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xE60C0C0C.toInt())
-            setPadding(dp(16), dp(12), dp(16), dp(14))
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xB3000000.toInt(), 0xF5000000.toInt()))
+            setPadding(dp(16), dp(10), dp(16), dp(14))
         }
         tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        listOf("Multi-Halaman", "KTP / ID Card", "Dokumen (PDF)").forEachIndexed { i, n ->
+        // label ringkas: ketiganya muat di layar 360 dp (dulu "KTP / ID Card" & "Dokumen (PDF)" bisa terpotong)
+        listOf("Multi-Halaman", "KTP / Kartu", "Dokumen").forEachIndexed { i, n ->
             val t = tv(n, 13f, 0xCCFFFFFF.toInt(), true).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(14), dp(9), dp(14), dp(9))
+                setPadding(dp(12), dp(8), dp(12), dp(8))
                 minHeight = dp(44)
-                gravity = Gravity.CENTER
                 setOnClickListener { setMode(i) }
             }
             tabs.add(t)
             tabRow.add(t, w = WRAP)
         }
         // kapsul putih yang MELUNCUR (dan sedikit melar) di antara mode — bukan latar yang berpindah tiba-tiba
-        val tabWrap = FrameLayout(this)
+        val tabWrap = FrameLayout(this).apply { background = camGlass(); setPadding(dp(4), dp(4), dp(4), dp(4)) }
         modePill = View(this).apply { background = shape(CAM_ACCENT, 100); alpha = 0f }
         tabWrap.addView(modePill, FrameLayout.LayoutParams(0, 0))
         tabWrap.addView(tabRow, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER_HORIZONTAL))
         tabWrap.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> if (pillAnim?.isRunning != true) placePill(false) }
-        bottom.add(tabWrap)
+        val tabCenter = FrameLayout(this)
+        tabCenter.addView(tabWrap, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER_HORIZONTAL))
+        bottom.add(tabCenter)
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        // kiri: thumbnail
+        // kiri: gambar kecil hasil jepretan
         val left = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
         val tf = FrameLayout(this)
         thumb = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            background = shape(0x33FFFFFF, 14, Color.WHITE, 2)
+            background = shape(0x26FFFFFF, 14, 0xD9FFFFFF.toInt(), 2)
             clipToOutline = true
             outlineProvider = ViewOutlineProvider.BACKGROUND
             contentDescription = "Selesai memotret, lanjut ke edit"
             setOnClickListener { finishWithShots() }
         }
         tf.addView(thumb, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER))
-        badge = tv("0", 11f, CAM_ON_ACCENT, true).apply {
+        badge = tv("0", 11f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(CAM_ACCENT) }
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(CAM_BRAND_LIGHT) }
             visibility = View.GONE
         }
         tf.addView(badge, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP or Gravity.END))
         left.add(tf, w = dp(64), h = dp(64))
-        thumbLabel = tv("0 Halaman", 11f, Color.WHITE)
+        thumbLabel = tv("0 Halaman", 11f, 0xD9FFFFFF.toInt())
         left.add(thumbLabel, top = 2, w = WRAP)
         actions.add(left, w = 0, weight = 1f)
 
-        // tengah: shutter
-        val outer = FrameLayout(this).apply {
-            shutterRing = this
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0); setStroke(dp(4), Color.WHITE) }
-        }
+        // tengah: rana — cincinnya terisi biru saat pindai otomatis menghitung mundur
+        val outer = ShutterRing(this)
+        shutterRing = outer
         shutter = FrameLayout(this).apply {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
             contentDescription = "Ambil foto"
             setOnClickListener { snap() }
             springPress(0.86f)      // tekan: rana mengecil; lepas: memantul kembali seperti jeli
         }
-        outer.addView(shutter, FrameLayout.LayoutParams(dp(66), dp(66), Gravity.CENTER))
-        actions.add(outer, w = dp(84), h = dp(84))
+        outer.addView(shutter, FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER))
+        actions.add(outer, w = dp(82), h = dp(82))
 
         // kanan: filter bawaan
-        val right = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
-        right.add(FrameLayout(this).apply {
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x33FFFFFF) }
+        val rightCol = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        rightCol.add(FrameLayout(this).apply {
+            background = camGlass()
             wandIcon = icon(R.drawable.ic_wand, Color.WHITE, 24)
             addView(wandIcon, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
             contentDescription = "Ganti filter warna"
+            isClickable = true; isFocusable = true
             setOnClickListener { nextFilter() }
             springPress(0.88f)
         }, w = dp(56), h = dp(56))
-        filterLabel = tv(filterNames[0], 11f, Color.WHITE)
-        right.add(filterLabel, top = 10, w = WRAP)
-        actions.add(right, w = 0, weight = 1f)
+        filterLabel = tv(filterNames[0], 11f, 0xD9FFFFFF.toInt())
+        rightCol.add(filterLabel, top = 10, w = WRAP)
+        actions.add(rightCol, w = 0, weight = 1f)
         bottom.add(actions, top = 12)
         root.addView(bottom, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
         bottomBar = bottom
         thumb.springPress(0.92f)
 
+        // jarak aman dari bilah status / takik kamera / navigasi gestur
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, ins ->
+            val i = ins.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            (top.layoutParams as FrameLayout.LayoutParams).topMargin = i.top + dp(6)
+            top.setPadding(dp(14) + i.left, 0, dp(14) + i.right, 0)
+            (hintPill.layoutParams as FrameLayout.LayoutParams).topMargin = i.top + dp(64)
+            scrim.layoutParams.height = i.top + dp(150)
+            bottom.setPadding(dp(16) + i.left, dp(10), dp(16) + i.right, dp(14) + i.bottom)
+            top.requestLayout(); hintPill.requestLayout(); scrim.requestLayout()
+            WindowInsetsCompat.CONSUMED
+        }
+        // bingkai panduan muat di antara kontrol atas (termasuk petunjuk) & bilah bawah
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            val at = top.bottom + dp(58); val ab = bottom.top - dp(14)
+            if (guide.areaTop != at || guide.areaBottom != ab) { guide.areaTop = at; guide.areaBottom = ab; guide.invalidate() }
+        }
+
         // tingkat zoom saat mencubit: kapsul kecil di atas bilah bawah, muncul & hilang sendiri
         zoomPill = tv("1.0×", 13f, Color.WHITE, true).apply {
-            background = shape(0x99000000.toInt(), 100)
+            background = camGlass()
             setPadding(dp(12), dp(6), dp(12), dp(6))
             alpha = 0f
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -345,10 +461,19 @@ class CameraActivity : AppCompatActivity() {
         else askCam.launch(Manifest.permission.CAMERA)
     }
 
+    /** Kapsul pindai otomatis: biru DepUp + titik putih saat aktif, kaca gelap saat manual. */
     private fun paintAuto(animate: Boolean = false) {
-        val t = if (autoScan) "Pindai otomatis: AKTIF" else "Pindai otomatis: MATI"
-        val to = if (autoScan) 0xE635754C.toInt() else 0x99000000.toInt()
-        val bg = (autoPill.background as? GradientDrawable) ?: shape(to, 100).also { autoPill.background = it }
+        val t = if (autoScan) "Otomatis" else "Manual"
+        autoPill.contentDescription = if (autoScan) "Pindai otomatis aktif. Ketuk untuk memotret manual"
+            else "Pindai manual. Ketuk untuk menyalakan pindai otomatis"
+        val dot = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (autoScan) Color.WHITE else 0x8CFFFFFF.toInt())
+            setBounds(0, 0, dp(8), dp(8))
+        }
+        autoPill.setCompoundDrawables(dot, null, null, null)
+        val to = if (autoScan) 0xE62F5BFF.toInt() else CAM_GLASS
+        val bg = (autoPill.background as? GradientDrawable) ?: shape(to, 100, CAM_RIM, 1).also { autoPill.background = it }
         if (!animate || !Motion.on()) { autoPill.text = t; bg.setColor(to); autoPill.tag = to; return }
         // warna kapsul mengalir ke warna baru, teks bergulir, kapsul memantul kecil
         val from = (autoPill.tag as? Int) ?: to
@@ -360,6 +485,21 @@ class CameraActivity : AppCompatActivity() {
         autoPill.tag = to
         autoPill.morphText(t)
         autoPill.boing(0.94f)
+        if (!autoScan) { guide.runTo(0f, 160L); shutterRing.runTo(0f, 160L) }
+    }
+
+    /** Pindai otomatis mulai menghitung mundur: cincin rana & sudut bingkai terisi biru selama ±1,2 detik. */
+    private fun holdStart() {
+        if (busyShot || !autoScan) return
+        shutterRing.runTo(1f, 1200L)
+        guide.runTo(1f, 1200L)
+        hintPill.morphText("Tahan stabil…")
+    }
+
+    /** Ponsel bergerak sebelum selesai: hitungan dibatalkan, isian surut cepat. */
+    private fun holdCancel() {
+        shutterRing.runTo(0f, 180L)
+        guide.runTo(0f, 180L)
     }
 
     private fun hint(t: String) {
@@ -387,8 +527,10 @@ class CameraActivity : AppCompatActivity() {
     private fun placePill(animate: Boolean) {
         val t = tabs.getOrNull(modeIdx) ?: return
         if (t.width == 0) return
-        val x1 = (tabRow.left + t.left).toFloat(); val w1 = t.width.toFloat()
-        val top = tabRow.top + t.top; val h = t.height
+        // kapsul tinggal di dalam wadah ber-padding: posisi tab dikurangi padding wadah (tidak terhitung dua kali)
+        val wrap = modePill.parent as? View
+        val x1 = (tabRow.left + t.left - (wrap?.paddingLeft ?: 0)).toFloat(); val w1 = t.width.toFloat()
+        val top = tabRow.top + t.top - (wrap?.paddingTop ?: 0); val h = t.height
         val lp = modePill.layoutParams as FrameLayout.LayoutParams
         fun apply(x: Float, w: Float) {
             modePill.translationX = x
@@ -465,17 +607,14 @@ class CameraActivity : AppCompatActivity() {
             val steady = diff < 2.2
             val hasDoc = std > 16.0 && mean > 25.0
             if (steady && hasDoc) {
-                if (stableSince == 0L) stableSince = now
+                if (stableSince == 0L) { stableSince = now; lastHint = now; runOnUiThread { holdStart() } }
                 val held = now - stableSince
                 if (held >= 1200L) {
                     stableSince = 0L
                     runOnUiThread { snap() }
-                } else if (now - lastHint > 300L) {
-                    lastHint = now
-                    hint("Tahan stabil… ${held * 100L / 1200L}%")
                 }
             } else {
-                stableSince = 0L
+                if (stableSince != 0L) { stableSince = 0L; runOnUiThread { holdCancel() } }
                 if (now - lastHint > 600L) { lastHint = now; hint(if (!hasDoc) "Arahkan ke dokumen yang kontras" else "Tahan ponsel agar stabil") }
             }
         } catch (_: Throwable) {
@@ -530,8 +669,19 @@ class CameraActivity : AppCompatActivity() {
 
     private fun cycleFlash() {
         flash = (flash + 1) % 3
-        flashLabel.morphText(arrayOf("Otomatis", "Nyala", "Mati")[flash])
+        paintFlash(true)
         capture?.flashMode = flashConst()
+    }
+
+    /** Lampu kilat seperti kamera iOS: ikon saja — "A" kecil = otomatis, kuning = nyala, dicoret = mati. */
+    private fun paintFlash(animate: Boolean) {
+        val name = arrayOf("Otomatis", "Nyala", "Mati")[flash]
+        flashBtn.contentDescription = "Lampu kilat: $name. Ketuk untuk mengganti"
+        flashIcon.setColorFilter(if (flash == 1) 0xFFFFD60A.toInt() else Color.WHITE)
+        flashIcon.alpha = if (flash == 2) 0.55f else 1f
+        flashBadge.visibility = if (flash == 0) View.VISIBLE else View.GONE
+        flashSlash.visibility = if (flash == 2) View.VISIBLE else View.GONE
+        if (animate) { flashIcon.boing(0.78f); hint("Lampu kilat: $name") }
     }
 
     /**
@@ -704,6 +854,8 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun ringBack() {
+        shutterRing.runTo(0f, 220L)
+        guide.runTo(0f, 220L)
         if (!Motion.on()) { shutterRing.alpha = 1f; return }
         shutterRing.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
     }

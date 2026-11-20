@@ -11,9 +11,10 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Menu seleksi teks (Potong / Salin / Tempel / Pilih semua) sebagai kapsul KACA GELAP berasap — kaca hidup yang
- * membaca isi layar real-time (lihat [GlassScaffold.addFloating]), dengan teks putih tebal supaya tidak nyaru di atas
- * halaman putih. Menggantikan bilah mengambang bawaan Android; pegangan seleksi & kaca pembesar tetap milik sistem.
+ * Menu seleksi teks (Potong / Salin / Tempel / Pilih semua) sebagai kapsul KACA hidup yang membaca isi layar
+ * real-time (lihat [GlassScaffold.addFloating]): kaca terang di tema terang (seperti menu iOS 26), kaca gelap berasap
+ * di tema gelap — tiap aksi berikon biru DepUp. Dulu kapsul hitam pekat yang mirip bilah "Tempel" bawaan Android.
+ * Menggantikan bilah mengambang bawaan Android; pegangan seleksi & kaca pembesar tetap milik sistem.
  *
  * Satu menu untuk seluruh layar: muncul memantul di atas seleksi (atau di bawahnya bila terlalu dekat bilah atas),
  * berpindah mulus saat seleksi berpindah, dan memudar saat seleksi hilang / digeser / layar digulir.
@@ -21,7 +22,7 @@ import kotlin.math.min
 object SelectionGlass {
     private const val INK = 0xFF1C1C1F.toInt()
 
-    class Item(val label: String, val action: () -> Unit)
+    class Item(val label: String, val action: () -> Unit, val icon: Int = 0)
 
     private var cap: GlassSurface? = null
     private var row: LinearLayout? = null
@@ -58,13 +59,18 @@ object SelectionGlass {
 
         val c = cap
         val existing = c != null && c.parent === sc
+        val dark = C.dark
+        val fg = if (dark) Color.WHITE else C.TEXT
+        val iconFg = if (dark) 0xFFA9BEFF.toInt() else C.ACCENT
         val surface = if (existing) c!! else GlassSurface(ctx).apply {
-            tintColor = { INK }
-            tintAlpha = 236
-            liquidTint = 0.82f
-            darkGlass = true
+            tintColor = { if (C.dark) INK else Color.WHITE }
+            tintAlpha = if (dark) 214 else 222
+            liquidTint = if (dark) 0.64f else 0.56f
+            darkGlass = dark
             corner = ctx.dp(100).toFloat()
-            elevation = ctx.dp(8).toFloat()
+            elevation = ctx.dp(10).toFloat()
+            outlineSpotShadowColor = 0x59000000
+            outlineAmbientShadowColor = 0x33000000
             isClickable = true
         }
         val lr = row ?: LinearLayout(ctx).apply {
@@ -75,21 +81,30 @@ object SelectionGlass {
         if (!existing) surface.addView(lr, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, ctx.dp(44)))
         lr.removeAllViews()
         items.forEachIndexed { i, it ->
-            if (i > 0) lr.addView(View(ctx).apply { setBackgroundColor(0x33FFFFFF) }, LinearLayout.LayoutParams(ctx.dp(1), ctx.dp(18)))
-            lr.addView(TextView(ctx).apply {
-                text = it.label
-                textSize = 14f
-                setTextColor(Color.WHITE)
-                try { typeface = Fonts.label(ctx) } catch (_: Throwable) {}
+            if (i > 0) lr.addView(View(ctx).apply { setBackgroundColor(if (dark) 0x33FFFFFF else 0x1F000000) },
+                LinearLayout.LayoutParams(ctx.dp(1), ctx.dp(18)))
+            val cell = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                setPadding(ctx.dp(14), 0, ctx.dp(14), 0)
-                minWidth = ctx.dp(48)
-                background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33FFFFFF), null,
+                setPadding(ctx.dp(if (it.icon != 0) 11 else 14), 0, ctx.dp(14), 0)
+                minimumWidth = ctx.dp(48)
+                background = android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(if (dark) 0x33FFFFFF else 0x1F1652F6), null,
                     android.graphics.drawable.ColorDrawable(Color.WHITE))
                 isClickable = true
                 contentDescription = it.label
                 setOnClickListener { _ -> haptic(this); it.action() }
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT))
+            }
+            if (it.icon != 0) cell.addView(ctx.icon(it.icon, iconFg, 17).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO },
+                LinearLayout.LayoutParams(ctx.dp(17), ctx.dp(17)).apply { marginEnd = ctx.dp(6) })
+            cell.addView(TextView(ctx).apply {
+                text = it.label
+                textSize = 14f
+                setTextColor(fg)
+                try { typeface = Fonts.label(ctx) } catch (_: Throwable) {}
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            })
+            lr.addView(cell, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT))
         }
         row = lr
 

@@ -2543,7 +2543,10 @@ class DocEditorActivity : AppCompatActivity() {
 
     private fun readAloud() = VoiceReaderManager.showVoiceReaderDialog(this, docName, plainText())
 
-    private fun printDoc() {
+    /** "Cetak / PDF": lembar DepUp — simpan PDF langsung (tanpa dialog sistem) atau cetak ke printer. */
+    private fun printDoc() = printChoiceSheet(docName, onPdf = { preparePrint(pdf = true) }, onPrint = { preparePrint(pdf = false) })
+
+    private fun preparePrint(pdf: Boolean) {
         syncAll()
         val html = doc.toHtml(docName) { b ->
             val mime = when {
@@ -2556,8 +2559,13 @@ class DocEditorActivity : AppCompatActivity() {
         }
         val wv = WebView(this)
         printView = wv
+        val waiting = if (pdf) busy("Membuat PDF…") else null
+        fun stopWaiting() { try { waiting?.dismiss() } catch (_: Exception) {} }
         wv.webViewClient = object : WebViewClient() {
+            private var started = false
             override fun onPageFinished(view: WebView, url: String?) {
+                if (started) return
+                started = true
                 val pm = getSystemService(Context.PRINT_SERVICE) as PrintManager
                 val pg = doc.page
                 val base = when (pg?.let { min(it.w, it.h) to max(it.w, it.h) }) {
@@ -2568,19 +2576,29 @@ class DocEditorActivity : AppCompatActivity() {
                     else -> PrintAttributes.MediaSize.ISO_A4
                 }
                 val media = if (pg?.landscape == true) base.asLandscape() else base
-                pm.print(docName, view.createPrintDocumentAdapter(docName), PrintAttributes.Builder().setMediaSize(media).build())
+                fun system() = pm.print(docName, view.createPrintDocumentAdapter(docName), PrintAttributes.Builder().setMediaSize(media).build())
+                if (!pdf) { system(); return }
+                // beri waktu tata letak & font selesai, lalu tulis PDF langsung ke folder hasil
+                view.postDelayed({
+                    if (isFinishing || isDestroyed) { stopWaiting(); return@postDelayed }
+                    PdfExport.write(this@DocEditorActivity, view, docName, media) { f ->
+                        stopWaiting()
+                        if (f != null) pdfReadySheet(f)
+                        else { toast("Pilih “Simpan sebagai PDF” di dialog cetak"); system() }
+                    }
+                }, 450L)
             }
 
             // mesin WebView berhenti (dokumen sangat besar / memori habis): jangan ikut menutup aplikasi & isi editor
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
                 if (printView === view) printView = null
                 try { view.destroy() } catch (_: Throwable) {}
+                stopWaiting()
                 if (!isFinishing && !isDestroyed) toast("Pratinjau cetak gagal dimuat. Coba simpan lalu cetak dari pembaca.")
                 return true
             }
         }
         wv.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-        toast("Pilih printer atau “Simpan sebagai PDF”")
     }
 
     private fun showHelp() = sheet { body, dismiss ->

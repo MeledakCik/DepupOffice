@@ -25,3 +25,8 @@
 
 # Transisi menu dipanggil lewat XML (res/transition/menu_pop.xml, atribut class) — jangan dibuang/diganti nama R8.
 -keep class cloud.depup.office.MenuPop { <init>(android.content.Context, android.util.AttributeSet); }
+
+# "Simpan sebagai PDF" tanpa dialog cetak: kelas ini HARUS tetap di paket android.print (konstruktor callback cetak
+# hanya terlihat dari paket itu) — jangan diganti nama / dipindah oleh -repackageclasses.
+-keep class android.print.DepupPdfWriter { *; }
+-keep class android.print.DepupPdfWriter$* { *; }

@@ -145,9 +145,12 @@ object SelectionKit {
         if (mode == SELECT && a == b) return null
         val m = localToSc(p, sc)
         val ox = (p.totalPaddingLeft - p.scrollX).toFloat(); val oy = (p.totalPaddingTop - p.scrollY).toFloat()
+        val cw = 2f * p.resources.displayMetrics.density       // lebar kursor ParaEdit
         fun pos(off: Int): FloatArray {
             val line = l.getLineForOffset(off)
-            val x = l.getPrimaryHorizontal(off) + ox
+            var x = l.getPrimaryHorizontal(off) + ox
+            // butir kursor sejajar garis kursor yang digeser masuk di tepi paragraf (lihat ParaEdit.drawCaret)
+            if (mode == CARET) x = x.coerceIn(cw / 2f, maxOf(cw / 2f, p.width - cw / 2f))
             val t = map(m, x, l.getLineTop(line) + oy); val bt = map(m, x, l.getLineBottom(line) + oy)
             return floatArrayOf(t[0], t[1], bt[1])
         }

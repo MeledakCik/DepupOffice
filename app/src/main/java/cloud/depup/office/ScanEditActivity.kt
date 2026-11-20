@@ -526,8 +526,6 @@ class ScanEditActivity : AppCompatActivity() {
     private lateinit var cropPanel: LinearLayout
     private lateinit var cropHint: TextView
     private lateinit var filterPanel: LinearLayout
-    private lateinit var segCrop: TextView
-    private lateinit var segFilter: TextView
     private val filterCards = mutableListOf<LinearLayout>()
     private val checks = mutableListOf<View>()
     private val previews = LruCache<String, Bitmap>(Perf.previewSlots())
@@ -546,10 +544,10 @@ class ScanEditActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(C.BG) }
 
         // ----- bar atas -----
+        // tanpa latar sendiri: kaca bilah atas (Glass.scaffold) yang tampil, sama seperti layar lain
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(C.SURFACE)
             setPadding(dp(8), dp(8), dp(16), dp(8))
         }
         bar.add(icon(R.drawable.ic_close, C.TEXT, 24).asButton("Tutup editor scan").apply {
@@ -601,48 +599,25 @@ class ScanEditActivity : AppCompatActivity() {
         // ----- isi (bisa digulir) -----
         val body = vbox(16).apply { setPadding(dp(16), dp(14), dp(16), dp(20)) }
 
-        // baris: pil potong manual + segmen Potong/Filter
-        val seg = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        seg.add(iconPill(R.drawable.ic_crop, "Potong Bebas", C.ACCENT, C.BLUE_BG, 12f), w = WRAP)
-        seg.add(View(this), w = 0, weight = 1f)
-        val sw = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = shape(C.SURFACE2, 12)
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-        }
-        segCrop = tv("Potong", 13f, C.ACCENT, true).apply {
-            gravity = Gravity.CENTER; setPadding(dp(16), dp(8), dp(16), dp(8)); setOnClickListener { showTab(0) }
-        }
-        segFilter = tv("Filter", 13f, C.MUTED, true).apply {
-            gravity = Gravity.CENTER; setPadding(dp(16), dp(8), dp(16), dp(8)); setOnClickListener { showTab(1) }
-        }
-        sw.add(segCrop, w = WRAP); sw.add(segFilter, w = WRAP)
-        seg.add(sw, w = WRAP)
-        body.add(seg)
+        // segmen Potong / Filter: kapsul meluncur seperti di seluruh aplikasi
+        body.add(segmented(listOf("Potong", "Filter"), 0) { showTab(it) })
 
-        // kanvas potong + chip Penuh / Reset
+        // kanvas potong; alat cepatnya di bawah kanvas (dulu menumpuk di pojok foto, menutupi titik sudut kiri atas)
         cv = CropView(this)
         val stage = FrameLayout(this)
         stage.addView(cv, FrameLayout.LayoutParams(MATCH, MATCH))
-        val ov = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        fun overlay(res: Int, label: String, f: () -> Unit) = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = shape(0x99111111.toInt(), 100)
-            setPadding(dp(12), dp(7), dp(14), dp(7))
-            add(icon(res, Color.WHITE, 16), w = dp(16), h = dp(16))
-            add(tv(label, 12f, Color.WHITE, true), w = WRAP, side = 6)
-            setOnClickListener { f() }
-            springPress(0.93f)
-        }
-        ov.add(overlay(R.drawable.ic_full, "Penuh") { resetCrop() }, w = WRAP)
-        ov.add(overlay(R.drawable.ic_rotate, "Reset") { resetAll() }, top = 8, w = WRAP)
-        ov.add(overlay(R.drawable.ic_check_ok, "Lihat Hasil") { previewResult() }, top = 8, w = WRAP)
-        stage.addView(ov, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply { setMargins(dp(10), dp(10), 0, 0) })
         body.add(stage, top = 12, h = dp(380))
+        val quick = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        listOf(
+            Triple(R.drawable.ic_full, "Penuh") { resetCrop() },
+            Triple(R.drawable.ic_rotate, "Reset") { resetAll() },
+            Triple(R.drawable.ic_check_ok, "Lihat hasil") { previewResult() }
+        ).forEachIndexed { i, (res, label, f) ->
+            val chip = filterChip(label, false, res) { f() }
+            quick.add(chip, w = WRAP, side = 0)
+            if (i > 0) (chip.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+        }
+        body.add(quick, top = 10)
 
         val hs = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -651,55 +626,59 @@ class ScanEditActivity : AppCompatActivity() {
         if (pages.size > 1) body.add(tv("Tahan nomor halaman lalu geser untuk mengubah urutan", 12f, C.MUTED), top = 4)
 
         // ---- panel Potong ----
+        // Alat dikelompokkan dalam kartu bulat berlabel (seperti daftar di seluruh aplikasi); ikon di wadah warna lembut.
         cropPanel = vbox()
-        val tools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = raised(C.SURFACE, 16, 2f)
-            setPadding(dp(4), dp(12), dp(4), dp(12))
-        }
-        fun tool(res: Int, label: String, tint: Int = C.TEXT, f: () -> Unit) = LinearLayout(this).apply {
+        fun tool(res: Int, label: String, fg: Int, bg: Int, f: () -> Unit) = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            isClickable = true
-            val ic = icon(res, tint, 24)
-            setOnClickListener { ic.boing(0.78f); f() }
-            springPress(0.9f)
-            add(ic, w = dp(24), h = dp(24))
-            add(tv(label, 12f, tint, true), top = 4, w = WRAP)
+            setPadding(dp(2), dp(10), dp(2), dp(10))
+            background = rippleBg(16)
+            isClickable = true; isFocusable = true
+            contentDescription = label
+            val badge = iconBadge(res, fg, bg, 14, 22).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+            setOnClickListener { badge.boing(0.8f); f() }
+            springPress(0.92f)
+            add(badge, w = dp(46), h = dp(46))
+            add(tv(label, 12f, if (fg == C.RED) C.RED else C.TEXT, true).apply {
+                gravity = Gravity.CENTER; maxLines = 2
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, top = 6, w = MATCH)
         }
-        tools.add(tool(R.drawable.ic_rotate, "Putar 90°") { rotate() }, w = 0, weight = 1f)
-        tools.add(tool(R.drawable.ic_flip, "Balikkan") { flipPage() }, w = 0, weight = 1f)
-        tools.add(tool(R.drawable.ic_full, "Potong Penuh") { resetCrop() }, w = 0, weight = 1f)
-        tools.add(tool(R.drawable.ic_trash, "Hapus Hal.", C.RED) { removePage() }, w = 0, weight = 1f)
-        cropPanel.add(tools)
-        val ai = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = shape(C.BLUE_BG, 16, C.BLUE_LINE, 1)
-            setPadding(dp(4), dp(12), dp(4), dp(12))
+        fun group(title: String, items: List<View>, top: Int) {
+            cropPanel.add(tv(title, 13f, C.MUTED, true).apply { setPadding(dp(6), 0, 0, 0) }, top = top)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = squircle(C.SURFACE, 22)
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+            }
+            items.forEach { row.add(it, w = 0, weight = 1f) }
+            cropPanel.add(row, top = 6)
         }
-        ai.add(tool(R.drawable.ic_wand, "Auto-crop AI", C.ACCENT) { autoCrop() }, w = 0, weight = 1f)
-        ai.add(tool(R.drawable.ic_tune, "Luruskan", C.ACCENT) { straighten() }, w = 0, weight = 1f)
-        ai.add(tool(R.drawable.ic_note, "Teks (OCR)", C.ACCENT) { runOcr() }, w = 0, weight = 1f)
-        cropPanel.add(ai, top = 10)
-
-        val secTools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = shape(C.AMBER_BG, 16)
-            setPadding(dp(4), dp(12), dp(4), dp(12))
-        }
-        secTools.add(tool(R.drawable.ic_lock, "Sensur NIK/Data", C.AMBER) { toggleRedactMode() }, w = 0, weight = 1f)
-        secTools.add(tool(R.drawable.ic_spark, "Cap Watermark", C.AMBER) { showWatermarkDialog() }, w = 0, weight = 1f)
-        secTools.add(tool(R.drawable.ic_trash, "Hapus Sensur", C.RED) { clearRedactions() }, w = 0, weight = 1f)
-        cropPanel.add(secTools, top = 10)
+        group("Halaman", listOf(
+            tool(R.drawable.ic_rotate, "Putar 90°", C.TEXT, C.SOFT) { rotate() },
+            tool(R.drawable.ic_flip, "Balikkan", C.TEXT, C.SOFT) { flipPage() },
+            tool(R.drawable.ic_full, "Potong penuh", C.TEXT, C.SOFT) { resetCrop() },
+            tool(R.drawable.ic_trash, "Hapus hal.", C.RED, C.ERROR_C) { removePage() }
+        ), 0)
+        group("Otomatis", listOf(
+            tool(R.drawable.ic_wand, "Auto-crop AI", C.ACCENT, C.BLUE_BG) { autoCrop() },
+            tool(R.drawable.ic_tune, "Luruskan", C.ACCENT, C.BLUE_BG) { straighten() },
+            tool(R.drawable.ic_note, "Teks (OCR)", C.ACCENT, C.BLUE_BG) { runOcr() }
+        ), 16)
+        group("Privasi & tanda", listOf(
+            tool(R.drawable.ic_lock, "Sensur NIK/data", C.AMBER, C.AMBER_BG) { toggleRedactMode() },
+            tool(R.drawable.ic_spark, "Cap watermark", C.AMBER, C.AMBER_BG) { showWatermarkDialog() },
+            tool(R.drawable.ic_trash, "Hapus sensur", C.RED, C.ERROR_C) { clearRedactions() }
+        ), 16)
 
         if (intent.getBooleanExtra("isKtp", false) || pages.size >= 2) {
-            val ktpBanner = card(12, 12).apply {
-                background = shape(C.BLUE_BG, 12, C.ACCENT, 1)
+            val ktpBanner = card(14, 22).apply {
+                background = squircle(C.SURFACE, 22)
                 isClickable = true
                 setOnClickListener { layoutKtpA4() }
             }
             val kRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            kRow.add(iconBadge(R.drawable.ic_user, C.ACCENT, C.SURFACE, 100, 20), w = dp(38), h = dp(38))
+            kRow.add(iconBadge(R.drawable.ic_user, C.ACCENT, C.BLUE_BG, 100, 20), w = dp(38), h = dp(38))
             val kCol = vbox()
             kCol.add(tv("Tata KTP 2-Sisi ke 1 Halaman A4", 14f, C.TEXT, true))
             kCol.add(tv("Gabung KTP Sisi Depan & Belakang dalam 1 lembar A4 siap cetak/upload", 11f, C.MUTED), top = 2)
@@ -709,7 +688,7 @@ class ScanEditActivity : AppCompatActivity() {
                 setPadding(dp(10), dp(7), dp(10), dp(7))
             }, w = WRAP)
             ktpBanner.add(kRow)
-            cropPanel.add(ktpBanner, top = 10)
+            cropPanel.add(ktpBanner, top = 16)
         }
 
         cropHint = tv("", 12f, C.MUTED)
@@ -778,12 +757,15 @@ class ScanEditActivity : AppCompatActivity() {
         val foot = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(C.SURFACE)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setPadding(dp(16), dp(10), dp(16), dp(12))
         }
         foot.add(iconBadge(R.drawable.ic_camera, C.ACCENT, C.BLUE_BG, 12, 22).apply { contentDescription = "Foto ulang halaman ini"; isFocusable = true; setOnClickListener { retake() } }, w = dp(48), h = dp(48))
-        foot.add(btn("+ Halaman", false, C.ACCENT, R.drawable.ic_add_photo) { addPage() }, w = WRAP, side = 8)
-        foot.add(btn("Selesai & Simpan", true, C.ACCENT, R.drawable.ic_pdf) { save() }, w = 0, weight = 1f, side = 0)
+        foot.add(btn("Tambah", false, C.ACCENT, R.drawable.ic_add_photo) { addPage() }.apply {
+            contentDescription = "Tambah halaman"
+        }, w = WRAP, side = 8)
+        foot.add(btn("Simpan", true, C.ACCENT, R.drawable.ic_pdf) { save() }.apply {
+            contentDescription = "Selesai dan simpan"
+        }, w = 0, weight = 1f, side = 0)
             .also { (foot.getChildAt(foot.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(8) }
         root.add(foot)
 
@@ -802,14 +784,9 @@ class ScanEditActivity : AppCompatActivity() {
         if (changed) {
             // panel baru meluncur masuk dari arah tab yang dipilih; tab aktif memantul kecil
             (if (i == 0) cropPanel else filterPanel).cascadeIn(dyDp = 10, dxDp = if (i == 0) -14 else 14)
-            (if (i == 0) segCrop else segFilter).boing(0.9f)
         }
         cropPanel.visibility = if (i == 0) View.VISIBLE else View.GONE
         filterPanel.visibility = if (i == 1) View.VISIBLE else View.GONE
-        segCrop.setTextColor(if (i == 0) C.ACCENT else C.MUTED)
-        segCrop.background = if (i == 0) shape(C.SURFACE, 10) else null
-        segFilter.setTextColor(if (i == 1) C.ACCENT else C.MUTED)
-        segFilter.background = if (i == 1) shape(C.SURFACE, 10) else null
     }
 
     private fun sliderRow(res: Int, label: String, value: TextView, onChange: (Int) -> Unit): View {
