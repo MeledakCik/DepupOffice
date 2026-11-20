@@ -53,6 +53,7 @@ fun main(args: Array<String>) {
     val mode = args.getOrElse(0) { "old" }
     System.getenv("W")?.let { w -> w.split(",").forEachIndexed { i, v -> DocFind.W[i] = v.toFloat() } }
     System.getenv("SEAM")?.let { w -> w.split(",").forEachIndexed { i, v -> DocFind.SEAM[i] = v.toFloat() } }
+    System.getenv("MS")?.let { DocFind.MIN_SCORE = it.toFloat() }
     if (System.getenv("NOSEAM") != null) ScanCore.seamCut = false
     val set2 = args.getOrElse(1) { "" } == "2"
     if (args.getOrElse(1) { "" } == "3") { runMask(mode); return }
@@ -60,6 +61,8 @@ fun main(args: Array<String>) {
     if (args.getOrElse(1) { "" } == "7") { runBig(mode, "cases7.json", "imgs7", "7"); return }
     if (args.getOrElse(1) { "" } == "8") { runBig(mode, "cases8.json", "imgs8", "8"); return }
     if (args.getOrElse(1) { "" } == "9") { runBig(mode, "cases9.json", "imgs9", "9"); return }
+    if (args.getOrElse(1) { "" } == "10") { runBig(mode, "cases10.json", "imgs10", "10"); return }
+    if (args.getOrElse(1) { "" } == "11") { runBig(mode, "cases11.json", "imgs11", "11"); return }
     if (args.getOrElse(1) { "" } == "real") { runReal(); return }
     val dir = File(System.getenv("CROP") ?: "/home/claude/crop")
     val cases = Regex("\\{\"file\": \"([^\"]+)\", \"quad\": \\[([^\\]]+)\\], \"w\": (\\d+), \"h\": (\\d+)\\}").findAll(File(dir, if (set2) "cases2.json" else "cases.json").readText()).toList()
