@@ -833,6 +833,9 @@ class SegmentedBar(ctx: Context, private var selected: Int, private val waitThum
         if (i == selected) mark(s, false)
     }
 
+    /** Pilih segmen [i] dari kode (mis. ketuk gambar halaman → "Pilih halaman"); [onPick] ikut dipanggil. */
+    fun select(i: Int) { if (i in segs.indices) pick(i) }
+
     private fun pick(i: Int) {
         if (i == selected) return
         selected = i

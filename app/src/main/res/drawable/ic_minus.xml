@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Depup Solid: ikon solid membulat 24dp — garis 2,5 berujung bulat, sudut lingkaran, detail berupa lubang,
+     celah 1,5. Path mulus (garis + kurva Bezier). Dibuat oleh tools/icons/gen.py; warna lewat tint. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FF111111" android:fillType="evenOdd"
+        android:pathData="M4.803 13.2L19.27 13.198C19.918 13.16 20.419 12.613 20.399 11.964C20.38 11.314 19.846 10.798 19.197 10.8L4.73 10.802C4.082 10.84 3.581 11.387 3.601 12.036C3.62 12.686 4.154 13.202 4.803 13.2Z" />
+</vector>

@@ -105,9 +105,12 @@ class ViewerActivity : AppCompatActivity() {
         const val EXTRA_AUTO_PRINT = "auto_print"
     }
 
-    /** Dokumen Office: lembar DepUp "Cetak & PDF" — simpan PDF langsung, atau cetak ke printer lewat dialog sistem. */
+    /**
+     * Dokumen Office: lembar DepUp "Cetak & PDF" — simpan PDF langsung, atau lembar Cetak DepUp (dokumen dijadikan PDF
+     * dulu, lalu halaman/salinan/kertas/warna dipilih di sana). Gagal jadi PDF → layar cetak sistem langsung.
+     */
     private fun officePrint(wv: android.webkit.WebView, name: String) =
-        printChoiceSheet(name, onPdf = { officeSavePdf(wv, name) }, onPrint = { OfficeView.print(this, wv, name) })
+        printChoiceSheet(name, onPdf = { officeSavePdf(wv, name) }, onPrint = { printWebView(wv, name) { OfficeView.print(this, wv, name) } })
 
     /** Simpan sebagai PDF tanpa dialog cetak sistem (ukuran halaman = dokumen); gagal → dialog sistem. */
     private fun officeSavePdf(wv: android.webkit.WebView, name: String) {
@@ -566,7 +569,7 @@ class ViewerActivity : AppCompatActivity() {
                     try {
                         when (m.itemId) {
                             1 -> requirePassword("Bagikan Dokumen") { try { Files.share(this@ViewerActivity, shareTarget(uri), mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") } }
-                            2 -> requirePassword("Cetak Dokumen") { if (office) officeWeb?.let { officePrint(it, name) } else PrintHelper.printPdf(this@ViewerActivity, uri, name) }
+                            2 -> requirePassword("Cetak Dokumen") { if (office) officeWeb?.let { officePrint(it, name) } else printPdfUri(uri, name) }
                             8 -> startVoiceReaderForPdf(uri, name)
                             3 -> requirePassword("Tanda Tangan & Edit PDF") { showPdfEditDialog(uri, name) }
                             4 -> showRenameDialog(rawUri, uri, name)
@@ -696,7 +699,7 @@ class ViewerActivity : AppCompatActivity() {
                 setOnClickListener { animateZoom(zoomTarget + 0.5f, scroll.width / 2f, scroll.height / 2f) }
             }, w = dp(48), h = dp(48))
             if (!secure) tb.add(icon(R.drawable.ic_print, C.TEXT, 22).asButton("Cetak").apply {
-                setOnClickListener { requirePassword("Cetak Dokumen") { try { Files.print(this@ViewerActivity, uri, name) } catch (_: Exception) { toast("Tidak bisa mencetak") } } }
+                setOnClickListener { requirePassword("Cetak Dokumen") { printPdfUri(uri, name) } }
             }, w = dp(48), h = dp(48), side = 4)
             tb.add(FrameLayout(this).apply {
                 contentDescription = "Bagikan"; isFocusable = true

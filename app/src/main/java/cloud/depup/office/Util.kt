@@ -5,16 +5,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Bundle
-import android.os.CancellationSignal
 import android.os.Environment
-import android.os.ParcelFileDescriptor
 import android.os.StatFs
-import android.print.PageRange
-import android.print.PrintAttributes
-import android.print.PrintDocumentAdapter
-import android.print.PrintDocumentInfo
-import android.print.PrintManager
 import android.media.MediaScannerConnection
 import android.provider.DocumentsContract
 import android.provider.MediaStore
@@ -453,35 +445,6 @@ object Files {
     fun deviceStorage(): Pair<Long, Long> {
         val s = StatFs(Environment.getDataDirectory().path)
         return s.availableBytes to s.totalBytes
-    }
-
-    /** Cetak PDF lewat layanan cetak Android (printer WiFi, Mopria, simpan sebagai PDF, dll). */
-    fun print(ctx: Context, uri: Uri, name: String) {
-        val pm = ctx.getSystemService(Context.PRINT_SERVICE) as PrintManager
-        pm.print(name, object : PrintDocumentAdapter() {
-            override fun onLayout(
-                old: PrintAttributes?, new: PrintAttributes?, cs: CancellationSignal?,
-                cb: LayoutResultCallback, extras: Bundle?
-            ) {
-                if (cs?.isCanceled == true) { cb.onLayoutCancelled(); return }
-                cb.onLayoutFinished(
-                    PrintDocumentInfo.Builder(name)
-                        .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                        .setPageCount(PrintDocumentInfo.PAGE_COUNT_UNKNOWN).build(), true
-                )
-            }
-            override fun onWrite(
-                pages: Array<out PageRange>?, dest: ParcelFileDescriptor, cs: CancellationSignal?,
-                cb: WriteResultCallback
-            ) {
-                try {
-                    ctx.contentResolver.openInputStream(uri)!!.use { i ->
-                        ParcelFileDescriptor.AutoCloseOutputStream(dest).use { o -> i.copyTo(o) }
-                    }
-                    cb.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
-                } catch (e: Exception) { cb.onWriteFailed(e.message) }
-            }
-        }, null)
     }
 
     fun saveToDownloads(ctx: Context, src: Uri, name: String, mime: String): File {
