@@ -5,8 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
-import android.graphics.Paint
-import android.graphics.pdf.PdfDocument
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Bundle
@@ -144,29 +142,6 @@ object PrintKit {
                 if (pages[0].rotate % 180 != 0) Info(pages.size, h, w) else Info(pages.size, w, h)
             }
         } catch (_: Throwable) { null }
-    }
-
-    /** Tabel lembar kerja (judul + kisi) jadi PDF A4 tegak di [out]. */
-    fun spreadsheetPdf(title: String, grid: List<List<String>>, out: File) {
-        val doc = PdfDocument()
-        try {
-            val page = doc.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
-            val c = page.canvas
-            val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 18f; isFakeBoldText = true }
-            val linePaint = Paint().apply { color = Color.LTGRAY; strokeWidth = 1f; style = Paint.Style.STROKE }
-            val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 11f }
-            c.drawText(title, 40f, 45f, titlePaint)
-            val cellW = 115f; val cellH = 25f; val top0 = 70f
-            grid.take(28).forEachIndexed { r, row ->
-                row.take(4).forEachIndexed { col, v ->
-                    val l = 40f + col * cellW; val t = top0 + r * cellH
-                    c.drawRect(l, t, l + cellW, t + cellH, linePaint)
-                    c.drawText(if (v.length > 15) v.take(13) + ".." else v, l + 8f, t + 17f, textPaint)
-                }
-            }
-            doc.finishPage(page)
-            FileOutputStream(out).use { doc.writeTo(it) }
-        } finally { doc.close() }
     }
 }
 
