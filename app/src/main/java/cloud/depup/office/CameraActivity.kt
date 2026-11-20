@@ -211,8 +211,9 @@ class CameraActivity : AppCompatActivity(), FullBleed {
     private var flash = 0                 // 0 otomatis, 1 nyala, 2 mati
     private var modeIdx = 2               // 0 multi, 1 KTP, 2 dokumen
     private var filterIdx = 0
-    private val filters = intArrayOf(3, 2, 1, 0)
-    private val filterNames = arrayOf("Magic Color", "B&W", "Grayscale", "Warna Asli")
+    // bawaan: warna asli foto (Magic Color dll. tinggal dipilih dengan tongkat sihir)
+    private val filters = intArrayOf(0, 3, 2, 1)
+    private val filterNames = arrayOf("Warna Asli", "Magic Color", "B&W", "Grayscale")
 
     private lateinit var flashBtn: FrameLayout
     private lateinit var flashIcon: ImageView

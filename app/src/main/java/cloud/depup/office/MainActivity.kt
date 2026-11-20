@@ -68,7 +68,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         if (r.resultCode == RESULT_OK && files != null && files.isNotEmpty()) {
             scanEdit.launch(Intent(this, ScanEditActivity::class.java)
                 .putStringArrayListExtra("files", files)
-                .putExtra("mode", r.data?.getIntExtra("mode", 3) ?: 3))
+                .putExtra("mode", r.data?.getIntExtra("mode", 0) ?: 0))
         }
     }
 

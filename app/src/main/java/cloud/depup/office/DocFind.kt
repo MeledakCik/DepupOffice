@@ -28,38 +28,100 @@ object DocFind {
         val confident get() = (score >= MIN_SCORE && edge >= 0.55f) || (!dark && edge >= 0.7f && score >= 0.03f)
     }
 
-    private class Scored(val q: FloatArray, val s: Float, val edge: Float, val area: Float, val dark: Boolean)
-
-    private var lastEdge = 0f
-    private var lastDark = false
+    private class Scored(val q: FloatArray, val s: Float, val edge: Float, val area: Float, val dark: Boolean, val f: FloatArray)
     private const val BORDER = 0.55f
     @JvmStatic var INSET = 0.5f
 
-    private fun pairPage(img: Img, win: Scored, scored: List<Scored>): Scored? {
-        val w = img.w; val h = img.h
+    private fun pairPage(gt: Gather, win: Scored, scored: List<Scored>, P: FloatArray): Scored? {
+        val w = gt.w; val h = gt.h
         var best: Scored? = null; var bestV = 0f
         for (c in scored) {
-            if (c === win || c.s < win.s * rr(0.4f) || c.edge < 0.6f) continue
+            if (c === win || c.s < win.s * rr(0.4f, P) || c.edge < 0.6f) continue
             if (c.area < win.area * 0.45f || c.area > win.area * 2.2f) continue
-            // tidak saling tumpuk banyak
-            val mask = BooleanArray(w * h)
-            var inA = 0; var inB = 0; var both = 0
-            val b1 = Quad.bbox(win.q); val b2 = Quad.bbox(c.q)
-            val bb = floatArrayOf(min(b1[0], b2[0]), min(b1[1], b2[1]), max(b1[2], b2[2]), max(b1[3], b2[3]))
-            for (y in max(0, bb[1].toInt()) until min(h, bb[3].toInt() + 1)) for (x in max(0, bb[0].toInt()) until min(w, bb[2].toInt() + 1)) {
-                val a = inside(win.q, x + 0.5f, y + 0.5f); val b = inside(c.q, x + 0.5f, y + 0.5f)
-                if (a) inA++; if (b) inB++; if (a && b) both++
-                if (a || b) mask[y * w + x] = true
-            }
-            if (both > 0.15f * min(inA, inB)) continue
-            val u = DocQuad.quadFromMask(mask, w, h) ?: continue
-            val ua = polyArea(u)
-            debugParts?.invoke("PAIR? c=${c.q.joinToString(",") { it.toInt().toString() }} ua=$ua sum=${inA + inB - both} paper=${extraIsPaper(img, u, win.q)}")
-            // berdampingan rapat: gabungan hampir sama dengan jumlah luas keduanya (celah punggung buku kecil)
-            if (ua > (inA + inB - both) * 1.15f) continue
-            if (!extraIsPaper(img, u, win.q)) continue
+            val m = gt.memo.getOrPut("P" + key(win.q) + "|" + key(c.q)) { pairQuad(gt.img, win.q, c.q) } as FloatArray? ?: continue
             val v = c.s
-            if (v > bestV) { bestV = v; best = Scored(Quad.order(u), win.s, max(win.edge, c.edge), ua / (w * h).toFloat(), win.dark) }
+            if (v > bestV) { bestV = v; best = Scored(Quad.order(m.copyOf(8)), win.s, max(win.edge, c.edge), m[8] / (w * h).toFloat(), win.dark, win.f) }
+        }
+        return best
+    }
+
+    /** Gabungan dua halaman [a] & [b] yang berdampingan rapat & sama-sama kertas (8 sudut + luas), atau null. */
+    private fun pairQuad(img: Img, a: FloatArray, b: FloatArray): FloatArray? {
+        val w = img.w; val h = img.h
+        // Saringan cepat (geometri kontinu, batas jauh lebih longgar daripada uji piksel di bawah): pasangan yang jelas
+        // bertumpuk atau berjauhan ditolak tanpa membangun masker — hasilnya sama, jauh lebih hemat.
+        val aA = polyArea(a); val aB = polyArea(b)
+        val inter = interArea(a, b)
+        if (inter > 0.35f * min(aA, aB)) return null
+        if (hullQuadArea(a, b) > 1.5f * (aA + aB - inter)) return null
+        // tidak saling tumpuk banyak
+        val mask = BooleanArray(w * h)
+        var inA = 0; var inB = 0; var both = 0
+        val b1 = Quad.bbox(a); val b2 = Quad.bbox(b)
+        val bb = floatArrayOf(min(b1[0], b2[0]), min(b1[1], b2[1]), max(b1[2], b2[2]), max(b1[3], b2[3]))
+        for (y in max(0, bb[1].toInt()) until min(h, bb[3].toInt() + 1)) for (x in max(0, bb[0].toInt()) until min(w, bb[2].toInt() + 1)) {
+            val ia = inside(a, x + 0.5f, y + 0.5f); val ib = inside(b, x + 0.5f, y + 0.5f)
+            if (ia) inA++; if (ib) inB++; if (ia && ib) both++
+            if (ia || ib) mask[y * w + x] = true
+        }
+        if (both > 0.15f * min(inA, inB)) return null
+        val u = DocQuad.quadFromMask(mask, w, h) ?: return null
+        val ua = polyArea(u)
+        debugParts?.invoke("PAIR? c=${b.joinToString(",") { it.toInt().toString() }} ua=$ua sum=${inA + inB - both} paper=${extraIsPaper(img, u, a)}")
+        // berdampingan rapat: gabungan hampir sama dengan jumlah luas keduanya (celah punggung buku kecil)
+        if (ua > (inA + inB - both) * 1.15f) return null
+        if (!extraIsPaper(img, u, a)) return null
+        return u.copyOf(9).also { it[8] = ua }
+    }
+
+    private fun key(q: FloatArray): String = q.joinToString(",")
+
+    /** Luas irisan dua segi-empat cembung (pemotongan Sutherland–Hodgman). */
+    private fun interArea(a: FloatArray, b: FloatArray): Float {
+        var poly = ArrayList<Float>(16).apply { for (v in a) add(v) }
+        var sgn = 0f
+        for (k in 0 until 4) { val j = (k + 1) % 4; sgn += b[2 * k] * b[2 * j + 1] - b[2 * j] * b[2 * k + 1] }
+        val o = if (sgn >= 0f) 1f else -1f
+        for (k in 0 until 4) {
+            if (poly.size < 6) return 0f
+            val j = (k + 1) % 4
+            val px = b[2 * k]; val py = b[2 * k + 1]; val ex = b[2 * j] - px; val ey = b[2 * j + 1] - py
+            fun side(x: Float, y: Float) = o * (ex * (y - py) - ey * (x - px))
+            val out = ArrayList<Float>(16)
+            val n = poly.size / 2
+            for (i in 0 until n) {
+                val x0 = poly[2 * i]; val y0 = poly[2 * i + 1]; val i1 = (i + 1) % n
+                val x1 = poly[2 * i1]; val y1 = poly[2 * i1 + 1]
+                val s0 = side(x0, y0); val s1 = side(x1, y1)
+                if (s0 >= 0f) { out.add(x0); out.add(y0) }
+                if ((s0 >= 0f) != (s1 >= 0f)) { val t = s0 / (s0 - s1); out.add(x0 + (x1 - x0) * t); out.add(y0 + (y1 - y0) * t) }
+            }
+            poly = out
+        }
+        val n = poly.size / 2
+        if (n < 3) return 0f
+        var ar = 0f
+        for (i in 0 until n) { val j = (i + 1) % n; ar += poly[2 * i] * poly[2 * j + 1] - poly[2 * j] * poly[2 * i + 1] }
+        return abs(ar) / 2f
+    }
+
+    /** Luas segi-empat terbesar yang sudutnya titik-titik selubung cembung kedua segi-empat (seperti quadFromMask). */
+    private fun hullQuadArea(a: FloatArray, b: FloatArray): Float {
+        val pts = (0 until 8).map { if (it < 4) a[2 * it] to a[2 * it + 1] else b[2 * (it - 4)] to b[2 * (it - 4) + 1] }
+            .sortedWith(compareBy({ it.first }, { it.second }))
+        fun cr(o: Pair<Float, Float>, p: Pair<Float, Float>, q: Pair<Float, Float>) =
+            (p.first - o.first) * (q.second - o.second) - (p.second - o.second) * (q.first - o.first)
+        val hv = ArrayList<Pair<Float, Float>>()
+        for (p in pts) { while (hv.size >= 2 && cr(hv[hv.size - 2], hv[hv.size - 1], p) <= 0f) hv.removeAt(hv.size - 1); hv.add(p) }
+        val lower = hv.size + 1
+        for (p in pts.asReversed().drop(1)) { while (hv.size >= lower && cr(hv[hv.size - 2], hv[hv.size - 1], p) <= 0f) hv.removeAt(hv.size - 1); hv.add(p) }
+        hv.removeAt(hv.size - 1)
+        val m = hv.size
+        if (m < 4) return 0f
+        var best = 0f
+        for (i in 0 until m) for (j in i + 1 until m) for (k in j + 1 until m) for (l in k + 1 until m) {
+            val q = floatArrayOf(hv[i].first, hv[i].second, hv[j].first, hv[j].second, hv[k].first, hv[k].second, hv[l].first, hv[l].second)
+            best = max(best, polyArea(q))
         }
         return best
     }
@@ -113,30 +175,59 @@ object DocFind {
         return true
     }
 
-    /** Nilai minimum supaya hasil dipercaya (di bawah ini kembali ke alur lama). */
-    const val MIN_SCORE = 0.10f
+    /** Nilai minimum supaya hasil dipercaya (di bawah ini sudut dibiarkan untuk diatur manual). Ikut dilatih. */
+    @JvmField var MIN_SCORE = 0.058f
 
     /**
-     * Bobot penilaian kandidat. Nilai di sini HASIL PELATIHAN: pencarian bobot (coordinate descent, 6 titik awal)
-     * pada ±390 foto sintetis beragam latar, jenis dokumen, cahaya & sudut kamera, lalu dipilih yang terbaik pada
-     * 120 foto uji terpisah yang tidak ikut dilatih. [0] pangkat tepi, [1] bobot sisi terlemah, [2] bobot keseragaman isi,
-     * [3] bobot "mirip kertas", [4] pangkat penalti benda gelap, [5] bobot kontras, [6] pangkat luas,
-     * [7] penalti jauh dari tengah, [8] penalti 2 sisi menempel bingkai.
+     * Bobot penilaian kandidat — HASIL PELATIHAN (tools/autocrop/Trainer.kt): coordinate descent dengan ALUR PENUH di
+     * dalam lingkaran pada ±700 foto sintetis (set 6 umum, 8 putih di atas putih, 10 dokumen berwarna & dipegang tangan)
+     * + foto asli pengguna, dipilih pada ±450 foto uji terpisah (set 7, 9, 11).
+     * [0] pangkat tepi, [1] bobot sisi terlemah, [2] bobot keseragaman isi, [3] bobot "mirip kertas putih" (kini ±0:
+     * dokumen berwarna tidak lagi kalah oleh bidang putih), [4] pangkat penalti benda gelap, [5] bobot kontras,
+     * [6] pangkat luas, [7] penalti jauh dari tengah, [8] penalti 2 sisi menempel bingkai, [9] bobot isi/tinta (bidang
+     * polos — lampu, jendela, dinding — bukan dokumen), [10] pecahan tinta untuk nilai penuh, [11] bobot kesejajaran tepi
+     * rata-rata, [12] bobot kesejajaran sisi terlemah (keduanya kini 0: kesejajaran dipakai lewat aturan [ALIGN_DROP] &
+     * [MESSY], yang ternyata lebih baik pada set uji daripada sebagai faktor nilai).
      */
-    @JvmField val W = floatArrayOf(1.07f, 0.25f, 0.045f, 0.569f, 1f, 0f, 0.25f, 0.816f, 0.772f)
+    @JvmField val W = floatArrayOf(1.945f, 0.013f, 0.686f, 0f, 0.6f, 0.285f, 0.49f, 0.321f, 0.916f, 0.903f, 0.12f, 0f, 0f)
 
     /**
      * Ambang perbandingan nilai antar-kandidat dirancang untuk skala lama (tepi pangkat 2). Setelah bobot dilatih,
      * skala nilai berubah; [rr] menerjemahkan ambang lama ke skala baru supaya aturannya tetap sama ketatnya.
      */
-    private fun rr(r: Float): Float = Math.pow(r.toDouble(), (W[0] / 2f).toDouble()).toFloat()
+    private fun rr(r: Float, P: FloatArray = W): Float = Math.pow(r.toDouble(), (P[0] / 2f).toDouble()).toFloat()
 
-    private fun combine(edge: Float, homog: Float, paperF: Float, darkF: Float, contrast: Float, area: Float, centerF: Float): Float =
-        Math.pow(edge.toDouble(), W[0].toDouble()).toFloat() * (1f - W[2] + W[2] * homog) * (1f - W[3] + W[3] * paperF) *
-            Math.pow(darkF.toDouble(), W[4].toDouble()).toFloat() * (1f - W[5] + W[5] * contrast) *
-            Math.pow(area.toDouble(), W[6].toDouble()).toFloat() * centerF
+    /**
+     * Nilai kandidat dari fitur mentahnya [f] (urutan seperti [debugFeat]) dengan bobot [P]. Satu-satunya rumus
+     * penilaian — alat latih (tools/autocrop/Trainer.kt) memanggil fungsi yang sama.
+     */
+    @JvmStatic
+    fun scoreFeat(f: FloatArray, P: FloatArray = W): Float {
+        val edge = edgeOf(f, P)
+        if (edge < 0.25f || f[3] < 0f) return 0f
+        val med = f[5]
+        val darkF = if (med < 60) 0.45f else if (med < 90) 0.75f else 1f
+        val centerF = 1f - P[7] * min(1f, f[8])
+        // isi: dokumen hampir selalu memuat tulisan/gambar; bidang polos (lampu, jendela, dinding) tidak
+        val ink = min(1f, f[9] / max(1e-3f, P[10]))
+        return Math.pow(edge.toDouble(), P[0].toDouble()).toFloat() * (1f - P[2] + P[2] * f[3]) * (1f - P[3] + P[3] * f[4]) *
+            Math.pow(darkF.toDouble(), P[4].toDouble()).toFloat() * (1f - P[5] + P[5] * f[6]) *
+            Math.pow(f[7].toDouble(), P[6].toDouble()).toFloat() * centerF * (1f - P[9] + P[9] * ink) *
+            // sisi mengikuti tepi lurus yang nyata (rata-rata & sisi terlemah)
+            (1f - P[11] + P[11] * f[10]) * (1f - P[12] + P[12] * f[11])
+    }
 
-    /** Kait uji: fitur mentah tiap kandidat [mn, mean, nb, homog, paperF, median, kontras, luas, jarak-tengah]. */
+    /** Kekuatan tepi gabungan (0 bila 3-4 sisi menempel bingkai foto). */
+    private fun edgeOf(f: FloatArray, P: FloatArray): Float {
+        val nb = f[2].toInt()
+        if (nb >= 3) return 0f
+        return (P[1] * f[0] + (1f - P[1]) * f[1]) * (if (nb == 2) P[8] else 1f)
+    }
+
+    /**
+     * Kait uji: fitur mentah tiap kandidat [mn, mean, nb, homog, paperF, median, kontras, luas, jarak-tengah, tinta,
+     * kesejajaran-rata2, kesejajaran-min].
+     */
     @JvmStatic var debugFeat: ((FloatArray, FloatArray) -> Unit)? = null
 
     /** Kait untuk uji JVM: dipanggil untuk tiap kandidat beserta nilainya. */
@@ -144,52 +235,116 @@ object DocFind {
     @JvmStatic var debugParts: ((String) -> Unit)? = null
 
     /** r/gr/b = warna ter-blur; cr/cg/cb = warna yang teks/garis gelap tipisnya sudah "ditutup" (untuk menilai tepi kertas). */
-    private class Img(
+    internal class Img(
         val w: Int, val h: Int, val g: IntArray, val r: IntArray, val gr: IntArray, val b: IntArray, val closed: IntArray,
         val cr: IntArray, val cg: IntArray, val cb: IntArray,
         /** abu-abu dengan penutupan lebar: teks (dan garis tipis) hilang total — untuk tepi kertas yang samar */
         val c4: IntArray,
         /** minimum lokal (5x5) abu-abu: menandai tinta/teks di dekat titik */
-        val mn: IntArray
+        val mn: IntArray,
+        /** maksimum lokal (5x5) abu-abu: bersama [mn] menandai isi (teks gelap ATAU tulisan putih di papan berwarna) */
+        val mx: IntArray
     )
 
     /** [g] abu-abu ter-blur, [argb] warna asli; keduanya [w]x[h]. Kembalikan segi-empat piksel (KA, KaA, KaB, KiB). */
     @Synchronized
-    fun find(g: IntArray, argb: IntArray, w: Int, h: Int): Result? {
+    fun find(g: IntArray, argb: IntArray, w: Int, h: Int): Result? = gather(g, argb, w, h)?.let { select(it) }
+
+    /** Kandidat + fitur mentahnya (tidak bergantung bobot [W]). */
+    internal class Cand(val q: FloatArray, val area: Float, val feat: FloatArray)
+
+    /**
+     * Semua yang TIDAK bergantung bobot untuk satu foto: kandidat beserta fiturnya, plus memo tahap-tahap sesudahnya.
+     * [find] = [gather] lalu [select]; alat latih (tools/autocrop) memanggil [select] berulang kali dengan bobot lain
+     * tanpa menghitung ulang kandidat — alur penuh, bukan perkiraan.
+     */
+    class Gather internal constructor(
+        internal val g: IntArray, internal val argb: IntArray, internal val w: Int, internal val h: Int,
+        internal val cands: List<Cand>, img: Img?
+    ) {
+        private var imgRef: Img? = img
+        internal val img: Img get() = imgRef ?: prepare(g, argb, w, h).also { imgRef = it }
+        internal val memo = HashMap<String, Any?>()
+        /** Lepas gambar olahan (dibangun ulang otomatis bila diperlukan) — menghemat memori alat latih. */
+        fun release() { imgRef = null }
+    }
+
+    /**
+     * Kumpulkan kandidat dari semua sumber dan hitung fiturnya. Aman dipanggil paralel (tanpa state bersama).
+     * [refineAll] (alat latih): rapikan SEMUA kandidat sekarang, bukan hanya 10 teratas saat [select] — supaya
+     * penilaian ulang dengan bobot lain tidak perlu menyentuh gambar lagi.
+     */
+    fun gather(g: IntArray, argb: IntArray, w: Int, h: Int, refineAll: Boolean = false): Gather? {
         if (w < 32 || h < 32) return null
         val img = prepare(g, argb, w, h)
-        val cands = ArrayList<FloatArray>()
+        val raw = ArrayList<FloatArray>()
         val minA = 0.012f
-        try { cands.addAll(LineQuad.candidates(g, w, h, minA, 40)) } catch (_: Throwable) {}
+        try { raw.addAll(LineQuad.candidates(g, w, h, minA, 40)) } catch (_: Throwable) {}
         // versi tanpa teks: baris-baris tulisan tidak lagi "merebut" garis Hough dari tepi kertas
-        try { cands.addAll(LineQuad.candidates(ScanCore.closeGray(g, w, h, 3), w, h, minA, 40)) } catch (_: Throwable) {}
-        try { cands.addAll(DocQuad.candidates(g, w, h, minA)) } catch (_: Throwable) {}
-        try { regionCandidates(img, cands) } catch (_: Throwable) {}
+        try { raw.addAll(LineQuad.candidates(ScanCore.closeGray(g, w, h, 3), w, h, minA, 40)) } catch (_: Throwable) {}
+        try { raw.addAll(DocQuad.candidates(g, w, h, minA)) } catch (_: Throwable) {}
+        try { regionCandidates(img, raw) } catch (_: Throwable) {}
         val total = (w * h).toFloat()
-        val scored = ArrayList<Scored>()
-        for (c0 in cands) {
+        val cands = ArrayList<Cand>()
+        val feats = HashMap<String, FloatArray>()
+        for (c0 in raw) {
             val c = Quad.order(c0)
             if (!convex(c)) continue
             val a = Quad.area(c) / total
             if (a < minA || a > 0.97f) continue
-            lastEdge = 0f
-            val s = score(img, c)
-            debug?.invoke(c, s)
-            if (s > 0f) scored.add(Scored(c, s, lastEdge, a, lastDark))
+            cands.add(Cand(c, a, feats.getOrPut(key(c)) { features(img, c) }))
+        }
+        val gt = Gather(g, argb, w, h, cands, img)
+        if (refineAll) for (c in cands) refinedOf(gt, c.q)
+        return gt
+    }
+
+    /** Hasil [refine] (jangkauan 6) kandidat [q] beserta fiturnya, atau null bila bentuknya tak layak. Di-memo. */
+    private fun refinedOf(gt: Gather, q: FloatArray): Cand? = gt.memo.getOrPut("R" + key(q)) {
+        val r = refine(gt.img, q, 6)
+        val a = Quad.area(r) / (gt.w * gt.h).toFloat()
+        if (!convex(r) || a < 0.012f || a > 0.97f) null else Cand(r, a, featOf(gt, r))
+    } as Cand?
+
+    /** Fitur [q] dengan memo per foto. */
+    private fun featOf(gt: Gather, q: FloatArray): FloatArray =
+        gt.memo.getOrPut("F" + key(q)) { features(gt.img, q) } as FloatArray
+
+    private fun scoreQ(gt: Gather, q: FloatArray, P: FloatArray): Float = scoreFeat(featOf(gt, q), P)
+
+    /** Pilih dokumen dari kandidat [gt] dengan bobot [P]. */
+    fun select(gt: Gather, P: FloatArray = W): Result? {
+        val w = gt.w; val h = gt.h
+        val scored = ArrayList<Scored>()
+        for (c in gt.cands) {
+            val s = scoreFeat(c.feat, P)
+            if (c.feat[3] >= 0f) debugFeat?.invoke(c.q, c.feat)
+            debug?.invoke(c.q, s)
+            if (s > 0f) scored.add(Scored(c.q, s, edgeOf(c.feat, P), c.area, c.feat[5] < 70f, c.feat))
         }
         if (scored.isEmpty()) return null
         // 10 kandidat teratas dirapikan (tiap ujung sisi digeser sendiri, jadi kemiringan sisi ikut dibetulkan) lalu dinilai ulang
         for (c in scored.sortedByDescending { it.s }.take(10)) {
-            val r = refine(img, c.q, 6)
-            if (!convex(r)) continue
-            val a = Quad.area(r) / total
-            if (a < minA || a > 0.97f) continue
-            lastEdge = 0f
-            val s = score(img, r)
-            debug?.invoke(r, s)
-            if (s > c.s) scored.add(Scored(r, s, lastEdge, a, lastDark))
+            val r = refinedOf(gt, c.q) ?: continue
+            val s = scoreFeat(r.feat, P)
+            if (r.feat[3] >= 0f) debugFeat?.invoke(r.q, r.feat)
+            debug?.invoke(r.q, s)
+            if (s > c.s) scored.add(Scored(r.q, s, edgeOf(r.feat, P), r.area, r.feat[5] < 70f, r.feat))
         }
         var win: Scored = scored.maxByOrNull { it.s } ?: return null
+        // Kebalikan aturan "lebih besar" di bawah: pemenang berupa wilayah CAMPURAN (struk + tangan + latar ramai) yang
+        // MEMUAT satu lembar bersih bertepi lurus & bertulisan → lembar itulah dokumennya (struk kecil yang dipegang).
+        if (win.f[3] in 0f..MESSY) {
+            val cur = win
+            val inner = scored.filter {
+                it.area < cur.area * 0.8f && it.edge >= 0.7f && it.f[3] >= cur.f[3] + 0.3f && it.f[11] >= cur.f[11] &&
+                    it.f[9] >= 0.03f && it.s >= cur.s * rr(0.5f, P) && contains(cur.q, it.q, 0.02f * max(w, h))
+            }.maxByOrNull { it.s }
+            if (inner != null) {
+                debugParts?.invoke("INNER %s s=%.3f hom=%.2f al=%.2f".format(key(inner.q), inner.s, inner.f[3], inner.f[11]))
+                win = inner
+            }
+        }
         // Isi dokumen (foto KTP, pita judul, kotak QR) juga berupa segi-empat bertepi tegas. Bila ada kandidat yang
         // lebih besar, MEMUAT pemenang, tepinya sama kuat dan nilainya hampir sama, itulah dokumennya.
         var changed = true
@@ -198,19 +353,26 @@ object DocFind {
             val cur = win
             val bigger = scored.filter {
                 it.area > cur.area * 1.05f && it.edge >= 0.7f && contains(it.q, cur.q, 0.025f * max(w, h)) &&
+                    // sisi-sisi yang lebih besar harus tetap tepi lurus yang nyata — bukan batas kabur silau/latar terang di
+                    // samping struk yang dipegang (yang juga "terang seperti kertas")
+                    it.f[11] >= cur.f[11] - ALIGN_DROP &&
                     // hampir seri tapi lebih besar & tepinya sama tegas: dokumen utuh (pita judul faktur ikut)
-                    ((it.edge >= 0.85f && it.edge >= cur.edge - 0.05f && it.s >= cur.s * rr(0.92f)) ||
-                     (it.area > cur.area * 1.25f && it.edge >= 0.85f && it.s >= cur.s * rr(if (it.edge >= cur.edge + 0.1f) 0.5f else 0.8f)) ||
+                    ((it.edge >= 0.85f && it.edge >= cur.edge - 0.05f && it.s >= cur.s * rr(0.92f, P)) ||
+                     (it.area > cur.area * 1.25f && it.edge >= 0.85f && it.s >= cur.s * rr(if (it.edge >= cur.edge + 0.1f) 0.5f else 0.8f, P)) ||
                         // halaman sebelah di buku terbuka: tambahan wilayahnya juga kertas → ambil dua halaman,
                         // lalu SpreadSplit yang memutuskan halaman mana yang dituju
-                        (it.area > cur.area * 1.25f && it.s >= cur.s * rr(0.45f) && extraIsPaper(img, it.q, cur.q)))
+                        (it.area > cur.area * 1.25f && it.s >= cur.s * rr(0.45f, P) &&
+                            gt.memo.getOrPut("X" + key(it.q) + "|" + key(cur.q)) { extraIsPaper(gt.img, it.q, cur.q) } as Boolean))
             }.maxByOrNull { it.s }
-            if (bigger != null) { win = bigger; changed = true }
+            if (bigger != null) {
+                debugParts?.invoke("BIGGER %s s=%.3f hom=%.2f al=%.2f".format(key(bigger.q), bigger.s, bigger.f[3], bigger.f[11]))
+                win = bigger; changed = true
+            }
         }
         // Buku terbuka: kedua halaman sering terdeteksi TERPISAH (punggung buku memutus wilayah). Bila ada halaman
         // tetangga sewarna yang menempel pada pemenang, gabungkan; SpreadSplit lalu memilih halaman yang dituju.
         try {
-            val pair = pairPage(img, win, scored)
+            val pair = pairPage(gt, win, scored, P)
             if (pair != null) { win = pair; debugParts?.invoke("PAIR merged " + pair.q.joinToString(",") { it.toInt().toString() }) }
         } catch (e: Throwable) { debugParts?.invoke("PAIR merged ERR $e") }
         var q = win.q
@@ -218,16 +380,17 @@ object DocFind {
         // Warna nyaru: yang tertangkap sering hanya blok tulisan (tepinya paling tegas). Bila di luar sisi-sisinya
         // masih "kertas" (warna sama dengan kertas), dorong sisi itu sampai kertasnya habis.
         try {
-            val ex = expandToPaper(img, q)
+            val ex = gt.memo.getOrPut("E" + key(q)) { expandToPaper(gt.img, q) } as FloatArray?
             if (ex != null && convex(ex)) {
-                lastEdge = 0f
-                val se = score(img, ex)
-                debugParts?.invoke("EXPAND s=%.3f e=%.2f".format(se, lastEdge))
-                if (lastEdge >= 0.45f && se >= bestS * rr(0.5f)) q = ex
+                val fe = featOf(gt, ex)
+                val se = scoreFeat(fe, P); val ee = edgeOf(fe, P)
+                debugParts?.invoke("EXPAND s=%.3f e=%.2f hom=%.2f/%.2f".format(se, ee, fe[3], featOf(gt, q)[3]))
+                if (ee >= 0.45f && se >= bestS * rr(0.5f, P)) q = ex
             }
         } catch (_: Throwable) {}
-        val refined = refine(img, q, 3)
-        val out = if (convex(refined) && score(img, refined) >= score(img, q) * 0.97f) refined else q
+        val q0 = q
+        val refined = gt.memo.getOrPut("r" + key(q0)) { refine(gt.img, q0, 3) } as FloatArray
+        val out = if (convex(refined) && scoreQ(gt, refined, P) >= scoreQ(gt, q, P) * 0.97f) refined else q
         // Sedikit masuk ke dalam (±1 px gambar kecil ≈ 0,3%): lebih baik kehilangan sehelai pinggir putih kertas daripada
         // membawa garis meja/lantai yang langsung terlihat setelah diluruskan.
         return Result(grow(out, -INSET), bestS, win.edge, win.dark)
@@ -255,20 +418,21 @@ object DocFind {
         return Img(
             w, h, g, r, gg, b, ScanCore.closeGray(g, w, h, 2),
             ScanCore.closeGray(r, w, h, 3), ScanCore.closeGray(gg, w, h, 3), ScanCore.closeGray(b, w, h, 3),
-            ScanCore.closeGray(g, w, h, 4), minFilter(g, w, h, 2)
+            ScanCore.closeGray(g, w, h, 4), minFilter(g, w, h, 2), minFilter(g, w, h, 2, true)
         )
     }
 
-    private fun minFilter(src: IntArray, w: Int, h: Int, r: Int): IntArray {
+    /** Minimum (atau maksimum bila [max]) lokal kotak (2r+1)². */
+    private fun minFilter(src: IntArray, w: Int, h: Int, r: Int, max: Boolean = false): IntArray {
         val t = IntArray(w * h); val o = IntArray(w * h)
         for (y in 0 until h) for (x in 0 until w) {
-            var v = 255
-            for (d in max(0, x - r)..min(w - 1, x + r)) v = min(v, src[y * w + d])
+            var v = if (max) 0 else 255
+            for (d in max(0, x - r)..min(w - 1, x + r)) v = if (max) max(v, src[y * w + d]) else min(v, src[y * w + d])
             t[y * w + x] = v
         }
         for (y in 0 until h) for (x in 0 until w) {
-            var v = 255
-            for (d in max(0, y - r)..min(h - 1, y + r)) v = min(v, t[d * w + x])
+            var v = if (max) 0 else 255
+            for (d in max(0, y - r)..min(h - 1, y + r)) v = if (max) max(v, t[d * w + x]) else min(v, t[d * w + x])
             o[y * w + x] = v
         }
         return o
@@ -580,6 +744,53 @@ object DocFind {
         return max(strong, weak)
     }
 
+    /**
+     * Kesejajaran tepi satu sisi: pecahan titik sepanjang sisi yang gradien warnanya kuat DAN tegak lurus sisi — tepi
+     * lurus yang nyata (pinggir kertas/papan). Garis sembarang di latar ramai (rangka plafon, orang, rak) memang sering
+     * melewati beda warna, tapi arah gradiennya acak. -1 bila sisi berimpit dengan pinggir foto (netral).
+     */
+    private fun sideAlign(img: Img, x0: Float, y0: Float, x1: Float, y1: Float): Float {
+        val w = img.w; val h = img.h
+        val dx = x1 - x0; val dy = y1 - y0
+        val len = sqrt(dx * dx + dy * dy); if (len < 4f) return 0f
+        if ((max(x0, x1) < 2.5f) || (min(x0, x1) > w - 3.5f) || (max(y0, y1) < 2.5f) || (min(y0, y1) > h - 3.5f)) return -1f
+        val nx = -dy / len; val ny = dx / len
+        val steps = max(8, (len / 3f).toInt())
+        var hit = 0; var cnt = 0
+        for (s in 0 until steps) {
+            val t = 0.08f + 0.84f * s / (steps - 1)
+            val px = x0 + dx * t; val py = y0 + dy * t
+            var bm = 0f; var ok = false; var any = false
+            for (o in ALIGN_OFF) {
+                val xi = (px + nx * o + 0.5f).toInt(); val yi = (py + ny * o + 0.5f).toInt()
+                if (xi < 1 || yi < 1 || xi >= w - 1 || yi >= h - 1) continue
+                any = true
+                val i = yi * w + xi
+                // kanal dengan beda terbesar: tepi merah di atas abu-abu yang sama terangnya tetap terlihat
+                var gx = 0f; var gy = 0f; var m2 = -1f
+                for (ch in 0 until 3) {
+                    val a = when (ch) { 0 -> img.r; 1 -> img.gr; else -> img.b }
+                    val cx = (a[i + 1] - a[i - 1]).toFloat(); val cy = (a[i + w] - a[i - w]).toFloat()
+                    val v = cx * cx + cy * cy
+                    if (v > m2) { m2 = v; gx = cx; gy = cy }
+                }
+                val m = sqrt(m2)
+                if (m > bm) { bm = m; ok = m >= 10f && abs(gx * nx + gy * ny) >= 0.85f * m }
+            }
+            if (!any) continue
+            cnt++; if (ok) hit++
+        }
+        return if (cnt == 0) -1f else hit.toFloat() / cnt
+    }
+
+    private val ALIGN_OFF = floatArrayOf(-1.5f, -0.5f, 0.5f, 1.5f)
+
+    /** Batas turunnya kesejajaran sisi terlemah saat pemenang diganti kandidat yang lebih besar / diperluas. */
+    @JvmField var ALIGN_DROP = 0.2f
+
+    /** Keseragaman isi di bawah ini = wilayah campuran beberapa benda, bukan satu lembar dokumen. */
+    @JvmField var MESSY = 0.55f
+
     /** Titik di dalam segi-empat cembung — tak peduli urutan sudutnya searah / berlawanan jarum jam. */
     private fun inside(q: FloatArray, x: Float, y: Float): Boolean {
         var pos = false; var neg = false
@@ -592,24 +803,32 @@ object DocFind {
         return true
     }
 
-    private fun score(img: Img, q: FloatArray): Float {
+    /**
+     * Fitur mentah kandidat [q] (tidak bergantung bobot): [mn, mean, nb, homog, paperF, median, kontras, luas,
+     * jarak-tengah, tinta, kesejajaran-rata2, kesejajaran-min]. homog = -1 bila 3-4 sisi menempel bingkai atau isinya
+     * terlalu sedikit untuk dinilai.
+     */
+    private fun features(img: Img, q: FloatArray): FloatArray {
         val w = img.w; val h = img.h
         val cx = (q[0] + q[2] + q[4] + q[6]) / 4f; val cy = (q[1] + q[3] + q[5] + q[7]) / 4f
         val sup = FloatArray(4) { k -> val j = (k + 1) % 4; sideSupport(img, q[2 * k], q[2 * k + 1], q[2 * j], q[2 * j + 1], cx, cy) }
         val mn = sup.min(); val mean = sup.average().toFloat()
         // 3-4 sisi menempel bingkai = latar/seluruh foto, bukan dokumen; 2 sisi = dokumen besar terpotong (agak ragu)
         val nb = sup.count { it == BORDER }
-        if (nb >= 3) { lastEdge = 0f; return 0f }
-        val edge = (W[1] * mn + (1f - W[1]) * mean) * (if (nb == 2) W[8] else 1f)
-        lastEdge = edge
-        if (edge < 0.25f) return 0f
+        // 3-4 sisi di bingkai, atau tepi terlalu lemah untuk bobot apa pun (nilai tepi ≤ rata-rata sisi): tak perlu isi
+        if (nb >= 3 || mean < 0.25f) return floatArrayOf(mn, mean, nb.toFloat(), -1f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
+        val al = FloatArray(4) { k -> val j = (k + 1) % 4; sideAlign(img, q[2 * k], q[2 * k + 1], q[2 * j], q[2 * j + 1]) }
+        var aSum = 0f; var aN = 0; var aMin = 1f
+        for (v in al) if (v >= 0f) { aSum += v; aN++; aMin = min(aMin, v) }
+        val aMean = if (aN > 0) aSum / aN else 0f
+        if (aN == 0) aMin = 0f
 
         // isi: seragam (pada gambar abu-abu yang teksnya ditutup) dan seperti kertas
         val shr = FloatArray(8) { i -> if (i % 2 == 0) cx + (q[i] - cx) * 0.85f else cy + (q[i] - cy) * 0.85f }
         val bb = Quad.bbox(shr)
         val step = max(1, (max(bb[2] - bb[0], bb[3] - bb[1]) / 28f).toInt())
         val vals = ArrayList<Int>(900)
-        var paper = 0; var sumR = 0L; var sumG = 0L; var sumB = 0L
+        var paper = 0; var inkN = 0; var sumR = 0L; var sumG = 0L; var sumB = 0L
         var y = bb[1].toInt()
         while (y <= bb[3].toInt()) {
             var x = bb[0].toInt()
@@ -618,21 +837,19 @@ object DocFind {
                     val i = y * w + x
                     vals.add(img.closed[i])
                     if (sat(img, i) < 55 && img.closed[i] > 110) paper++
+                    if (img.mx[i] - img.mn[i] >= 28) inkN++
                     sumR += img.cr[i]; sumG += img.cg[i]; sumB += img.cb[i]
                 }
                 x += step
             }
             y += step
         }
-        if (vals.size < 12) return 0f
+        if (vals.size < 12) return floatArrayOf(mn, mean, nb.toFloat(), -1f, 0f, 0f, 0f, 0f, 0f, 0f, aMean, aMin)
         vals.sort()
         val med = vals[vals.size / 2]
         var near = 0
         for (v in vals) if (abs(v - med) <= 28) near++
         val homog = near.toFloat() / vals.size
-        // benda gelap pekat (ponsel, laptop, dompet) hampir tidak pernah dokumen
-        val darkF = if (med < 60) 0.45f else if (med < 90) 0.75f else 1f
-        lastDark = med < 70
         val paperF = paper.toFloat() / vals.size
 
         // kontras isi vs cincin di luar
@@ -656,13 +873,11 @@ object DocFind {
         }
 
         val area = Quad.area(q) / (w * h).toFloat()
-        val areaF = sqrt(sqrt(area))                       // ukuran: pengaruh lembut, bukan syarat
         // pusat foto: orang biasanya membidik dokumen di tengah
         val dcx = abs(cx / w - 0.5f); val dcy = abs(cy / h - 0.5f)
-        val centerF = 1f - W[7] * min(1f, (dcx + dcy))
-        debugFeat?.invoke(q, floatArrayOf(mn, mean, nb.toFloat(), homog, paperF, med.toFloat(), contrast, area, dcx + dcy))
-        debugParts?.invoke("e=%.2f[%s] hom=%.2f pap=%.2f con=%.2f a=%.3f c=%.2f".format(edge, sup.joinToString("/") { "%.2f".format(it) }, homog, paperF, contrast, area, centerF))
-        return combine(edge, homog, paperF, darkF, contrast, area, centerF)
+        val feat = floatArrayOf(mn, mean, nb.toFloat(), homog, paperF, med.toFloat(), contrast, area, dcx + dcy, inkN.toFloat() / vals.size, aMean, aMin)
+        debugParts?.invoke("e=[%s] al=[%s] hom=%.2f pap=%.2f con=%.2f a=%.3f c=%.2f ink=%.3f".format(sup.joinToString("/") { "%.2f".format(it) }, al.joinToString("/") { "%.2f".format(it) }, homog, paperF, contrast, area, dcx + dcy, feat[9]))
+        return feat
     }
 
     // ---------------------------------------------------------------- perapian
@@ -675,6 +890,9 @@ object DocFind {
      */
     fun trimToPaper(g: IntArray, argb: IntArray, w: Int, h: Int, q: FloatArray): FloatArray =
         try { trimToPaper(prepared(g, argb, w, h), q) } catch (_: Throwable) { q }
+
+    /** [trimToPaper] memakai gambar olahan milik [gt] (tanpa menyiapkan ulang foto yang sama). */
+    fun trimToPaper(gt: Gather, q: FloatArray): FloatArray = try { trimToPaper(gt.img, q) } catch (_: Throwable) { q }
 
     private fun trimToPaper(img: Img, q: FloatArray): FloatArray {
         val w = img.w; val h = img.h
@@ -703,6 +921,8 @@ object DocFind {
         if (pN < 5) return q
         pR /= pN; pG /= pN; pB /= pN
         if (max(pR, max(pG, pB)) - min(pR, min(pG, pB)) > 45f || paper < 120f) return q   // kertas berwarna / gelap: lewati
+        // Dokumen berwarna bertulisan putih (papan merah, sampul): yang paling terang hanya tulisannya, bukan kertasnya.
+        if (paperShare(img, q, 0.5f, pR, pG, pB, paper) < SHARE) return q
         // Bandingkan RONA yang dinormalkan terhadap terang (cahaya miring / bayangan tidak mengubah rona kertas).
         val pm = (pR + pG + pB) / 3f
         val pcr = (pR - pm) * 200f / pm; val pcb = (pB - pm) * 200f / pm
@@ -780,6 +1000,9 @@ object DocFind {
      */
     fun cutAtSeam(g: IntArray, argb: IntArray, w: Int, h: Int, q: FloatArray): FloatArray =
         try { cutAtSeam(prepared(g, argb, w, h), q) } catch (_: Throwable) { q }
+
+    /** [cutAtSeam] memakai gambar olahan milik [gt]. */
+    fun cutAtSeam(gt: Gather, q: FloatArray): FloatArray = try { cutAtSeam(gt.img, q) } catch (_: Throwable) { q }
 
     /** Persiapan foto terakhir dipakai ulang (trimToPaper lalu cutAtSeam memakai foto yang sama). */
     private var prepKey: IntArray? = null
@@ -969,6 +1192,7 @@ object DocFind {
         }
         if (pN < 5) return null
         pR /= pN; pG /= pN; pB /= pN
+        if (paperShare(img, q, 0.9f, pR, pG, pB, paper) < SHARE) return null
         val cx = (q[0] + q[2] + q[4] + q[6]) / 4f; val cy = (q[1] + q[3] + q[5] + q[7]) / 4f
         var moved = false
         val lines = Array(4) { k ->
@@ -1046,6 +1270,42 @@ object DocFind {
             out[2 * k] = p.first.coerceIn(0f, w.toFloat()); out[2 * k + 1] = p.second.coerceIn(0f, h.toFloat())
         }
         return out
+    }
+
+    /** Batas [paperShare]: di bawah ini "kertas" (bagian paling terang) bukan permukaan utama dokumen. */
+    @JvmField var SHARE = 0.4f
+
+    /**
+     * Pecahan titik isi [q] (diperkecil ke [f] dari pusat) yang rona & terangnya seperti kertas ([pR],[pG],[pB], terang
+     * [paper]). Kertas putih bertulisan ≈ 0,7–1 (teks sudah ditutup); papan merah bertulisan putih ≈ 0,1–0,3 — di sana
+     * yang paling terang hanya tulisan/gambar putihnya, sehingga perluasan/pemotongan "ke tepi kertas" salah sasaran.
+     */
+    private fun paperShare(img: Img, q: FloatArray, f: Float, pR: Float, pG: Float, pB: Float, paper: Float): Float {
+        val w = img.w; val h = img.h
+        val cx = (q[0] + q[2] + q[4] + q[6]) / 4f; val cy = (q[1] + q[3] + q[5] + q[7]) / 4f
+        val inner = FloatArray(8) { i -> if (i % 2 == 0) cx + (q[i] - cx) * f else cy + (q[i] - cy) * f }
+        val pm = max(20f, (pR + pG + pB) / 3f)
+        val pcr = (pR - pm) * 200f / pm; val pcb = (pB - pm) * 200f / pm
+        val bb = Quad.bbox(inner)
+        val st = max(1f, max(bb[2] - bb[0], bb[3] - bb[1]) / 24f)
+        var n = 0; var k = 0
+        var y = bb[1]
+        while (y <= bb[3]) {
+            var x = bb[0]
+            while (x <= bb[2]) {
+                val xi = x.toInt(); val yi = y.toInt()
+                if (xi in 0 until w && yi in 0 until h && inside(inner, x, y)) {
+                    val i = yi * w + xi
+                    n++
+                    val m = max(20f, (img.cr[i] + img.cg[i] + img.cb[i]) / 3f)
+                    val cr = (img.cr[i] - m) * 200f / m - pcr; val cb = (img.cb[i] - m) * 200f / m - pcb
+                    if (img.c4[i] >= paper * 0.6f && cr * cr + cb * cb <= 144f) k++
+                }
+                x += st
+            }
+            y += st
+        }
+        return if (n < 20) 1f else k.toFloat() / n
     }
 
     /**

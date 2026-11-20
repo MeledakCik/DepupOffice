@@ -533,7 +533,7 @@ class CropView(ctx: Context) : View(ctx) {
 class ScanEditActivity : AppCompatActivity() {
     private val pages = mutableListOf<ScanPage>()
     private var cur = 0
-    private var mode = 3      // 0 asli, 1 abu-abu, 2 dokumen hitam-putih, 3 magic color
+    private var mode = 0      // 0 asli (bawaan), 1 abu-abu, 2 dokumen hitam-putih, 3 magic color
     private var bright = 0
     private var contrast = 0
 
@@ -562,7 +562,7 @@ class ScanEditActivity : AppCompatActivity() {
         Perf.onTrim(trimPreviews)
         intent.getStringArrayListExtra("files")?.forEach { pages.add(ScanPage(File(it))) }
         if (pages.isEmpty()) { finish(); return }
-        mode = intent.getIntExtra("mode", 3)
+        mode = intent.getIntExtra("mode", 0)
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(C.BG) }
 
@@ -734,10 +734,10 @@ class ScanEditActivity : AppCompatActivity() {
         filterPanel.add(fh)
         val fr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val defs = listOf(
-            Triple(3, "Magic Color", "Rekomendasi"),
+            Triple(0, "Warna Asli", "Bawaan · apa adanya"),
+            Triple(3, "Magic Color", "Teks lebih jelas"),
             Triple(2, "B&W Dokumen", "Teks Tajam"),
-            Triple(1, "Grayscale", "Foto Netral"),
-            Triple(0, "Warna Asli", "Foto & Ilustrasi")
+            Triple(1, "Grayscale", "Foto Netral")
         )
         defs.forEachIndexed { i, (m, name, desc) ->
             val c = vbox(10).apply {

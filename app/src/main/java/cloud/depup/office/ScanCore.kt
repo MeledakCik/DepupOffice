@@ -307,27 +307,59 @@ object ScanCore {
     /** Tahap [DocFind.cutAtSeam] (bisa dimatikan dari alat uji untuk membandingkan). */
     @JvmField var seamCut = true
 
-    fun findDocument(s0: Small): FloatArray? {
-        lastSplit = false
+    fun findDocument(s0: Small): FloatArray? = findWith(prepareFind(s0), DocFind.W)
+
+    /**
+     * Bagian deteksi yang tidak bergantung bobot penilaian (foto dinormalkan + kandidat & fiturnya). Alat latih
+     * (tools/autocrop) menyiapkannya sekali per foto lalu memanggil [findWith] berulang dengan bobot berbeda.
+     */
+    class Prep internal constructor(internal val s: Small, internal val gather: DocFind.Gather?) {
+        internal val memo = HashMap<String, Pair<FloatArray, Boolean>>()
+        /** Lepas gambar olahan (dibangun ulang otomatis bila diperlukan). */
+        fun release() { gather?.release() }
+    }
+
+    fun prepareFind(s0: Small, refineAll: Boolean = false): Prep {
         val s = normalized(s0)
-        val r = try { DocFind.find(s.g, s.argb, s.w, s.h) } catch (_: Throwable) { null }
+        return Prep(s, try { DocFind.gather(s.g, s.argb, s.w, s.h, refineAll) } catch (_: Throwable) { null })
+    }
+
+    /** [findDocument] dengan bobot [P] pada foto yang sudah disiapkan [p]. */
+    fun findWith(p: Prep, P: FloatArray): FloatArray? {
+        lastSplit = false
+        val s = p.s
+        val gt = p.gather ?: return null
+        val r = try { DocFind.select(gt, P) } catch (_: Throwable) { null }
         if (r != null && r.confident) {
-            var q = r.quad
-            // lipatan bisa tegak ATAU mendatar (foto buku diambil menyamping): coba juga dengan sudut digeser satu
-            val split = try {
-                SpreadSplit.apply(s.g, s.w, s.h, q)
-                    ?: SpreadSplit.apply(s.g, s.w, s.h, FloatArray(8) { q[(it + 2) % 8] })
-            } catch (_: Throwable) { null }
-            if (split != null) { q = split; lastSplit = true }
-            // jalur permukaan lain (bodi laptop, halaman sebelah) yang masih ikut di pinggir: tarik ke tepi kertas
-            q = DocFind.trimToPaper(s.g, s.argb, s.w, s.h, q)
-            // kertas putih di atas kain/papan putih (foto terlalu terang): potong di garis bayangan tipis tepi kertas
-            // (hanya dokumen besar: kartu/struk kecil berpinggir polos lebar tidak disentuh)
-            if (seamCut && Quad.area(q) >= 0.12f * s.w * s.h) q = DocFind.cutAtSeam(s.g, s.argb, s.w, s.h, q)
+            val (q, split) = p.memo.getOrPut(r.quad.joinToString(",")) { afterFind(s, gt, r.quad) }
+            lastSplit = split
             return FloatArray(8) { if (it % 2 == 0) (q[it] / s.w).coerceIn(0f, 1f) else (q[it] / s.h).coerceIn(0f, 1f) }
         }
         return null
     }
+
+    /** Tahap sesudah [DocFind]: pilih 1 halaman buku terbuka, buang jalur permukaan lain, potong di garis tepi samar. */
+    private fun afterFind(s: Small, gt: DocFind.Gather, q0: FloatArray): Pair<FloatArray, Boolean> {
+        var q = q0
+        var split = false
+        stage("find", q)
+        // lipatan bisa tegak ATAU mendatar (foto buku diambil menyamping): coba juga dengan sudut digeser satu
+        val sp = try {
+            SpreadSplit.apply(s.g, s.w, s.h, q)
+                ?: SpreadSplit.apply(s.g, s.w, s.h, FloatArray(8) { q[(it + 2) % 8] })
+        } catch (_: Throwable) { null }
+        if (sp != null) { q = sp; split = true; stage("split", q) }
+        // jalur permukaan lain (bodi laptop, halaman sebelah) yang masih ikut di pinggir: tarik ke tepi kertas
+        q = DocFind.trimToPaper(gt, q)
+        stage("trim", q)
+        // kertas putih di atas kain/papan putih (foto terlalu terang): potong di garis bayangan tipis tepi kertas
+        // (hanya dokumen besar: kartu/struk kecil berpinggir polos lebar tidak disentuh)
+        if (seamCut && Quad.area(q) >= 0.12f * s.w * s.h) { q = DocFind.cutAtSeam(gt, q); stage("seam", q) }
+        return q to split
+    }
+
+    /** Kait uji: posisi segi-empat sesudah tiap tahap (lewat [DocFind.debugParts]). */
+    private fun stage(name: String, q: FloatArray) { DocFind.debugParts?.invoke("STAGE $name " + q.joinToString(",") { "%.1f".format(it) }) }
 
     /**
      * Foto redup (malam, lampu kamar, bayangan badan): seluruh gambar dicerahkan dulu supaya kertas kembali "putih"
