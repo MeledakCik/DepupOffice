@@ -652,6 +652,7 @@ class MainActivity : AppCompatActivity() {
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         lastTouch = android.os.SystemClock.uptimeMillis()
         LaunchFrom.record(ev)
+        ThemeFade.touch(ev)
         return super.dispatchTouchEvent(ev)
     }
 
@@ -1855,10 +1856,13 @@ class MainActivity : AppCompatActivity() {
         tc.add(tv("Mode gelap lebih nyaman di malam hari dan menghemat baterai.", 13f, C.MUTED), top = 2)
         // halaman dibangun ulang setelah ibu jari tiba → kontrol baru muncul tepat di posisi akhir (tanpa ibu jari ganda)
         tc.add(segmented(listOf("Ikuti HP", "Terang", "Gelap"), Theme.mode(this), waitThumb = true) { m ->
-            Theme.setMode(this, m)
-            val wasDark = C.dark
-            DepupApp.applyNightMode(m)
-            if (Theme.isDark(this) == wasDark) render() else recreate()
+            val willDark = when (m) { Theme.LIGHT -> false; Theme.DARK -> true; else -> Theme.systemDark() }
+            if (willDark == C.dark) {
+                Theme.setMode(this, m); DepupApp.applyNightMode(m); render()
+            } else {
+                // terang ↔ gelap: layar lama dipotret, tema diganti, lalu tema baru terbuka melingkar dari pilihan yang diketuk
+                ThemeFade.switchTo(this) { Theme.setMode(this, m); DepupApp.applyNightMode(m) }
+            }
         }, top = 12)
         tc.add(View(this).apply { setBackgroundColor(C.LINE) }, top = 14, h = 1)
         tc.add(switchRow(R.drawable.ic_spark, "Efek kaca (blur)",
