@@ -44,7 +44,8 @@ object PdfLayout {
     /** Batas unsur per halaman (berkas rusak / jalur raksasa). */
     private const val MAX_OPS = 2_000_000
 
-    fun page(f: PdfFile, p: PdfFile.Page): PageOut {
+    /** [textOnly] = hanya teks (pencarian isi): gambar tidak diurai — jauh lebih ringan untuk PDF pindaian/bergambar. */
+    fun page(f: PdfFile, p: PdfFile.Page, textOnly: Boolean = false): PageOut {
         val bw = p.box[2] - p.box[0]; val bh = p.box[3] - p.box[1]
         // PDF (kiri-bawah) → keluaran (kiri-atas), termasuk /Rotate
         val base = when (p.rotate) {
@@ -54,7 +55,7 @@ object PdfLayout {
             else -> M(1f, 0f, 0f, -1f, -p.box[0], p.box[3])
         }
         val (ow, oh) = if (p.rotate == 90 || p.rotate == 270) bh to bw else bw to bh
-        val r = Run(f, ow, oh)
+        val r = Run(f, ow, oh, textOnly)
         r.exec(f.contents(p), p.res, base, 0)
         return PageOut(ow, oh, r.glyphs, r.images, r.shapes)
     }
@@ -82,7 +83,7 @@ object PdfLayout {
         var clip: List<FloatArray>? = null, var clipBox: FloatArray? = null
     ) { fun copy() = GS(ctm, fill, stroke, lw, fillCs, strokeCs, font, fs, tc, tw, th, tl, rise, mode, fillA, clip, clipBox) }
 
-    private class Run(val f: PdfFile, val pw: Float, val ph: Float) {
+    private class Run(val f: PdfFile, val pw: Float, val ph: Float, val textOnly: Boolean = false) {
         val glyphs = ArrayList<Glyph>()
         val images = ArrayList<Image>()
         val shapes = ArrayList<Shape>()
@@ -324,6 +325,7 @@ object PdfLayout {
         }
 
         private fun image(st: PStream, gs: GS) {
+            if (textOnly) return
             val r = place(gs)
             if (r[2] - r[0] < 1f || r[3] - r[1] < 1f) return
             val img = ImgDec.decode(f, st, gs.fill) ?: return

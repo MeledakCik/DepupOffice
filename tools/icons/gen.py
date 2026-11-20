@@ -211,6 +211,16 @@ def _():
     return outline(bookmark_shape(), 2.0)
 
 
+@icon("pin")
+def _():
+    # pin payung ala "pin.fill": tudung, leher meruncing, kaki melebar, jarum
+    cap = squircle(7.2, 2.4, 16.8, 5.6, 1.5)
+    neck = poly([(9.1, 5.0), (14.9, 5.0), (15.5, 10.6), (8.5, 10.6)], 0.5)
+    foot = poly([(8.6, 10.0), (15.4, 10.0), (18.6, 14.2), (5.4, 14.2)], 1.0)
+    body = smooth(unary_union([cap, neck, foot]), 0.6)
+    return unary_union([body, line([(12, 13.6), (12, 21.2)], 2.3)])
+
+
 @icon("bright")
 def _():
     parts = [circle(12, 12, 4.3)]

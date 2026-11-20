@@ -179,6 +179,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         for (i in pages.indices) { pages[i] = null; pageKey[i] = null }
         orphans.clear()
         sv = null; renderedTab = -1; docsList = null; docsSearch = null; continueKey = null; scrollRun = 0
+        contentJob?.cancel(); contentJob = null
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(C.BG))
         buildUi()
         select(tab)
@@ -234,6 +235,11 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
 
     /** Layar baru saja dibangun di onCreate -> onResume pertama tidak perlu membangun ulang semuanya. */
     private var freshlyBuilt = false
+
+    override fun onPause() {
+        super.onPause()
+        contentJob?.cancel()   // pencarian isi berhenti saat layar lain (mis. penampil) dibuka; dilanjutkan saat kembali
+    }
 
     override fun onResume() {
         super.onResume()
@@ -757,6 +763,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             scroller.setOnScrollChangeListener { _, _, y, _, oy ->
                 lastScroll = android.os.SystemClock.uptimeMillis()
                 if (sv === scroller && !swapping) { barTitle.alpha = barAlpha(y); minimizeOnScroll(y, oy) }
+                if (y != oy) SwipeRow.closeAll()
                 val f = (y / shrink).coerceIn(0f, 1f)
                 big.pivotX = 0f; big.pivotY = big.height.toFloat()
                 big.alpha = 1f - 0.8f * f
@@ -964,7 +971,9 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         clipToOutline = true
         outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
         rows.forEachIndexed { i, r ->
-            r.setPadding(dp(14), r.paddingTop, r.paddingRight.coerceAtMost(dp(8)), r.paddingBottom)
+            // baris geser: jarak dalam untuk isinya — tombol aksinya tetap selebar kartu
+            val pr = (r as? SwipeRow)?.content ?: r
+            pr.setPadding(dp(14), pr.paddingTop, pr.paddingRight.coerceAtMost(dp(8)), pr.paddingBottom)
             if (i > 0) add(View(context).apply { setBackgroundColor(C.LINE) }, h = 1, side = 0).also {
                 (getChildAt(childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(66)
             }
@@ -1015,15 +1024,20 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             setPadding(dp(14), dp(10), dp(4), dp(10))
             minimumHeight = dp(68)
         }
+        val sw = SwipeRow(this, r)
         fun openIt() {
+            noteSearch()
             try { Files.open(this, Uri.parse(uriStr), e[2]) } catch (_: Exception) { toast("File tidak lagi tersedia") }
         }
+        fun share() = try { Files.share(this, Uri.parse(uriStr), e[2], false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+        fun forget() = sw.collapseOut { Recent.remove(this, uriStr); toast("Dihapus dari riwayat"); render() }
         val meta = metaLine(e)
         r.tappable("${e[1]}, ${readableType(label)}${if (meta.isBlank()) "" else ", $meta"}. Ketuk untuk membuka") { openIt() }
         r.add(typeBadge(label, fg, bg), w = dp(40), h = dp(40))
         val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
         col.add(tv(e[1], 15f, C.TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
-        col.add(tv(if (meta.isBlank()) readableType(label) else meta, 13f, C.MUTED), top = 2)
+        val (metaRow, pinIc) = metaWithPin(if (meta.isBlank()) readableType(label) else meta, Meta.isPinned(this, uriStr))
+        col.add(metaRow, top = 2)
         r.add(col, w = 0, weight = 1f, side = 12)
         val marked = Meta.isMarked(this, uriStr)
         lateinit var bm: ImageView
@@ -1049,43 +1063,254 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             pm.menu.add(0, 2, 1, "Edit dokumen")
             pm.menu.add(0, 3, 2, "Ubah nama")
             pm.menu.add(0, 4, 3, "Bagikan")
-            pm.menu.add(0, 6, 4, "Temukan di File Manager")
-            pm.menu.add(0, 5, 5, "Hapus dari riwayat")
+            pm.menu.add(0, 7, 4, if (Meta.isPinned(this, uriStr)) "Lepas dari Beranda" else "Sematkan di Beranda")
+            pm.menu.add(0, 6, 5, "Temukan di File Manager")
+            pm.menu.add(0, 5, 6, "Hapus dari riwayat")
             pm.setOnMenuItemClickListener { m ->
                 when (m.itemId) {
                     1 -> openIt()
                     2 -> editDoc(uriStr, e[1], e[2])
                     3 -> showRenameFileDialog(uriStr, e[1])
-                    4 -> try { Files.share(this, Uri.parse(uriStr), e[2], false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+                    4 -> share()
+                    7 -> togglePin(uriStr, e[1], e[2], pinIc, sw)
                     6 -> Files.showInFileManager(this, Uri.parse(uriStr))
-                    else -> r.collapseOut { Recent.remove(this, uriStr); render() }
+                    else -> forget()
                 }
                 true
             }
             pm.show()
         }, w = dp(48), h = dp(48))
-        return r
+        // geser ala iOS: ke kanan = sematkan, ke kiri = bagikan / ubah nama / hapus dari riwayat
+        sw.leading = listOf(pinAction(uriStr, e[1], e[2], pinIc, sw))
+        sw.trailing = listOf(
+            SwipeRow.Action("Bagikan", R.drawable.ic_share, SwipeRow.BLUE) { share() },
+            SwipeRow.Action("Ubah nama", R.drawable.ic_edit, SwipeRow.GRAY) { showRenameFileDialog(uriStr, e[1]) },
+            SwipeRow.Action("Hapus", R.drawable.ic_trash, SwipeRow.RED, "Hapus dari riwayat", removes = true) { forget() })
+        return sw
+    }
+
+    /** Kartu ringkas di deret "Disematkan": ketuk = buka, tahan = opsi (bagikan / lepas). */
+    private fun pinCard(e: List<String>): View {
+        val (label, fg, bg) = typeOf(e[2], e[1])
+        fun openIt() = try { Files.open(this, Uri.parse(e[0]), e[2]) } catch (_: Exception) { toast("File tidak lagi tersedia") }
+        fun unpin() { Meta.unpin(this, e[0]); toast("Dilepas dari Beranda"); pinsChanged() }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = RippleDrawable(ColorStateList.valueOf(C.RIPPLE), squircle(C.SURFACE, 18), squircle(android.graphics.Color.WHITE, 18))
+            setPadding(dp(10), dp(10), dp(2), dp(10))
+            minimumHeight = dp(64)
+            isClickable = true; isFocusable = true
+            contentDescription = "${e[1]}, ${readableType(label)}, disematkan. Ketuk untuk membuka, tahan untuk opsi lain"
+            setOnClickListener { haptic(this); openIt() }
+            setOnLongClickListener { v ->
+                haptic(v)
+                val pm = android.widget.PopupMenu(this@MainActivity, v)
+                pm.menu.add(0, 1, 0, "Buka")
+                pm.menu.add(0, 2, 1, "Bagikan")
+                pm.menu.add(0, 3, 2, "Lepas dari Beranda")
+                pm.setOnMenuItemClickListener { m ->
+                    when (m.itemId) {
+                        1 -> openIt()
+                        2 -> try { Files.share(this@MainActivity, Uri.parse(e[0]), e[2], false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+                        else -> unpin()
+                    }
+                    true
+                }
+                pm.show()
+                true
+            }
+            add(typeBadge(label, fg, bg), w = dp(36), h = dp(36))
+            add(tv(e[1], 14f, C.TEXT, true).apply {
+                maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, w = dp(116), side = 10)
+            springPress(0.97f)
+        }
+        androidx.core.view.ViewCompat.addAccessibilityAction(card, "Lepas dari Beranda") { _, _ -> unpin(); true }
+        return card
+    }
+
+    /** Warna pin (penanda "disematkan") — oranye yang tetap kontras di tema terang & gelap. */
+    private val pinColor get() = if (C.dark) 0xFFFF9F0A.toInt() else SwipeRow.ORANGE
+
+    /** Keterangan baris dengan ikon pin kecil di depannya (tampak bila berkas disematkan di Beranda). */
+    private fun metaWithPin(text: String, pinned: Boolean): Pair<View, View> {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val ic = icon(R.drawable.ic_pin, pinColor, 13).apply { visibility = if (pinned) View.VISIBLE else View.GONE }
+        row.add(ic, w = dp(13), h = dp(13), side = 0)
+        (ic.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(4)
+        row.add(tv(text, 13f, C.MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, w = 0, weight = 1f, side = 0)
+        return row to ic
+    }
+
+    private fun pinAction(uri: String, name: String, mime: String, pinIc: View?, sw: SwipeRow): SwipeRow.Action {
+        val on = Meta.isPinned(this, uri)
+        return SwipeRow.Action(if (on) "Lepas" else "Sematkan", R.drawable.ic_pin, SwipeRow.ORANGE,
+            if (on) "Lepas dari Beranda" else "Sematkan di Beranda") { togglePin(uri, name, mime, pinIc, sw) }
+    }
+
+    /** Sematkan / lepas berkas dari deret "Disematkan" di Beranda; baris di daftar diperbarui di tempat. */
+    private fun togglePin(uri: String, name: String, mime: String, pinIc: View?, sw: SwipeRow?) {
+        val on = Meta.togglePin(this, uri, name, mime)
+        toast(if (on) "Disematkan di Beranda" else "Dilepas dari Beranda")
+        pinIc?.let { ic ->
+            if (on) { ic.visibility = View.VISIBLE; ic.scaleX = 0.4f; ic.scaleY = 0.4f; ic.animate().scaleX(1f).scaleY(1f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start() }
+            else ic.visibility = View.GONE
+        }
+        // label tombol geser berganti setelah barisnya selesai menutup
+        sw?.let { s -> s.postDelayed({ s.leading = listOf(pinAction(uri, name, mime, pinIc, s)) }, Motion.MED + 90L) }
+        pinsChanged()
+    }
+
+    /** Sematan berubah: deret "Disematkan" di Beranda ikut diperbarui. */
+    private fun pinsChanged() {
+        if (tab == 0) render() else { pageKey[0] = null; schedulePrebuild() }
+    }
+
+    /** Berkas dibuka dari hasil pencarian → kata kuncinya masuk "Pencarian terakhir". */
+    private fun noteSearch() { if (tab == 1 && query.isNotBlank()) Meta.addSearch(this, query) }
+
+    private fun hideIme(v: View) {
+        (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)?.hideSoftInputFromWindow(v.windowToken, 0)
     }
 
     private fun readableType(label: String) = when (label) {
         "PDF" -> "Dokumen PDF"; "DOCX" -> "Dokumen Word"; "XLSX" -> "Spreadsheet Excel"; "IMG" -> "Gambar"; else -> "Berkas $label"
     }
 
-    private fun fillRecent(box: LinearLayout, max: Int, filter: String = "", markedOnly: Boolean = false) {
+    /** Saring jenis daftar Dokumen (chip → kode [typeOf]); satu pilihan [docsCat] untuk ketiga segmen. */
+    private val cats = listOf("Semua" to "", "PDF" to "PDF", "Word" to "DOCX", "Excel" to "XLSX", "Gambar" to "IMG")
+    private fun catCode() = cats.firstOrNull { it.first == docsCat }?.second.orEmpty()
+
+    /** Chip jenis di atas daftar; [codes] = jenis tiap berkas (untuk hitungannya). */
+    private fun catChips(box: LinearLayout, codes: List<String>, keepX: Int) {
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cats.forEach { (name, code) ->
+            val n = if (code.isEmpty()) codes.size else codes.count { it == code }
+            chips.add(filterChip("$name ($n)", docsCat == name) {
+                if (docsCat != name) { docsCat = name; pageKey[1] = keyFor(1); box.swapContent { fillDocs(box) } }
+            }, w = WRAP, side = 0)
+                .also { (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8) }
+        }
+        val chipScroll = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }
+        box.add(chipScroll)
+        if (keepX > 0) chipScroll.beforeDraw { chipScroll.scrollTo(keepX, 0) }
+    }
+
+    /** Isi daftar tab Dokumen sesuai segmen, jenis & kata kunci — lalu cari juga di ISI dokumen bila sedang mencari. */
+    private fun fillDocs(box: LinearLayout) {
+        contentJob?.cancel(); contentJob = null
+        val keepX = (box.getChildAt(0) as? android.widget.HorizontalScrollView)?.scrollX ?: 0
+        val named = when (docsMode) {
+            0 -> fillRecent(box, 60, query, keepX = keepX)
+            1 -> fillRecent(box, 60, query, markedOnly = true, keepX = keepX)
+            else -> fillOutputs(box, keepX)
+        }
+        contentSearch(box, named)
+    }
+
+    /**
+     * Jumlah berkas yang NAMANYA cocok; -1 = keadaan kosong sudah ditampilkan. 0 = tidak ada yang cocok namanya —
+     * keadaan kosongnya diputuskan pencarian isi ([contentSearch]).
+     */
+    private fun fillRecent(box: LinearLayout, max: Int, filter: String = "", markedOnly: Boolean = false, keepX: Int = 0): Int {
         box.removeAllViews()
         val all = Recent.load(this)
         val marks = Meta.marks(this)
-        val list = all.filter { filter.isBlank() || it[1].contains(filter, ignoreCase = true) }
-            .filter { !markedOnly || marks.contains(it[0]) }.take(max)
-        if (list.isEmpty()) {
-            box.add(when {
-                markedOnly && filter.isBlank() -> emptyState(R.drawable.ic_bookmark_off, "Belum ada yang ditandai",
-                    "Ketuk ikon penanda di samping berkas agar mudah ditemukan lagi.")
-                all.isEmpty() -> emptyState(R.drawable.ic_folder, "Belum ada berkas",
-                    "Berkas PDF, Word, dan Excel yang Anda buka akan muncul di sini.", "Buka Berkas") { openAny() }
-                else -> emptyState(R.drawable.ic_search, "Tidak ditemukan", "Tidak ada berkas yang cocok dengan “$filter”.")
-            })
-        } else box.add(listCard(list.map { fileRow(it) }))
+        val q = filter.trim()
+        val scope = all.filter { !markedOnly || marks.contains(it[0]) }
+        if (scope.isNotEmpty()) catChips(box, scope.map { typeOf(it[2], it[1]).first }, keepX)
+        val code = catCode()
+        val list = scope.filter { code.isEmpty() || typeOf(it[2], it[1]).first == code }
+            .filter { q.isEmpty() || it[1].contains(q, ignoreCase = true) }.take(max)
+        val top = if (scope.isNotEmpty()) 12 else 0
+        if (list.isNotEmpty()) { box.add(listCard(list.map { fileRow(it) }), top = top); return list.size }
+        if (q.length >= 2 && scope.isNotEmpty()) return 0
+        box.add(when {
+            markedOnly && scope.isEmpty() -> emptyState(R.drawable.ic_bookmark_off, "Belum ada yang ditandai",
+                "Ketuk ikon penanda di samping berkas agar mudah ditemukan lagi.")
+            all.isEmpty() -> emptyState(R.drawable.ic_folder, "Belum ada berkas",
+                "Berkas PDF, Word, dan Excel yang Anda buka akan muncul di sini.", "Buka Berkas") { openAny() }
+            q.isEmpty() -> emptyState(R.drawable.ic_search, "Belum ada berkas $docsCat", "Tidak ada berkas $docsCat di daftar ini.")
+            else -> emptyState(R.drawable.ic_search, "Tidak ditemukan", "Tidak ada berkas yang cocok dengan “$q”.")
+        }, top = top)
+        return -1
+    }
+
+    private var contentJob: DocSearch.Job? = null
+
+    /**
+     * Cari juga di ISI dokumen (PDF, Word, Excel, foto & pindaian) pada segmen yang tampil. Hasil muncul bertahap di
+     * bawah hasil nama (berkas yang namanya sudah cocok tidak diulang), lengkap dengan cuplikan kalimatnya.
+     */
+    private fun contentSearch(box: LinearLayout, named: Int) {
+        val q = query.trim()
+        if (named < 0 || q.length < 2) return
+        val code = catCode()
+        val items = if (docsMode == 2) {
+            outFiles().filter { (code.isEmpty() || catOf(it) == code) && !it.name.contains(q, ignoreCase = true) }
+                .map { DocSearch.Item(Files.uriFor(this, it).toString(), it.name, Files.byName(it.name), it) }
+        } else {
+            val marks = Meta.marks(this)
+            Recent.load(this).filter { (docsMode == 0 || marks.contains(it[0])) && (code.isEmpty() || typeOf(it[2], it[1]).first == code) &&
+                !it[1].contains(q, ignoreCase = true) }.map { DocSearch.Item(it[0], it[1], it[2]) }
+        }
+        fun notFound() = emptyState(R.drawable.ic_search, "Tidak ditemukan", "Tidak ada berkas yang nama atau isinya cocok dengan “$q”.")
+        if (items.isEmpty()) { if (named == 0) box.add(notFound(), top = 12); return }
+        val sec = vbox()
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        head.add(tv("Di dalam dokumen", 13f, C.MUTED, true), w = 0, weight = 1f, side = 0)
+        val spin = android.widget.ProgressBar(this).apply { isIndeterminate = true; indeterminateTintList = ColorStateList.valueOf(C.MUTED) }
+        head.add(spin, w = dp(16), h = dp(16))
+        sec.add(head)
+        val rows = vbox()
+        sec.add(rows, top = 8)
+        rows.add(tv("Mencari di isi dokumen…", 14f, C.MUTED))
+        box.add(sec, top = if (named > 0) 22 else 14)
+        var shown = false
+        contentJob = DocSearch.search(this, items, q) { hits, done ->
+            if (done) spin.visibility = View.GONE
+            when {
+                hits.isNotEmpty() -> {
+                    rows.removeAllViews()
+                    val card = listCard(hits.map { hitRow(it) })
+                    rows.add(card)
+                    if (!shown) { shown = true; if (Motion.on()) { card.alpha = 0f; card.animate().alpha(1f).setDuration(Motion.MED).setInterpolator(Motion.STANDARD).start() } }
+                }
+                !done -> {}
+                named == 0 -> { sec.removeAllViews(); sec.add(notFound()) }
+                else -> sec.showIf(false)
+            }
+        }
+    }
+
+    /** Hasil dari isi dokumen: nama + cuplikan kalimat dengan kata yang dicari ditebalkan & disorot. */
+    private fun hitRow(h: DocSearch.Hit): View {
+        val item = h.item
+        val (label, fg, bg) = typeOf(item.mime, item.name)
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(12), dp(10))
+            minimumHeight = dp(68)
+        }
+        r.tappable("${item.name}, ${readableType(label)}. Berisi: ${h.snippet}. Ketuk untuk membuka") {
+            noteSearch()
+            try { Files.open(this, Uri.parse(item.uri), item.mime) } catch (_: Exception) { toast("File tidak lagi tersedia") }
+        }
+        r.add(typeBadge(label, fg, bg), w = dp(40), h = dp(40))
+        val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+        col.add(tv(item.name, 15f, C.TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
+        val sn = android.text.SpannableString(h.snippet).apply {
+            val f = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), h.start, h.end, f)
+            setSpan(android.text.style.ForegroundColorSpan(C.TEXT), h.start, h.end, f)
+            setSpan(android.text.style.BackgroundColorSpan(C.WARN_C), h.start, h.end, f)
+        }
+        col.add(tv("", 13f, C.MUTED).apply { text = sn; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }, top = 2)
+        r.add(col, w = 0, weight = 1f, side = 12)
+        return r
     }
 
     /** Buka editor yang sesuai. PDF/gambar/format lain dibuka di pratinjau, bukan editor kosong. */
@@ -1130,6 +1355,14 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             add(tv("Cari dokumen…", 15f, C.MUTED), w = 0, weight = 1f, side = 12)
         }
         p.add(search, top = 12)
+
+        // Disematkan: berkas pilihan pengguna selalu di atas (di tab Dokumen: geser baris ke kanan / menu ⋮ → Sematkan)
+        val pins = Meta.pins(this)
+        if (pins.isNotEmpty()) {
+            p.add(sectionTitle("Disematkan"), top = 18)
+            val c = carousel(pins.map { pinCard(it) })
+            p.add(c, top = 6); bleed(c)
+        }
 
         // Baru dibuka: korsel sampul besar, seperti deretan "baru diputar"
         val recents = Recent.load(this)
@@ -1364,7 +1597,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
 
     // ================= DOKUMEN =================
     private fun buildDocs(p: LinearLayout) {
-        val search = field("Cari nama berkas…").apply {
+        val search = field("Cari nama atau isi berkas…").apply {
             isSingleLine = true
             setText(query)
             setSelection(text.length)
@@ -1375,13 +1608,47 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         }
         p.add(search, top = 4)
         docsSearch = search
+        // Pencarian terakhir: tampil saat kolom aktif & masih kosong (seperti iOS); ketuk = cari lagi
+        val hist = vbox().apply { visibility = View.GONE }
+        p.add(hist, top = 10)
         val listBox = vbox()
-        fun refresh() {
-            when (docsMode) {
-                0 -> fillRecent(listBox, 60, query)
-                1 -> fillRecent(listBox, 60, query, markedOnly = true)
-                else -> fillOutputs(listBox)
+        fun refresh() = fillDocs(listBox)
+        fun fillHist() {
+            hist.removeAllViews()
+            val items = Meta.searches(this)
+            if (items.isEmpty()) return
+            val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            head.add(tv("Pencarian terakhir", 13f, C.MUTED, true), w = 0, weight = 1f, side = 0)
+            head.add(tv("Hapus", 14f, C.PRIMARY, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(12), 0, dp(12), 0)
+                tappable("Hapus riwayat pencarian") { Meta.clearSearches(this@MainActivity); hist.showIf(false) }
+            }, w = WRAP, side = 0)
+            hist.add(head)
+            val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            items.forEach { s ->
+                chips.add(filterChip(s, false, R.drawable.ic_clock) {
+                    Meta.addSearch(this, s)
+                    search.setText(s); search.setSelection(s.length)
+                    hideIme(search)
+                }, w = WRAP, side = 0)
+                    .also { (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8) }
             }
+            hist.add(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+        }
+        fun updateHist() {
+            val show = search.hasFocus() && query.isBlank() && Meta.searches(this).isNotEmpty()
+            if (show && hist.visibility != View.VISIBLE) fillHist()
+            hist.showIf(show)
+        }
+        val focusPrev = search.onFocusChangeListener
+        search.setOnFocusChangeListener { v, has -> focusPrev?.onFocusChange(v, has); updateHist() }
+        search.setOnEditorActionListener { v, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) {
+                if (query.isNotBlank()) Meta.addSearch(this, query)
+                hideIme(v)
+                true
+            } else false
         }
         search.addTextChangedListener(object : TextWatcher {
             // Tunda sebentar agar daftar tidak dibangun ulang di setiap ketukan huruf (berat di HP kelas bawah).
@@ -1389,6 +1656,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             private val run = Runnable { listBox.swapContent(0, 0) { refresh() } }
             override fun afterTextChanged(s: Editable?) {
                 query = s?.toString().orEmpty()
+                updateHist()
                 listBox.removeCallbacks(run)
                 listBox.postDelayed(run, if (Perf.low) 280L else 180L)
             }
@@ -1538,7 +1806,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
                 ProtectedDocumentManager.showDialog(this) { cb -> pickFile(arrayOf(PDF)) { cb(it) } }
             },
             tile(R.drawable.ic_lock, C.PRIMARY, C.PRIMARY_C, "Kunci berkas", "Enkripsi ke Brankas AES-256") { pickFile(arrayOf("*/*")) { lockPasswordFlow(it) } },
-            tile(R.drawable.ic_search, C.PRIMARY, C.PRIMARY_C, "Cari teks dalam file", "Cari kata kunci di dalam isi PDF & Word") { GlobalSearchManager.showSearchDialog(this) },
+            tile(R.drawable.ic_search, C.PRIMARY, C.PRIMARY_C, "Cari teks dalam file", "Cari kata di dalam isi PDF, Word, Excel & pindaian") { openSearch() },
             tile(R.drawable.ic_qr, C.PRIMARY, C.PRIMARY_C, "Label Harga & Barcode", "Buat label harga toko & cetak lebel A4") { BarcodePriceTagManager.showDialog(this) },
             tile(R.drawable.ic_qr, C.PRIMARY, C.PRIMARY_C, "QR Code", "Pindai atau buat QR") { showQrDialog() },
             tile(R.drawable.ic_scan, C.XLS_FG, C.XLS_BG, "Scan struk", "Total belanja ke Excel") { startScan() }
@@ -1779,18 +2047,30 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         val mime = Files.byName(f.name)
         val (label, fg, bg) = typeOf(mime, f.name)
         val uri = Files.uriFor(this, f)
+        val us = uri.toString()
         val r = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(10), dp(4), dp(10))
             minimumHeight = dp(68)
         }
+        val sw = SwipeRow(this, r)
+        fun openIt() { noteSearch(); Files.open(this, uri, mime) }
+        fun share() = try { Files.share(this, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+        fun delete() = confirm("Hapus berkas?", "“${f.name}” akan dihapus dari HP dan tidak bisa dikembalikan.", "Hapus", onCancel = { sw.close() }) {
+            sw.collapseOut {
+                f.delete()
+                if (Meta.isPinned(this, us)) { Meta.unpin(this, us); pinsChanged() }
+                toast("Berkas dihapus"); onChanged()
+            }
+        }
         val meta = "${Files.fmtSize(f.length())} • ${Files.relTime(f.lastModified())}"
-        r.tappable("${f.name}, ${readableType(label)}, $meta. Ketuk untuk membuka") { Files.open(this, uri, mime) }
+        r.tappable("${f.name}, ${readableType(label)}, $meta. Ketuk untuk membuka") { openIt() }
         r.add(typeBadge(label, fg, bg), w = dp(40), h = dp(40))
         val col = vbox().apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
         col.add(tv(f.name, 15f, C.TEXT, true).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
-        col.add(tv(meta, 13f, C.MUTED), top = 2)
+        val (metaRow, pinIc) = metaWithPin(meta, Meta.isPinned(this, us))
+        col.add(metaRow, top = 2)
         r.add(col, w = 0, weight = 1f, side = 12)
         r.add(iconBtn(R.drawable.ic_more, "Opsi lain untuk ${f.name}", C.MUTED, 22) { v ->
             val pm = android.widget.PopupMenu(this, v)
@@ -1798,49 +2078,54 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             pm.menu.add(0, 2, 1, "Edit dokumen")
             pm.menu.add(0, 3, 2, "Ubah nama")
             pm.menu.add(0, 5, 3, "Bagikan")
-            pm.menu.add(0, 6, 4, "Temukan di File Manager")
-            pm.menu.add(0, 4, 5, "Hapus berkas")
+            pm.menu.add(0, 7, 4, if (Meta.isPinned(this, us)) "Lepas dari Beranda" else "Sematkan di Beranda")
+            pm.menu.add(0, 6, 5, "Temukan di File Manager")
+            pm.menu.add(0, 4, 6, "Hapus berkas")
             pm.setOnMenuItemClickListener { m ->
                 when (m.itemId) {
-                    1 -> Files.open(this, uri, mime)
-                    2 -> editDoc(uri.toString(), f.name, mime)
-                    3 -> showRenameFileDialog(uri.toString(), f.name)
-                    5 -> try { Files.share(this, uri, mime, false) } catch (_: Exception) { toast("Tidak bisa dibagikan") }
+                    1 -> openIt()
+                    2 -> editDoc(us, f.name, mime)
+                    3 -> showRenameFileDialog(us, f.name)
+                    5 -> share()
+                    7 -> togglePin(us, f.name, mime, pinIc, sw)
                     6 -> Files.showInFileManager(this, uri)
-                    4 -> confirm("Hapus berkas?", "“${f.name}” akan dihapus dari HP dan tidak bisa dikembalikan.", "Hapus") {
-                        r.collapseOut { f.delete(); toast("Berkas dihapus"); onChanged() }
-                    }
+                    4 -> delete()
                     else -> {}
                 }
                 true
             }
             pm.show()
         }, w = dp(48), h = dp(48))
-        return r
+        sw.leading = listOf(pinAction(us, f.name, mime, pinIc, sw))
+        sw.trailing = listOf(
+            SwipeRow.Action("Bagikan", R.drawable.ic_share, SwipeRow.BLUE) { share() },
+            SwipeRow.Action("Ubah nama", R.drawable.ic_edit, SwipeRow.GRAY) { showRenameFileDialog(us, f.name) },
+            SwipeRow.Action("Hapus", R.drawable.ic_trash, SwipeRow.RED, "Hapus berkas", removes = true) { delete() })
+        return sw
     }
 
     /** Daftar hasil olahan + chip kategori (dipakai tab Dokumen). */
-    private fun fillOutputs(box: LinearLayout) {
-        val keepX = (box.getChildAt(0) as? android.widget.HorizontalScrollView)?.scrollX ?: 0
+    /** Daftar hasil olahan; kembalian sama seperti [fillRecent]. */
+    private fun fillOutputs(box: LinearLayout, keepX: Int = 0): Int {
         box.removeAllViews()
         val all = outFiles()
-        val cats = listOf("Semua" to "", "PDF" to "PDF", "Word" to "DOCX", "Excel" to "XLSX", "Gambar" to "IMG")
-        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        cats.forEach { (name, code) ->
-            val n = if (code.isEmpty()) all.size else all.count { catOf(it) == code }
-            chips.add(filterChip("$name ($n)", docsCat == name) {
-                if (docsCat != name) { docsCat = name; pageKey[1] = keyFor(1); box.swapContent { fillOutputs(box) } }
-            }, w = WRAP, side = 0)
-                .also { (chips.getChildAt(chips.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8) }
-        }
-        val chipScroll = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }
-        box.add(chipScroll)
-        if (keepX > 0) chipScroll.beforeDraw { chipScroll.scrollTo(keepX, 0) }
-        val code = cats.firstOrNull { it.first == docsCat }?.second.orEmpty()
+        if (all.isNotEmpty()) catChips(box, all.map { catOf(it) }, keepX)
+        val code = catCode()
+        val q = query.trim()
         val list = all.filter { code.isEmpty() || catOf(it) == code }
-            .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
-        if (list.isEmpty()) box.add(emptyState(R.drawable.ic_box, "Belum ada hasil", "Hasil scan, konversi, dan dokumen yang Anda simpan akan muncul di sini."), top = 12)
-        else box.add(listCard(list.take(80).map { f -> outRow(f) { box.swapContent { fillOutputs(box) } } }), top = 12)
+            .filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
+        val top = if (all.isNotEmpty()) 12 else 0
+        if (list.isNotEmpty()) {
+            box.add(listCard(list.take(80).map { f -> outRow(f) { box.swapContent { fillDocs(box) } } }), top = top)
+            return list.size
+        }
+        if (q.length >= 2 && all.isNotEmpty()) return 0
+        box.add(when {
+            all.isEmpty() -> emptyState(R.drawable.ic_box, "Belum ada hasil", "Hasil scan, konversi, dan dokumen yang Anda simpan akan muncul di sini.")
+            q.isEmpty() -> emptyState(R.drawable.ic_box, "Belum ada hasil $docsCat", "Tidak ada hasil berjenis $docsCat.")
+            else -> emptyState(R.drawable.ic_search, "Tidak ditemukan", "Tidak ada hasil yang cocok dengan “$q”.")
+        }, top = top)
+        return -1
     }
 
     private fun showOutputs(@Suppress("UNUSED_PARAMETER") list: List<File>) { docsMode = 2; select(1) }
