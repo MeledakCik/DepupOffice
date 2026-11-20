@@ -178,7 +178,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         swapGen++; swapping = false; titleAnim = false; splashing = false
         for (i in pages.indices) { pages[i] = null; pageKey[i] = null }
         orphans.clear()
-        sv = null; renderedTab = -1; docsList = null; docsSearch = null; continueKey = null
+        sv = null; renderedTab = -1; docsList = null; docsSearch = null; continueKey = null; scrollRun = 0
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(C.BG))
         buildUi()
         select(tab)
@@ -621,6 +621,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
     private fun select(i: Int) {
         backToHome.isEnabled = i != 0
         val changed = i != tab
+        if (changed) glass?.setMinimized(false)   // pindah tab: navigasi kembali penuh
         if (changed && ::content.isInitialized) content.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
         tab = i
         tabBar.select(i, changed)
@@ -629,6 +630,27 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
     }
 
     private var titleAnim = false
+
+    /** Jarak gulir searah yang terkumpul (px; + ke bawah, − ke atas) untuk navigasi diperkecil ala iOS 26. */
+    private var scrollRun = 0
+
+    /**
+     * Gulir ke bawah ±28 dp → navigasi diperkecil (tab aktif di lingkaran kiri, "Lanjutkan" turun ke sebelahnya);
+     * gulir ke atas ±28 dp atau kembali dekat puncak → penuh lagi. Arah dihitung terkumpul agar getaran jari kecil
+     * tidak membuatnya berkedip.
+     */
+    private fun minimizeOnScroll(y: Int, oy: Int) {
+        val g = glass ?: return
+        val dy = y - oy
+        if (dy == 0) return
+        if ((dy > 0) != (scrollRun > 0)) scrollRun = 0
+        scrollRun += dy
+        when {
+            y < dp(48) -> g.setMinimized(false)
+            scrollRun > dp(28) -> g.setMinimized(true)
+            scrollRun < -dp(28) -> g.setMinimized(false)
+        }
+    }
 
     /**
      * Judul kecil di bilah atas: berganti tanpa lompatan. Bila sedang tampak, judul lama memudar dulu lalu judul baru
@@ -732,9 +754,9 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             // Saat digulir: judul besar menyusut & memudar ke arah bilah, judul kecil di bilah kaca menggantikannya.
             big.noLayer(); date?.noLayer()
             val shrink = dp(72).toFloat()
-            scroller.setOnScrollChangeListener { _, _, y, _, _ ->
+            scroller.setOnScrollChangeListener { _, _, y, _, oy ->
                 lastScroll = android.os.SystemClock.uptimeMillis()
-                if (sv === scroller && !swapping) barTitle.alpha = barAlpha(y)
+                if (sv === scroller && !swapping) { barTitle.alpha = barAlpha(y); minimizeOnScroll(y, oy) }
                 val f = (y / shrink).coerceIn(0f, 1f)
                 big.pivotX = 0f; big.pivotY = big.height.toFloat()
                 big.alpha = 1f - 0.8f * f

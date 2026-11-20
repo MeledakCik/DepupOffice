@@ -129,6 +129,58 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
     var reveal = 1f
         set(v) { val c = v.coerceIn(0f, 1f); if (field != c) { field = c; invalidateOutline(); invalidate() } }
 
+    /**
+     * 0..1: seberapa "mewujud" kacanya — muncul & hilang ala Liquid Glass. Kaca tidak memudar seperti stiker, tapi
+     * MEWUJUD: pembiasan lensa, blur, tint & kilau tumbuh dari nol (0 = tak terlihat, isi di belakang tampil apa
+     * adanya; 1 = kaca penuh). Lihat [materializeTo].
+     */
+    var materialize = 1f
+        set(v) { val c = v.coerceIn(0f, 1f); if (field != c) { field = c; invalidate() } }
+
+    /** px dipangkas dari sisi KANAN bentuk kaca: kapsul menyusut ke kiri (navigasi diperkecil ala iOS 26). */
+    var trimRight = 0f
+        set(v) { val c = max(0f, v); if (field != c) { field = c; invalidateOutline(); invalidate() } }
+
+    private var matAnim: ValueAnimator? = null
+    private var baseElevation = -1f
+
+    /** Hentikan animasi [materializeTo] dan pasang [v] langsung. */
+    fun materializeNow(v: Float) {
+        matAnim?.cancel(); matAnim = null
+        materialize = v
+        if (baseElevation >= 0f) elevation = baseElevation * materialize
+    }
+
+    /**
+     * Animasikan [materialize] ke [to] (1 = muncul, 0 = hilang). Isi kaca ([content], mis. teks/ikon) memudar mengikuti
+     * — baru tampak setelah kacanya cukup jadi, dan hilang lebih dulu saat kaca melebur. Bayangan ikut tumbuh/menghilang.
+     */
+    fun materializeTo(to: Float, duration: Long, interp: android.animation.TimeInterpolator, content: View? = null,
+                      end: (() -> Unit)? = null) {
+        matAnim?.cancel()
+        if (baseElevation < 0f) baseElevation = elevation
+        if (!Motion.on()) { materialize = to; content?.alpha = if (to > 0.5f) 1f else 0f; elevation = baseElevation * to; end?.invoke(); return }
+        val a = ValueAnimator.ofFloat(materialize, to)
+        a.duration = duration
+        a.interpolator = interp
+        a.addUpdateListener {
+            val m = (it.animatedValue as Float).coerceIn(0f, 1f)
+            materialize = m
+            content?.alpha = ((m - 0.35f) / 0.65f).coerceIn(0f, 1f)
+            elevation = baseElevation * m
+        }
+        a.addListener(object : AnimatorListenerAdapter() {
+            private var cancelled = false
+            override fun onAnimationCancel(animation: Animator) { cancelled = true }
+            override fun onAnimationEnd(animation: Animator) {
+                if (matAnim === animation) matAnim = null
+                if (!cancelled) end?.invoke()
+            }
+        })
+        matAnim = a
+        a.start()
+    }
+
     var blocked = false
         set(v) { if (field != v) { field = v; invalidate() } }
 
@@ -196,7 +248,8 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(v: View, o: Outline) {
                 val top = revealTop()
-                o.setRoundRect(0, top, v.width, v.height, min(corner, (v.height - top) / 2f))
+                val r = (v.width - trimRight).roundToInt().coerceAtLeast(v.height - top)
+                o.setRoundRect(0, top, r, v.height, min(corner, (v.height - top) / 2f))
             }
         }
     }
@@ -269,7 +322,8 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         if (!relate(c)) return false
         syncBlur()
         liquidNow = !fade && Build.VERSION.SDK_INT >= 33 && LiquidGlass.active() && liquid(n)
-        if (!liquidNow && (mode != 1 || appliedR != radius)) { GlassFx31.apply(n, radius); mode = 1; appliedR = radius }
+        val rEff = radius * materialize
+        if (!liquidNow && (mode != 1 || appliedR != rEff)) { GlassFx31.apply(n, rEff, 1f + 0.6f * materialize); mode = 1; appliedR = rEff }
         n.setPosition(-mx, -my, width + mx, height + my)
         val rc = n.beginRecording(width + mx * 2, height + my * 2)
         try {
@@ -293,9 +347,12 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
             // Di atas setelan blur bawaan, sebagian blur dipindah ke SESUDAH lensa (lihat LiquidFx) dan tepi bening memudar:
             // makin maksimal, makin rata buramnya sampai pinggir. Total blur tengah tetap = [radius].
             val more = ((Glass.blurAmt - Glass.DEFAULT) / (1f - Glass.DEFAULT)).coerceIn(0f, 1f)
-            val post = radius * 0.8f * more
-            val pre = if (post > 0f) kotlin.math.sqrt(max(radius * radius - post * post, 0f)) else radius
-            if (f.update(u, pre, rimBlur(), post, 1f - more) || mode != 2) { n.setRenderEffect(f.effect); mode = 2 }
+            // kaca yang sedang mewujud ([materialize]): blur ikut tumbuh dari nol
+            val r = radius * materialize
+            val post = r * 0.8f * more
+            val pre = if (post > 0f) kotlin.math.sqrt(max(r * r - post * post, 0f)) else r
+            val rb = rimBlur().let { if (it < 0f) it else it * materialize }
+            if (f.update(u, pre, rb, post, 1f - more) || mode != 2) { n.setRenderEffect(f.effect); mode = 2 }
             true
         } catch (_: Throwable) { LiquidGlass.fail(); mode = 0; false }
     }
@@ -318,10 +375,11 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
     private fun fillUniforms() {
         val d = resources.displayMetrics.density
         val top = revealTop().toFloat()
-        val w = width.toFloat()
+        val w = max(width - trimRight, height - top)   // bentuk kaca (dipangkas dari kanan saat navigasi diperkecil)
         val h = height - top
         val cap = corner > 0f
         val dark = C.dark
+        val mat = materialize
         u[0] = mx.toFloat(); u[1] = my + top
         u[2] = w; u[3] = h
         u[4] = if (cap) min(corner, h / 2f) else 0f
@@ -332,8 +390,8 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         val grow = ((m - 44f) / 196f).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
         val bezel = if (cap) min((0.34f * m).coerceIn(13f, 26f) * d, h * 0.45f) else 16f * d
         u[6] = bezel
-        u[7] = bezel * (1.6f + 0.3f * grow)   // kaca tebal: tepi memantulkan isi terbalik seperti batang kaca
-        u[8] = LiquidGlass.dispersionAmount()   // mati / HP kelas bawah: satu sampel saja (lebih ringan)
+        u[7] = bezel * (1.6f + 0.3f * grow) * mat   // kaca tebal: tepi memantulkan isi terbalik seperti batang kaca
+        u[8] = LiquidGlass.dispersionAmount() * mat   // mati / HP kelas bawah: satu sampel saja (lebih ringan)
         u[9] = GlassLight.x; u[10] = GlassLight.y
         val base = tintColor?.invoke() ?: (baseColor ?: C.BG)
         u[11] = Color.red(base) / 255f; u[12] = Color.green(base) / 255f; u[13] = Color.blue(base) / 255f
@@ -349,6 +407,7 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         // pita kontras adaptif dari setelan transparansi (bening ↔ pekat)
         u[26] = Glass.toneFloor(); u[27] = Glass.toneCap()
         u[28] = 0f   // bilah kaca datar (pembesaran hanya untuk lensa tab)
+        u[29] = mat  // kaca mewujud: warna, tint & cahaya bercampur dengan isi apa adanya sebanding [materialize]
     }
 
     /** Android 10–11: gambar isi ke bitmap kecil + blur, dipanggil tepat sebelum tiap frame. */
@@ -516,12 +575,16 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
         liquidNow = false
         // Asuransi: lapisan kaca dasar digambar lebih dulu. Kaca (blur maupun cair) yang tergambar menutupinya penuh;
         // bila efek GPU gagal di HP tertentu, bilah tetap punya latar yang terbaca — tidak pernah tembus kosong.
+        val mat = materialize
         if (base != null && gpu && Glass.BLUR && !blocked) {
-            tint.color = Color.argb(tintAlpha ?: 200, Color.red(base), Color.green(base), Color.blue(base))
+            tint.color = Color.argb(((tintAlpha ?: 200) * mat).roundToInt(), Color.red(base), Color.green(base), Color.blue(base))
             canvas.drawRect(0f, top, w, h, tint)
         }
+        // perangkat lunak (Android 10–11): kaca yang sedang mewujud cukup memudar
+        val softFade = if (!gpu && mat < 1f) canvas.saveLayerAlpha(0f, 0f, w, h, (mat * 255).roundToInt()) else -1
         val blurOn = Glass.BLUR && c != null && !blocked && width > 0 && height > 0 &&
             (try { val t0 = System.nanoTime(); (if (gpu) drawGpu(canvas, c) else drawSoft(canvas)).also { EdPerf.glassBarNs += System.nanoTime() - t0; EdPerf.glassBars++ } } catch (_: Throwable) { blocked = true; false })
+        if (softFade >= 0) canvas.restoreToCount(softFade)
         backdropOk = blurOn && gpu
         backdropAlpha = 0
         if (!liquidNow) {
@@ -529,11 +592,15 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
             base?.let { b ->
                 // tanpa blur: pekat agar terbaca. Dengan blur: alfa bawaan digeser setelan transparansi (bening ↔ pekat)
                 val a = if (!blurOn) 240 else Glass.toneAlpha(tintAlpha ?: if (corner > 0f) (if (dark) 120 else 128) else (if (dark) 146 else 152))
-                tint.color = Color.argb(a, Color.red(b), Color.green(b), Color.blue(b))
+                tint.color = Color.argb((a * mat).roundToInt(), Color.red(b), Color.green(b), Color.blue(b))
                 canvas.drawRect(0f, top, w, h, tint)
                 backdropAlpha = a
             }
-            drawLight(canvas, top, dark)
+            if (mat < 1f) {
+                val sl = canvas.saveLayerAlpha(0f, 0f, w, h, (mat * 255).roundToInt())
+                drawLight(canvas, top, dark)
+                canvas.restoreToCount(sl)
+            } else drawLight(canvas, top, dark)
         }
         super.dispatchDraw(canvas)
     }
@@ -568,7 +635,7 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
 
     /** Tepi kaca, cahaya dalam & cahaya sentuh untuk HP tanpa shader (Android 12 ke bawah / kaca cair mati). */
     private fun drawLight(canvas: Canvas, top: Float, dark: Boolean) {
-        val w = width.toFloat()
+        val w = max(width - trimRight, height - top)
         val h = height.toFloat()
         if (corner > 0f) {
             val r = min(corner, (h - top) / 2f)
@@ -620,8 +687,8 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
 @android.annotation.TargetApi(31)
 private object GlassFx31 {
     /** Blur + saturasi 160%: blur saja membuat warna abu keruh, saturasi mengembalikan "hidup"-nya. */
-    fun apply(n: RenderNode, radius: Float) {
-        val sat = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(1.6f) })
+    fun apply(n: RenderNode, radius: Float, saturation: Float = 1.6f) {
+        val sat = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(saturation) })
         // blur nyaris nol (setelan "tajam"): cukup saturasi, tanpa efek blur
         if (radius < 1f) { n.setRenderEffect(RenderEffect.createColorFilterEffect(sat)); return }
         val blur = RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.MIRROR)
@@ -794,6 +861,73 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
     /** Kapsul kaca tambahan yang melayang tepat di atas navigasi bawah (mis. "Lanjutkan dokumen"). */
     val miniBar = GlassBar(ctx, false)
 
+    /** Isi navigasi bawah yang bisa diperkecil ala iOS 26 (lihat [setMinimized]); dicari di dalam [bottomBar]. */
+    interface Minimizable {
+        /** 0 = penuh, 1 = diperkecil (hanya tab aktif di lingkaran kiri). */
+        var collapse: Float
+        /** Lingkaran diketuk saat diperkecil → minta dibesarkan. */
+        var onExpand: (() -> Unit)?
+    }
+
+    private var mini = 0f
+    private var miniOn = false
+    private var miniAnim: ValueAnimator? = null
+
+    /** Navigasi sedang (atau sedang menuju) diperkecil. */
+    val minimized: Boolean get() = miniOn
+
+    /**
+     * Navigasi diperkecil ala iOS 26 (isi digulir ke bawah): kapsul navigasi menyusut ke kiri menjadi lingkaran berisi
+     * tab aktif, dan kapsul tambahan ("Lanjutkan") turun ke baris yang sama di sebelahnya — layar lebih lega. Gulir ke
+     * atas atau ketuk lingkaran → kembali penuh. Menyusut: kurva standar; membesar: pegas lembut.
+     */
+    fun setMinimized(on: Boolean, animate: Boolean = true) {
+        if (on == miniOn) return
+        val tab = minimizable()
+        if (on && (tab == null || bottomBar.visibility != View.VISIBLE || bottomBar.width <= 0 || morph != null)) return
+        miniOn = on
+        tab?.onExpand = { setMinimized(false) }
+        miniAnim?.cancel(); miniAnim = null
+        val to = if (on) 1f else 0f
+        if (!animate || !Motion.on() || !isAttachedToWindow) { applyMini(to); return }
+        val a = ValueAnimator.ofFloat(mini, to)
+        a.duration = if (on) 380L else Motion.SPRING_SOFT_MS
+        a.interpolator = if (on) Motion.STANDARD else Motion.SPRING_SOFT
+        a.addUpdateListener { applyMini(it.animatedValue as Float) }
+        a.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) { if (miniAnim === animation) { miniAnim = null; applyMini(to) } }
+        })
+        miniAnim = a
+        holdWhole(a.duration + 200L)   // kaca bergerak: gambar ulang utuh agar isi buram tetap selaras
+        a.start()
+    }
+
+    private fun minimizable(): Minimizable? = findMinimizable(bottomBar.box)
+
+    private fun findMinimizable(v: View): Minimizable? {
+        if (v is Minimizable) return v
+        if (v is ViewGroup) for (i in 0 until v.childCount) findMinimizable(v.getChildAt(i))?.let { return it }
+        return null
+    }
+
+    /** [f] 0..1 (pegas boleh sedikit melewati): bentuk navigasi, isi tab, posisi & lebar kapsul tambahan. */
+    private fun applyMini(f: Float) {
+        mini = f
+        val c = f.coerceIn(0f, 1f)
+        val bw = bottomBar.width.toFloat(); val bh = bottomBar.height.toFloat()
+        bottomBar.trimRight = (bw - bh).coerceAtLeast(0f) * c
+        minimizable()?.collapse = c
+        if (miniBar.visibility == View.VISIBLE && miniBar.height > 0 && morph == null) {
+            val lp = miniBar.layoutParams as LayoutParams
+            val base = dp(12)
+            val l = (base + (bottomBar.left + bh + dp(8) - base) * f).roundToInt()
+            val r = (base + (width - bottomBar.right - base) * f).roundToInt()
+            if (lp.leftMargin != l || lp.rightMargin != r) { lp.leftMargin = l; lp.rightMargin = r; miniBar.layoutParams = lp }
+            miniBar.translationY = f * (bottomBar.top + (bh - miniBar.height) / 2f - miniBar.top)   // ke tengah baris navigasi
+        }
+        bottomBar.invalidate(); miniBar.invalidate()
+    }
+
     /** Layar yang isinya tidak pernah kosong polos (beranda): area isi di antara bilah ikut diawasi [GlassGuard]. */
     var watchContent = false
 
@@ -830,6 +964,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
      * dari arah navigasi (bentuk kacanya memanjang ke atas, isinya terungkap mengikuti), dan menyusut kembali ke sana.
      */
     fun setAccessory(v: View?) {
+        if (miniOn || mini != 0f) { miniAnim?.cancel(); miniAnim = null; miniOn = false; applyMini(0f) }
         val wasHidden = miniBar.visibility != View.VISIBLE
         morph?.cancel(); morph = null
         if (v == null) {
@@ -853,7 +988,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
     }
 
     private fun settleAccessory() {
-        miniBar.reveal = 1f; miniBar.translationY = 0f; miniBar.box.alpha = 1f
+        miniBar.reveal = 1f; miniBar.translationY = 0f; miniBar.box.alpha = 1f; miniBar.materialize = 1f
         miniBar.invalidate()
     }
 
@@ -863,7 +998,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
         val drop = dp(14).toFloat()
         val from = if (grow) 0f else 1f
         val to = if (grow) 1f else 0f
-        if (grow) { miniBar.reveal = low; miniBar.translationY = drop; miniBar.box.alpha = 0f }
+        if (grow) { miniBar.reveal = low; miniBar.translationY = drop; miniBar.box.alpha = 0f; miniBar.materialize = 0f }
         val a = ValueAnimator.ofFloat(from, to)
         // tumbuh: pegas lembut (kapsul melar sedikit melewati ukurannya lalu mengendap, seperti tetes kaca)
         a.duration = if (grow) Motion.SPRING_SOFT_MS else Motion.MED
@@ -873,6 +1008,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
             miniBar.reveal = (low + (1f - low) * f).coerceAtMost(1f)   // bentuk kaca tidak melewati ukuran penuh
             miniBar.translationY = drop * (1f - f)                     // posisi boleh memantul kecil
             miniBar.box.alpha = ((f - 0.35f) / 0.65f).coerceIn(0f, 1f)
+            miniBar.materialize = f   // kaca mewujud (lensa, blur & tint tumbuh), bukan sekadar memudar
             miniBar.invalidate()   // isi buram & bentuk kaca ikut selaras tiap frame
         }
         a.addListener(object : AnimatorListenerAdapter() {

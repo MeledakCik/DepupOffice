@@ -111,16 +111,20 @@ object SelectionGlass {
             sc.addFloating(surface, lp)
             cap = surface; owner = anchor
             if (Motion.on()) {
-                surface.alpha = 0f; surface.scaleX = 0.88f; surface.scaleY = 0.88f
+                // kaca mewujud ala Liquid Glass (pembiasan & blur tumbuh dari nol) sambil membesar dengan pegas
+                surface.materializeNow(0f); lr.alpha = 0f
+                surface.scaleX = 0.88f; surface.scaleY = 0.88f
                 surface.pivotX = w / 2f; surface.pivotY = if (y > r.top) 0f else h.toFloat()
                 sc.holdWhole(Motion.SPRING_MS + 200L)
-                surface.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
+                surface.animate().scaleX(1f).scaleY(1f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
+                surface.materializeTo(1f, Motion.MED + 120L, Motion.STANDARD, lr)
             }
         } else {
             surface.layoutParams = lp
             owner = anchor
             surface.animate().cancel()
             surface.alpha = 1f; surface.scaleX = 1f; surface.scaleY = 1f
+            surface.materializeNow(1f); lr.alpha = 1f
             // sudah tampil: meluncur ke posisi baru (kata → kalimat, pindah paragraf)
             if (Motion.on()) {
                 sc.holdWhole(Motion.SPRING_SOFT_MS + 200L)
@@ -140,7 +144,9 @@ object SelectionGlass {
         if (!Motion.on() || sc == null) { gone(); return }
         sc.holdWhole(Motion.FAST + 200L)
         c.animate().cancel()
-        c.animate().alpha(0f).scaleX(0.94f).scaleY(0.94f).setDuration(Motion.FAST).setInterpolator(Motion.EXIT).withEndAction { gone() }.start()
+        // kaca melebur (kebalikan mewujud) sambil mengecil sedikit
+        c.animate().scaleX(0.94f).scaleY(0.94f).setDuration(Motion.FAST + 60L).setInterpolator(Motion.EXIT).start()
+        c.materializeTo(0f, Motion.FAST + 60L, Motion.EXIT, c.getChildAt(0)) { gone() }
         c.postDelayed({ gone() }, Motion.FAST + 200L)
     }
 }
