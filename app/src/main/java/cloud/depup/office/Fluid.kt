@@ -315,7 +315,7 @@ internal fun View.squish(to: Float = 0.95f, onFrame: (() -> Unit)? = null) {
  * - Tiap tombol mengecil sedikit saat ditekan & kembali mulus; tab aktif yang diketuk lagi membuat pil berdenyut sekali.
  */
 @SuppressLint("ViewConstructor")
-class TabBar(ctx: Context) : LinearLayout(ctx) {
+class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
     private class Tab(val index: Int, val pill: LinearLayout, val icon: ImageView, val label: TextView, val natural: Int) {
         var open = 0f
         var openAlpha = 0f
@@ -330,6 +330,63 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         private set
 
     var onTabSelected: ((Int) -> Unit)? = null
+
+    /**
+     * 0..1: navigasi diperkecil ala iOS 26 — saat isi digulir ke bawah hanya tab aktif (ikon) yang tersisa, di tengah
+     * lingkaran kaca di kiri; tab lain & tombol Scan memudar, nama tab menutup. Diatur [GlassScaffold.setMinimized].
+     */
+    override var collapse = 0f
+        set(v) { val c = v.coerceIn(0f, 1f); if (field != c) { field = c; applyCollapse() } }
+    /** Lingkaran navigasi yang diperkecil diketuk → minta dibesarkan lagi. */
+    override var onExpand: (() -> Unit)? = null
+
+    /** (x bilah ini di dalam kaca pembungkusnya, tinggi kaca) — lingkaran diperkecil = setinggi kaca, di kiri. */
+    private fun glassFrame(): Pair<Float, Float>? {
+        var ox = 0f
+        var v: View = this
+        while (true) {
+            if (v is GlassSurface) return ox to v.height.toFloat()
+            ox += v.left
+            v = v.parent as? View ?: return null
+        }
+    }
+
+    private fun applyCollapse() {
+        val c = collapse
+        val k = (c / 0.55f).coerceIn(0f, 1f)
+        val others = 1f - k * k * (3f - 2f * k)
+        for (i in 0 until childCount) {
+            val ch = getChildAt(i)
+            if (tabs.none { it.pill === ch && it.index == selected }) ch.alpha = others
+        }
+        for (t in tabs) setOpen(t, t.open)
+        placeSelected()
+        tint(); invalidate()
+    }
+
+    /** Tab aktif digeser ke tengah lingkaran sebanding [collapse]; tab lain di tempatnya. */
+    private fun placeSelected() {
+        val g = glassFrame()
+        for (t in tabs) {
+            val tx = if (t.index == selected && g != null && collapse > 0f)
+                collapse * (g.second / 2f - g.first - (t.pill.left + t.pill.width / 2f)) else 0f
+            if (t.pill.translationX != tx) t.pill.translationX = tx
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (collapse < 0.5f) return super.dispatchTouchEvent(ev)
+        // diperkecil: hanya lingkaran di kiri yang menerima sentuhan (sisanya milik kapsul di sebelahnya) → membesar
+        val g = glassFrame()
+        val r = (g?.second ?: height.toFloat()) / 2f
+        val cx = r - (g?.first ?: 0f)
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && abs(ev.x - cx) > r) return false
+        if (ev.actionMasked == MotionEvent.ACTION_UP && abs(ev.x - cx) <= r * 1.2f) {
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            onExpand?.invoke()
+        }
+        return true
+    }
 
     private val slop = ViewConfiguration.get(ctx).scaledTouchSlop
     private var downX = 0f
@@ -474,6 +531,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
         for (x in tabs) x.pill.isSelected = x.index == i
         ind.moveTo(t.pill, anim)
         openTo(i, anim)
+        if (collapse > 0f) applyCollapse()
     }
 
     /** Tab aktif diketuk lagi. */
@@ -514,8 +572,9 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
     }
 
     /** 0 = ikon saja, 1 = ikon + nama. Lebar, jarak, transparansi & geser label mengikuti. */
-    private fun setOpen(t: Tab, f: Float) {
-        t.open = f
+    private fun setOpen(t: Tab, open: Float) {
+        t.open = open
+        val f = open * (1f - collapse)   // navigasi diperkecil: nama tab ikut menutup
         val lp = t.label.layoutParams as LayoutParams
         val w = (t.natural * f).roundToInt()
         val m = (dp(8) * f).roundToInt()
@@ -568,6 +627,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx) {
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         super.onLayout(changed, l, t, r, b)
+        if (collapse > 0f) placeSelected()   // lebar pil berubah (nama menutup) → pusatkan ulang di lingkaran
         tint()
     }
 
@@ -658,6 +718,7 @@ private class TabLensFx {
         u[6] = bezel
         u[7] = bezel * 1.6f                                 // tetesan lensa: kaca kecil tapi tebal, tepi membias kuat
         u[8] = LiquidGlass.dispersionAmount() * 1.3f        // tetesan lensa: pelangi sedikit lebih terasa, seperti iOS
+        u[29] = 1f                                          // lensa selalu kaca penuh
         u[9] = GlassLight.x; u[10] = GlassLight.y
         u[11] = Color.red(base) / 255f; u[12] = Color.green(base) / 255f; u[13] = Color.blue(base) / 255f
         u[14] = 0.06f                                       // kaca bening: isinya = kaca navigasi asli

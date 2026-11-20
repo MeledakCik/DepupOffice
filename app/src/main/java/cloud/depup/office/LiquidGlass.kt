@@ -138,7 +138,7 @@ object LiquidGlass {
     }
 
     /** Urutan nilai uniform di [LiquidFx.update]. */
-    const val U = 29
+    const val U = 30
 
     /**
      * Shader AGSL. `content` = isi di belakang kaca yang SUDAH di-blur (efek blur dirantai lebih dulu).
@@ -163,6 +163,7 @@ uniform float4 box;         // batas aman sampel = area kaca yang tampil (kiri, 
 uniform float2 band;        // pita kontras adaptif dari setelan transparansi: (min. kaca terang, maks. kaca gelap)
 uniform float mag;          // pembesaran lensa ke arah pusat bentuk (0 = datar; 0,15 ≈ isi tampak 1,18×)
 uniform float layer;        // 0 = kaca utuh; > 0 = lapisan TEPI saja (isi blur ringan), alfa maks = nilai ini, memudar ke dalam
+uniform float mat;          // 0..1: kaca mewujud (muncul/hilang ala Liquid Glass): 0 = isi apa adanya, 1 = kaca penuh
 uniform float stage;        // 0 = lengkap; 1 = hanya lensa (warna mentah hasil pembiasan); 2 = hanya warna & cahaya
                             //   (isi sudah dibiaskan lalu di-blur lagi — lihat LiquidFx: blur sesudah lensa)
 
@@ -321,6 +322,8 @@ half4 main(float2 xy) {
     // 6b. cahaya sentuh: menyala dari titik sentuh
     col += float3(1.0, 1.0, 1.0) * (tf * (dark > 0.5 ? 0.14 : 0.20));
     col = clamp(col, 0.0, 1.0);
+    // kaca yang sedang mewujud: saturasi, tint, pita kontras & cahaya tumbuh dari nol (lensa & blur sudah diskalakan)
+    col = mix(c0, col, mat);
     // lapisan tepi: alfa penuh di tepi, memudar ke dalam → menyatu mulus dengan kaca utuh (yang lebih buram) di bawahnya
     if (layer > 0.0) {
         float a = (1.0 - smoothstep(0.3 * bz, 0.9 * bz, inside)) * min(layer, 1.0);
@@ -351,7 +354,7 @@ internal class LiquidFx {
 
     /**
      * [u] berisi: origin(2) size(2) radius slab bezel thick dispersion light(2) tint(4) dark touch(4) spec px
-     * box(4) band(2) mag. [blur] = radius blur isi (px). [edgeBlur] >= 0 (dan < [blur]): zona tepi ditumpuk lagi dari
+     * box(4) band(2) mag mat. [blur] = radius blur isi (px). [edgeBlur] >= 0 (dan < [blur]): zona tepi ditumpuk lagi dari
      * isi yang blurnya jauh lebih ringan, jadi lengkung lensanya terlihat walau bagian tengah buram — tepi membiaskan,
      * tengah tetap "frosted", seperti Liquid Glass. Kedua lapisan satu efek GPU (dua cabang blur → shader → ditumpuk).
      * Mengembalikan true bila efek baru dibuat (pasang ulang ke node / tampilan).
@@ -407,6 +410,7 @@ internal class LiquidFx {
         s.setFloatUniform("mag", u[28])
         s.setFloatUniform("layer", layer)
         s.setFloatUniform("stage", stage)
+        s.setFloatUniform("mat", u[29])
     }
 
     // Blur tidak berubah saat cahaya/sentuhan bergeser: dibuat sekali saja, hanya lapisan lensanya yang dibuat ulang.
@@ -482,6 +486,7 @@ internal class LensDrawable(
         s.setFloatUniform("mag", 0f)
         s.setFloatUniform("layer", 0f)
         s.setFloatUniform("stage", 0f)
+        s.setFloatUniform("mat", 1f)
         paint.shader = s
     }
 

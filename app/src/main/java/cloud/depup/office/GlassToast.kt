@@ -158,7 +158,7 @@ object GlassToast {
             liquidTint = 0.82f
             darkGlass = true
             corner = ctx.dp(100).toFloat()      // bentuk kapsul: dibatasi setengah tinggi
-            alpha = 0f
+            materialize = 0f                    // muncul dengan MEWUJUD (lensa & blur tumbuh), bukan memudar
             elevation = ctx.dp(6).toFloat()
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
@@ -170,6 +170,7 @@ object GlassToast {
             maxLines = 4
             setPadding(ctx.dp(20), ctx.dp(12), ctx.dp(20), ctx.dp(12))
             try { typeface = Fonts.label(ctx) } catch (_: Throwable) {}
+            alpha = 0f
         }
         cap.addView(text, FrameLayout.LayoutParams(WRAP, WRAP))
         val loc = IntArray(2); sc.getLocationInWindow(loc)
@@ -190,7 +191,8 @@ object GlassToast {
             cap.translationY = ctx.dp(18).toFloat(); cap.scaleX = 0.88f; cap.scaleY = 0.88f
             sc.holdWhole(Motion.SPRING_MS + 200L)
             cap.animate().translationY(0f).scaleX(1f).scaleY(1f).setDuration(Motion.SPRING_MS).setInterpolator(Motion.SPRING).start()
-            android.animation.ObjectAnimator.ofFloat(cap, View.ALPHA, 1f).apply { duration = Motion.FAST + 30L }.start()
+            // kaca mewujud ala Liquid Glass: pembiasan, blur & warna tumbuh dari nol; teks muncul setelah kaca jadi
+            cap.materializeTo(1f, Motion.MED + 120L, Motion.STANDARD, text)
             cap.announceForAccessibility(msg)
         }
         main.postDelayed({ dismiss(cap) }, if (long) 3200L else 2000L)
@@ -207,9 +209,16 @@ object GlassToast {
             ((v as? ViewGroup)?.getChildAt(0) as? ImageView)?.setImageDrawable(null)
         }
         if (!Motion.on()) { gone(); return }
-        // turun & mengecil sedikit sambil memudar (kebalikan saat muncul)
-        v.animate().alpha(0f).translationY(v.dp(10).toFloat()).scaleX(0.94f).scaleY(0.94f)
-            .setDuration(Motion.MED).setInterpolator(Motion.EXIT).withEndAction { gone() }.start()
+        if (v is GlassSurface) {
+            // kaca melebur (kebalikan mewujud) sambil turun & mengecil sedikit
+            v.animate().translationY(v.dp(10).toFloat()).scaleX(0.94f).scaleY(0.94f)
+                .setDuration(Motion.MED).setInterpolator(Motion.EXIT).start()
+            v.materializeTo(0f, Motion.MED, Motion.EXIT, v.getChildAt(0)) { gone() }
+        } else {
+            // turun & mengecil sedikit sambil memudar (kebalikan saat muncul)
+            v.animate().alpha(0f).translationY(v.dp(10).toFloat()).scaleX(0.94f).scaleY(0.94f)
+                .setDuration(Motion.MED).setInterpolator(Motion.EXIT).withEndAction { gone() }.start()
+        }
         v.postDelayed({ if (v.parent != null) gone() }, Motion.MED + 200L)   // pengaman bila animasi terpotong
     }
 
