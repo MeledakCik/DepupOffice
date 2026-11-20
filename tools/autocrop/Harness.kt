@@ -27,10 +27,12 @@ fun loadSmall(f: File): Triple<ScanCore.Small, Int, Int> {
     return Triple(ScanCore.fromPixels(px, w, h), img.width, img.height)
 }
 
+/** Titik di dalam poligon q (x0,y0,x1,y1,…; 4 sudut atau lebih). */
 fun inside(q: FloatArray, x: Float, y: Float): Boolean {
     var c = false
-    for (i in 0 until 4) {
-        val j = (i + 3) % 4
+    val n = q.size / 2
+    for (i in 0 until n) {
+        val j = (i + n - 1) % n
         val xi = q[2 * i]; val yi = q[2 * i + 1]; val xj = q[2 * j]; val yj = q[2 * j + 1]
         if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c
     }
@@ -54,6 +56,9 @@ fun main(args: Array<String>) {
     System.getenv("W")?.let { w -> w.split(",").forEachIndexed { i, v -> DocFind.W[i] = v.toFloat() } }
     System.getenv("SEAM")?.let { w -> w.split(",").forEachIndexed { i, v -> DocFind.SEAM[i] = v.toFloat() } }
     System.getenv("MS")?.let { DocFind.MIN_SCORE = it.toFloat() }
+    System.getenv("AD")?.let { DocFind.ALIGN_DROP = it.toFloat() }
+    System.getenv("MESSY")?.let { DocFind.MESSY = it.toFloat() }
+    System.getenv("AL")?.let { DocFind.INNER_AL = it.toFloat() }
     if (System.getenv("NOSEAM") != null) ScanCore.seamCut = false
     val set2 = args.getOrElse(1) { "" } == "2"
     if (args.getOrElse(1) { "" } == "3") { runMask(mode); return }
@@ -64,6 +69,7 @@ fun main(args: Array<String>) {
     if (args.getOrElse(1) { "" } == "10") { runBig(mode, "cases10.json", "imgs10", "10"); return }
     if (args.getOrElse(1) { "" } == "11") { runBig(mode, "cases11.json", "imgs11", "11"); return }
     if (args.getOrElse(1) { "" } == "real") { runReal(); return }
+    if (args.getOrElse(1) { "" } == "mock") { runMock(); return }
     if (args.getOrElse(1) { "" } == "realsmall") { writeRealSmall(File(args.getOrElse(2) { (System.getenv("CROP") ?: "/home/claude/crop") + "/real" })); return }
     val dir = File(System.getenv("CROP") ?: "/home/claude/crop")
     val cases = Regex("\\{\"file\": \"([^\"]+)\", \"quad\": \\[([^\\]]+)\\], \"w\": (\\d+), \"h\": (\\d+)\\}").findAll(File(dir, if (set2) "cases2.json" else "cases.json").readText()).toList()
@@ -189,4 +195,29 @@ fun runReal() {
         println("%-30s IoU %.2f %s  hasil=%s".format(name, v, if (v >= 0.85f) "OK " else "GAGAL", q.joinToString(",") { "%.2f".format(it) }))
     }
     println("== asli: berhasil $ok/${cases.size}, rata-rata IoU %.3f".format(sum / maxOf(1, cases.size)))
+}
+
+/**
+ * Set "mock": foto contoh dokumen dari pengguna yang BUKAN miliknya (mockup desain orang lain) — gambarnya tidak
+ * di-commit (repo publik), hanya mock/cases.json. Taruh gambarnya di `$CROP/mock/` (m01.png … m17.png).
+ * Format: {"file": "m01.png", "gt": "x0,y0,x1,y1,…[;alternatif]"} — poligon pecahan 0..1 (boleh lebih dari 4 sudut:
+ * label yang terlipat di sudut kardus, brosur lipat); IoU = yang terbaik di antara alternatif.
+ */
+fun mockCases(dir: File): List<Pair<String, List<FloatArray>>> =
+    Regex("\\{\"file\": \"([^\"]+)\", \"gt\": \"([^\"]+)\"").findAll(File(dir, "cases.json").readText()).map { m ->
+        m.groupValues[1] to m.groupValues[2].split(";").map { p -> p.split(",").map { it.trim().toFloat() }.toFloatArray() }
+    }.toList()
+
+fun runMock() {
+    val dir = File(System.getenv("CROP") ?: "/home/claude/crop", "mock")
+    var ok = 0; var sum = 0f
+    val cases = mockCases(dir)
+    for ((name, gts) in cases) {
+        val (s, _, _) = loadSmall(File(dir, name))
+        val q = Quad.order(ScanCore.findDocument(s) ?: Quad.full())
+        val v = gts.maxOf { iou(q, it) }
+        sum += v; if (v >= 0.85f) ok++
+        println("%-10s IoU %.2f %s  hasil=%s".format(name, v, if (v >= 0.85f) "OK " else "GAGAL", q.joinToString(",") { "%.2f".format(it) }))
+    }
+    println("== mock: berhasil $ok/${cases.size}, rata-rata IoU %.3f".format(sum / maxOf(1, cases.size)))
 }
