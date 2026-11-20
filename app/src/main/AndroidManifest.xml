@@ -29,7 +29,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/SplashTheme"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout">
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -39,7 +39,7 @@
         <activity
             android:name=".ViewerActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout">
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.EDIT" />
@@ -60,36 +60,37 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".VaultActivity" android:exported="false" />
+        <activity android:name=".VaultActivity" android:exported="false" android:configChanges="uiMode" />
 
         <activity
             android:name=".CameraActivity"
             android:exported="false"
+            android:configChanges="uiMode"
             android:screenOrientation="portrait" />
 
         <activity
             android:name=".ScanEditActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />
 
         <activity
             android:name=".DocEditorActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />
 
         <activity
             android:name=".SheetEditorActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />
 
-        <activity android:name=".PrivacyPolicyActivity" android:exported="false" />
+        <activity android:name=".PrivacyPolicyActivity" android:exported="false" android:configChanges="uiMode" />
 
         <activity
             android:name=".PdfAnnotateActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

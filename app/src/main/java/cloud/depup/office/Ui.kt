@@ -185,6 +185,10 @@ object Theme {
     fun mode(ctx: Context): Int = sp(ctx).getInt("theme", SYSTEM)
     fun setMode(ctx: Context, m: Int) { sp(ctx).edit().putInt("theme", m).apply() }
 
+    /** Tema HP saat ini (abaikan pilihan tema aplikasi). */
+    fun systemDark(): Boolean =
+        (android.content.res.Resources.getSystem().configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
     fun isDark(ctx: Context): Boolean = when (mode(ctx)) {
         LIGHT -> false
         DARK -> true

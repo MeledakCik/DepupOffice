@@ -38,6 +38,7 @@ class DepupApp : Application() {
             // Hitung token warna (terang/gelap) SEBELUM layar membangun tampilannya.
             override fun onActivityPreCreated(activity: Activity, savedInstanceState: Bundle?) {
                 Theme.apply(activity)
+                ThemeFade.built(activity, C.dark)
             }
             override fun onActivityPostCreated(activity: Activity, savedInstanceState: Bundle?) {
                 val content = activity.findViewById<View>(android.R.id.content) ?: return
@@ -51,6 +52,10 @@ class DepupApp : Application() {
                     WindowInsetsCompat.CONSUMED
                 }
                 ViewCompat.requestApplyInsets(content)
+                // Tema HP berganti (uiMode ditangani sendiri, lihat manifest): bila terang/gelap berubah, layar dibangun
+                // ulang dengan transisi; layar yang baru dibangun karena ganti tema membuka potret layar lamanya.
+                (activity as? androidx.activity.ComponentActivity)?.addOnConfigurationChangedListener { ThemeFade.onConfig(activity) }
+                ThemeFade.play(activity)
             }
             override fun onActivityCreated(a: Activity, b: Bundle?) {}
             override fun onActivityStarted(a: Activity) { C.dark = Theme.isDark(a) }
