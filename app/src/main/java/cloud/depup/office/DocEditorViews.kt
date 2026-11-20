@@ -189,7 +189,10 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
         caretPaint.color = C.ACCENT
         caretPaint.alpha = (255 * caretA).toInt()
         val w = 2f * resources.displayMetrics.density
-        c.drawRoundRect(x - w / 2f, t + w * 0.5f, x + w / 2f, b - w * 0.5f, w / 2f, w / 2f, caretPaint)
+        // Di awal / akhir baris yang menempel tepi paragraf, separuh kursor jatuh di luar tampilan & terpotong
+        // (garis tinggal separuh, terlepas dari butirnya) → digeser masuk. [SelectionKit] memakai batas yang sama.
+        val cx = x.coerceIn(scrollX + w / 2f, maxOf(scrollX + w / 2f, scrollX + width - w / 2f))
+        c.drawRoundRect(cx - w / 2f, t + w * 0.5f, cx + w / 2f, b - w * 0.5f, w / 2f, w / 2f, caretPaint)
     }
 
     // =========================================================================================
@@ -532,11 +535,11 @@ class ParaEdit(ctx: Context, private val host: DocEditorActivity) : androidx.app
             if (!keep) { manualGlass = false; sysMode?.finish(); SelectionGlass.hide(this) }
         }
         if (sel && !host.secureMode) {
-            items.add(SelectionGlass.Item("Potong", act(android.R.id.cut)))
-            items.add(SelectionGlass.Item("Salin", act(android.R.id.copy)))
+            items.add(SelectionGlass.Item("Potong", act(android.R.id.cut), R.drawable.ic_cut))
+            items.add(SelectionGlass.Item("Salin", act(android.R.id.copy), R.drawable.ic_copy))
         }
-        if (canPaste()) items.add(SelectionGlass.Item("Tempel", act(android.R.id.paste)))
-        if (!(a == 0 && b == n) && n > 0) items.add(SelectionGlass.Item("Pilih semua", act(android.R.id.selectAll, keep = true)))
+        if (canPaste()) items.add(SelectionGlass.Item("Tempel", act(android.R.id.paste), R.drawable.ic_paste))
+        if (!(a == 0 && b == n) && n > 0) items.add(SelectionGlass.Item("Pilih semua", act(android.R.id.selectAll, keep = true), R.drawable.ic_full))
         SelectionGlass.reshow = { showGlass() }
         SelectionGlass.show(this, r, items)
     }

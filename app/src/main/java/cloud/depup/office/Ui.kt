@@ -1312,15 +1312,38 @@ fun AppCompatActivity.fail(t: Throwable) {
     AlertDialog.Builder(this).setTitle("Gagal").setMessage(m).setPositiveButton("OK", null).show()
 }
 
-fun AppCompatActivity.busy(msg: String): AlertDialog {
-    val row = LinearLayout(this).apply {
+/**
+ * "Sedang diproses": kartu DepUp kecil melayang di tengah (putaran biru + pesan), bukan dialog peringatan bawaan.
+ * Tidak bisa ditutup pengguna; pemanggil menutupnya sendiri.
+ */
+fun AppCompatActivity.busy(msg: String): Dialog {
+    val d = Dialog(this)
+    d.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    val card = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(22), dp(22), dp(22), dp(22))
+        background = shape(C.SURFACE, 22)
+        elevation = dp(10).toFloat()
+        setPadding(dp(20), dp(18), dp(24), dp(18))
+        accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        contentDescription = msg
     }
-    row.add(ProgressBar(this), w = dp(32), h = dp(32))
-    row.add(tv(msg, 14f), w = WRAP, side = 16)
-    return AlertDialog.Builder(this).setView(row).setCancelable(false).show()
+    card.add(ProgressBar(this).apply { indeterminateTintList = ColorStateList.valueOf(C.ACCENT) }, w = dp(26), h = dp(26))
+    card.add(tv(msg, 15f, C.TEXT, true).apply { setPadding(dp(14), 0, 0, 0); maxWidth = resources.displayMetrics.widthPixels - dp(150) }, w = WRAP)
+    // ruang di sekeliling kartu agar bayangannya tidak terpotong jendela
+    val frame = FrameLayout(this).apply { setPadding(dp(20), dp(20), dp(20), dp(20)) }
+    frame.addView(card, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
+    d.setContentView(frame)
+    d.setCancelable(false)
+    d.window?.apply {
+        setBackgroundDrawable(ColorDrawable(0))
+        setLayout(WRAP, WRAP)
+        setDimAmount(if (C.dark) 0.55f else 0.28f)
+        setWindowAnimations(R.style.DlgMotion)
+    }
+    d.inheritSecure(this)
+    d.show()
+    return d
 }
 
 /** Jalankan pekerjaan berat di thread terpisah dengan dialog "sedang diproses". */

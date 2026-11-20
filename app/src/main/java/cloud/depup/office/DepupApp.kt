@@ -8,10 +8,13 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
+/** Layar yang menggambar sampai tepi layar (di belakang bilah status & navigasi) dan mengatur jaraknya sendiri. */
+interface FullBleed
+
 /**
  * targetSdk 35/36 memaksa edge-to-edge. Semua Activity di app ini membangun UI sendiri,
  * jadi inset (status bar, nav bar, cutout, keyboard) diterapkan sekali di sini sebagai
- * padding root content supaya UI tidak tertimpa system bar.
+ * padding root content supaya UI tidak tertimpa system bar (kecuali layar [FullBleed]).
  */
 class DepupApp : Application() {
     override fun onCreate() {
@@ -42,16 +45,20 @@ class DepupApp : Application() {
             }
             override fun onActivityPostCreated(activity: Activity, savedInstanceState: Bundle?) {
                 val content = activity.findViewById<View>(android.R.id.content) ?: return
-                ViewCompat.setOnApplyWindowInsetsListener(content) { v, insets ->
-                    val i = insets.getInsets(
-                        WindowInsetsCompat.Type.systemBars() or
-                            WindowInsetsCompat.Type.displayCutout() or
-                            WindowInsetsCompat.Type.ime()
-                    )
-                    v.setPadding(i.left, i.top, i.right, i.bottom)
-                    WindowInsetsCompat.CONSUMED
+                // Layar biasa: isi diberi jarak dari bilah sistem. Layar [FullBleed] (kamera) menggambar sampai tepi
+                // dan mengatur jaraknya sendiri.
+                if (activity !is FullBleed) {
+                    ViewCompat.setOnApplyWindowInsetsListener(content) { v, insets ->
+                        val i = insets.getInsets(
+                            WindowInsetsCompat.Type.systemBars() or
+                                WindowInsetsCompat.Type.displayCutout() or
+                                WindowInsetsCompat.Type.ime()
+                        )
+                        v.setPadding(i.left, i.top, i.right, i.bottom)
+                        WindowInsetsCompat.CONSUMED
+                    }
+                    ViewCompat.requestApplyInsets(content)
                 }
-                ViewCompat.requestApplyInsets(content)
                 // Tema HP berganti (uiMode ditangani sendiri, lihat manifest): bila terang/gelap berubah, layar dibangun
                 // ulang dengan transisi; layar yang baru dibangun karena ganti tema membuka potret layar lamanya.
                 (activity as? androidx.activity.ComponentActivity)?.addOnConfigurationChangedListener { ThemeFade.onConfig(activity) }

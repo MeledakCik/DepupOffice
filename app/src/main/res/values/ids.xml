@@ -10,4 +10,6 @@
     <!-- Motion.swapContent: sisa isi lama yang sedang memudar & animatornya. -->
     <item name="swap_ghosts" type="id" />
     <item name="swap_anim" type="id" />
+    <!-- OfficeView: ukuran halaman dokumen (pt) dari @page, untuk "Simpan sebagai PDF" & cetak. -->
+    <item name="page_pt" type="id" />
 </resources>

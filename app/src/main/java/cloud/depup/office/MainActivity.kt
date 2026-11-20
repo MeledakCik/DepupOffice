@@ -3134,14 +3134,14 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             .show()
     }
 
-    /** Word/Excel/PowerPoint -> PDF lewat pembaca (tampilan asli), lalu dialog cetak "Simpan sebagai PDF". */
+    /** Word/Excel/PowerPoint -> PDF lewat pembaca (tampilan asli), langsung jadi tanpa dialog cetak sistem. */
     private fun officeToPdfFlow(uri: Uri) {
         val name = Files.nameOf(this, uri).lowercase()
         if (name.endsWith(".doc") || name.endsWith(".xls") || name.endsWith(".ppt")) {
             toast("Format lama (.doc/.xls/.ppt) belum didukung. Simpan ulang sebagai .docx/.xlsx/.pptx.")
             return
         }
-        toast("Pilih \"Simpan sebagai PDF\" di dialog cetak")
+        // PDF dibuat langsung oleh pembaca (tanpa dialog cetak sistem) lalu tampil di lembar "PDF siap"
         startActivity(Integrity.internal(Intent(this, ViewerActivity::class.java)).setData(uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             .putExtra(ViewerActivity.EXTRA_AUTO_PRINT, true))

@@ -221,6 +221,23 @@ def _():
     return unary_union([body, line([(12, 13.6), (12, 21.2)], 2.3)])
 
 
+@icon("copy")
+def _():
+    # dua lembar: belakang berupa garis, depan solid dengan celah
+    back = outline(squircle(3.2, 3.2, 15.4, 15.4, 3.2), 2.3)
+    front = squircle(8.6, 8.6, 20.8, 20.8, 3.2)
+    return gap(back, front, GAP)
+
+
+@icon("paste")
+def _():
+    # papan klip: badan solid, penjepit di atas dengan celah, dua garis teks berlubang
+    body = squircle(4.0, 4.6, 20.0, 21.4, 3.4)
+    body = knock(body, line([(8.4, 12.6), (15.6, 12.6)], KW), line([(8.4, 17.0), (12.8, 17.0)], KW))
+    clip = squircle(8.2, 2.0, 15.8, 7.2, 1.8)
+    return gap(body, clip, GAP)
+
+
 @icon("bright")
 def _():
     parts = [circle(12, 12, 4.3)]
