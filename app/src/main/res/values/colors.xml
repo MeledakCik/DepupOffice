@@ -22,4 +22,6 @@
     <color name="widget_muted">#5C5953</color>
     <color name="widget_primary">#1652F6</color>
     <color name="widget_yellow">#FFF0B3</color>
+    <color name="widget_sheen">#66FFFFFF</color>
+    <color name="widget_rim">#B3FFFFFF</color>
 </resources>

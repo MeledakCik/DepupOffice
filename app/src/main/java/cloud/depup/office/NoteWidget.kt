@@ -58,6 +58,15 @@ internal object WidgetPaint {
         }
     }
 
+    /**
+     * Ukuran widget saat ini (dp): lebar terkecil & tinggi terbesar (tegak). 0 = belum diketahui (dianggap lega).
+     * Peluncur mengirim ukuran baru tiap widget diubah ukurannya ([AppWidgetProvider.onAppWidgetOptionsChanged]).
+     */
+    fun size(ctx: Context, id: Int): Pair<Int, Int> = try {
+        val o = AppWidgetManager.getInstance(ctx).getAppWidgetOptions(id)
+        o.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0) to o.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+    } catch (_: Throwable) { 0 to 0 }
+
     /** Buka layar aplikasi dari widget. [key] membedakan PendingIntent (ekstra tidak ikut dibandingkan sistem). */
     fun activity(ctx: Context, i: Intent, key: String, mutable: Boolean = false): PendingIntent {
         i.setData(Uri.parse("depup://widget/buka/$key")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -99,6 +108,10 @@ class NoteWidget : AppWidgetProvider() {
             val v = RemoteViews(ctx.packageName, R.layout.widget_note)
             val nid = NoteWidgets.noteFor(ctx, id)
             val n = if (nid >= 0) Notes.get(ctx, nid) else null
+            val (_, hDp) = WidgetPaint.size(ctx, id)
+            // pendek (±1 baris petak): judul saja, satu baris — ketuk membuka catatan
+            val compact = hDp in 1..109
+            v.setInt(R.id.title, "setMaxLines", if (compact) 1 else 2)
             WidgetPaint.tone(v, R.id.bg, NoteColors.of(n?.color ?: 0))
             WidgetPaint.text(v, R.id.title)
             WidgetPaint.text(v, R.id.count, muted = true)
@@ -109,19 +122,22 @@ class NoteWidget : AppWidgetProvider() {
                 v.setViewVisibility(R.id.count, View.GONE)
                 v.setTextViewText(R.id.msg,
                     if (nid >= 0) "Ketuk untuk memilih catatan lain." else "Ketuk untuk memilih catatan Depup yang tampil di sini.")
-                v.setViewVisibility(R.id.msg, View.VISIBLE)
+                v.setViewVisibility(R.id.msg, if (compact) View.GONE else View.VISIBLE)
                 v.setViewVisibility(R.id.list, View.GONE)
                 v.setOnClickPendingIntent(R.id.frame, configure(ctx, id))
                 return v
             }
-            val head = if (n.checklist) n.title.ifBlank { "Daftar centang" } else n.title
+            val head = if (compact) NoteViews.headline(n) else if (n.checklist) n.title.ifBlank { "Daftar centang" } else n.title
             v.setViewVisibility(R.id.head, if (head.isBlank()) View.GONE else View.VISIBLE)
             v.setTextViewText(R.id.title, head)
             val (done, total) = n.progress()
             v.setTextViewText(R.id.count, "$done/$total")
             v.setViewVisibility(R.id.count, if (n.checklist && total > 0) View.VISIBLE else View.GONE)
-            val rs = rows(ctx, n)
-            if (rs.isEmpty()) {
+            val rs = if (compact) emptyList() else rows(ctx, n)
+            if (compact) {
+                v.setViewVisibility(R.id.msg, View.GONE)
+                v.setViewVisibility(R.id.list, View.GONE)
+            } else if (rs.isEmpty()) {
                 v.setTextViewText(R.id.msg, if (n.checklist) "Belum ada item. Ketuk untuk menambah." else "Catatan kosong. Ketuk untuk menulis.")
                 v.setViewVisibility(R.id.msg, View.VISIBLE)
                 v.setViewVisibility(R.id.list, View.GONE)
@@ -210,6 +226,11 @@ class NoteWidget : AppWidgetProvider() {
 
     override fun onDeleted(ctx: Context, ids: IntArray) = NoteWidgets.unbind(ctx, ids)
 
+    override fun onAppWidgetOptionsChanged(ctx: Context, am: AppWidgetManager, id: Int, newOptions: android.os.Bundle) {
+        update(ctx, am, id)
+        if (Build.VERSION.SDK_INT < 31) am.notifyAppWidgetViewDataChanged(intArrayOf(id), R.id.list)
+    }
+
     override fun onReceive(ctx: Context, intent: Intent) {
         when (intent.action) {
             ACTION_TOGGLE -> {
@@ -250,6 +271,10 @@ class NotesListWidget : AppWidgetProvider() {
 
         private fun build(ctx: Context, id: Int): RemoteViews {
             val v = RemoteViews(ctx.packageName, R.layout.widget_notes)
+            val (wDp, hDp) = WidgetPaint.size(ctx, id)
+            v.setViewVisibility(R.id.add_list, if (wDp in 1..159) View.GONE else View.VISIBLE)
+            v.setViewVisibility(R.id.count, if (wDp in 1..129) View.GONE else View.VISIBLE)
+            v.setViewVisibility(R.id.list_box, if (hDp in 1..109) View.GONE else View.VISIBLE)
             WidgetPaint.tint(v, R.id.bg, WidgetPaint.SURFACE_L, WidgetPaint.SURFACE_D)
             WidgetPaint.text(v, R.id.title)
             WidgetPaint.text(v, R.id.count, muted = true)
@@ -293,6 +318,11 @@ class NotesListWidget : AppWidgetProvider() {
     override fun onUpdate(ctx: Context, am: AppWidgetManager, ids: IntArray) {
         ids.forEach { update(ctx, am, it) }
         if (Build.VERSION.SDK_INT < 31 && ids.isNotEmpty()) am.notifyAppWidgetViewDataChanged(ids, R.id.list)
+    }
+
+    override fun onAppWidgetOptionsChanged(ctx: Context, am: AppWidgetManager, id: Int, newOptions: android.os.Bundle) {
+        update(ctx, am, id)
+        if (Build.VERSION.SDK_INT < 31) am.notifyAppWidgetViewDataChanged(intArrayOf(id), R.id.list)
     }
 }
 
