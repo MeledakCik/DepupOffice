@@ -19,6 +19,4 @@
     <color name="widget_muted">#B3B0AA</color>
     <color name="widget_primary">#1D56FF</color>
     <color name="widget_yellow">#4A3E10</color>
-    <color name="widget_sheen">#24FFFFFF</color>
-    <color name="widget_rim">#38FFFFFF</color>
 </resources>
