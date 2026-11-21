@@ -707,8 +707,8 @@ class GlassBar(ctx: Context, private val atTop: Boolean) : GlassSurface(ctx) {
         addView(box, LayoutParams(MATCH, WRAP))
         edge = if (atTop) -1 else 1
         // Warna kaca mengikuti bilah sistem di sebelahnya (atas = latar halaman, bawah = permukaan) agar menyatu.
-        // Kapsul melayang di tema terang memakai abu lembut supaya tetap terlihat di atas halaman putih.
-        tintColor = { if (atTop) C.BG else if (corner > 0f && !C.dark) C.SURFACE2 else C.SURFACE }
+        // Kapsul melayang (atas maupun bawah) di tema terang memakai abu lembut supaya tetap terlihat di atas halaman putih.
+        tintColor = { if (corner > 0f) (if (C.dark) C.SURFACE else C.SURFACE2) else if (atTop) C.BG else C.SURFACE }
         // Latar buram milik anak-anak bilah dibuang supaya kacanya terlihat; garis pemisah digambar sendiri.
         box.setOnHierarchyChangeListener(object : ViewGroup.OnHierarchyChangeListener {
             override fun onChildViewAdded(parent: View?, child: View?) { child?.let { strip(it) } }
@@ -840,7 +840,9 @@ open class GlassScrollView(ctx: Context) : ScrollView(ctx) {
  * daftar itu yang diberi padding (isinya lewat di bawah kaca); bila bukan, wadah isinya yang digeser.
  */
 @SuppressLint("ViewConstructor")
-class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Boolean = false) : FrameLayout(ctx) {
+class GlassScaffold(
+    ctx: Context, val content: View, private val floatBottom: Boolean = false, private val floatTop: Boolean = false
+) : FrameLayout(ctx) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val t = System.nanoTime(); super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         EdPerf.rootMeasureNs += System.nanoTime() - t; EdPerf.rootMeasures++
@@ -1031,7 +1033,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
      */
     fun setDepth(busy: Float) {
         val b = busy.coerceIn(0f, 1f)
-        for (bar in listOf(bottomBar, miniBar)) if (bar.corner > 0f) {
+        for (bar in listOf(topBar, bottomBar, miniBar)) if (bar.corner > 0f) {
             bar.outlineSpotShadowColor = Color.argb(shadowA(0x1C + (0x40 - 0x1C) * b), 0, 0, 0)
             bar.outlineAmbientShadowColor = Color.argb(shadowA(0x10 + (0x22 - 0x10) * b), 0, 0, 0)
         }
@@ -1079,7 +1081,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
 
     /** Tinggi yang tertutup bilah atas & bawah (px), termasuk kapsul tambahan. */
     private fun barSpace(): IntArray {
-        val th = if (top.childCount > 0) topBar.height else 0
+        val th = if (top.childCount > 0) topSpace() else 0
         var bh = if (bottom.childCount > 0) bottomBar.height + (if (floatBottom) gap * 2 else 0) else 0
         if (miniBar.visibility == View.VISIBLE && miniBar.box.childCount > 0)
             bh = bh + (if (floatBottom) -gap + dp(8) else dp(8)) + miniBar.height + dp(4)
@@ -1091,12 +1093,18 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
     /** Pembungkus isi: sumber kaca untuk bilah & notifikasi. */
     private val wrap = GlassContent(ctx)
     private val gap = if (floatBottom) ctx.dp(12) else 0
+    /** Kapsul atas melayang: jarak dari tepi atas isi & jarak isi pertama di bawah kapsul. */
+    private val topGap = if (floatTop) ctx.dp(6) else 0
+    private val topBelow = if (floatTop) ctx.dp(8) else 0
+
+    /** Tinggi yang tertutup bilah atas (px): kapsul melayang ikut jarak atas & bawahnya. */
+    private fun topSpace(): Int = topBar.height + topGap + topBelow
     private val onLayout = ViewTreeObserver.OnGlobalLayoutListener { applyInsets() }
 
     init {
         wrap.addView(content, LayoutParams(MATCH, MATCH))
         addView(wrap, LayoutParams(MATCH, MATCH))
-        addView(topBar, LayoutParams(MATCH, WRAP, Gravity.TOP))
+        addView(topBar, LayoutParams(MATCH, WRAP, Gravity.TOP).apply { if (floatTop) setMargins(ctx.dp(12), topGap, ctx.dp(12), 0) })
         addView(bottomBar, LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { setMargins(gap, 0, gap, gap * 5 / 6) })
         addView(miniBar, LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { setMargins(ctx.dp(12), 0, ctx.dp(12), 0) })
         miniBar.visibility = View.GONE
@@ -1104,8 +1112,10 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
         topBar.content = wrap; bottomBar.content = wrap; miniBar.content = wrap
         miniBar.isClickable = true
         if (floatBottom) bottomBar.corner = ctx.dp(30).toFloat()
+        // bilah atas melayang: kapsul kaca cair yang sama dengan navigasi bawah (bukan blur progresif)
+        if (floatTop) topBar.corner = ctx.dp(30).toFloat()
         // bayangan lembut di bawah kapsul melayang (seperti referensi), bukan garis keras
-        for (b in listOf(bottomBar, miniBar)) if (b.corner > 0f) {
+        for (b in listOf(topBar, bottomBar, miniBar)) if (b.corner > 0f) {
             b.elevation = ctx.dp(8).toFloat()
             b.outlineAmbientShadowColor = Color.argb(shadowA(0x18.toFloat()), 0, 0, 0)
             b.outlineSpotShadowColor = Color.argb(shadowA(0x2C.toFloat()), 0, 0, 0)
@@ -1272,7 +1282,7 @@ class GlassScaffold(ctx: Context, val content: View, private val floatBottom: Bo
             val hasTop = top.childCount > 0; val hasBottom = bottom.childCount > 0
             topBar.visibility = if (hasTop) View.VISIBLE else View.GONE
             bottomBar.visibility = if (hasBottom) View.VISIBLE else View.GONE
-            val th = if (hasTop) topBar.height else 0
+            val th = if (hasTop) topSpace() else 0
             var bh = if (hasBottom) bottomBar.height + (if (floatBottom) gap * 2 else 0) else 0
             if (miniBar.visibility == View.VISIBLE && miniBar.box.childCount > 0) {
                 // kapsul tambahan duduk 8dp di atas navigasi
@@ -1423,17 +1433,23 @@ object Glass {
         autoDisabled = true
     }
 
-    fun scaffold(root: LinearLayout, floatBottom: Boolean = false): View {
+    /**
+     * Bungkus layar dengan kaca: anak-anak [root] sebelum isi (anak ber-weight) jadi bilah atas, sesudahnya bilah bawah.
+     * [floatTop] = bilah atas berupa kapsul kaca cair melayang seperti navigasi Beranda; selain itu blur progresif.
+     */
+    fun scaffold(root: LinearLayout, floatBottom: Boolean = false, floatTop: Boolean = false): View {
         if (root.orientation != LinearLayout.VERTICAL) return root
         val kids = (0 until root.childCount).map { root.getChildAt(it) }
         val ci = kids.indexOfFirst { ((it.layoutParams as? LinearLayout.LayoutParams)?.weight ?: 0f) > 0f }
         if (ci < 0) return root
         root.removeAllViews()
-        val sc = GlassScaffold(root.context, kids[ci], floatBottom)
-        // Bilah atas semua layar: blur progresif ala iOS — penuh di belakang tombol & judul, menipis di ekor 16 dp,
-        // tanpa garis pemisah. (Beranda memakai versi tanpa ekor: bilahnya kosong.)
-        sc.topBar.fade = true
-        sc.topBar.fadeTail = root.context.dp(16)
+        val sc = GlassScaffold(root.context, kids[ci], floatBottom, floatTop)
+        // Bilah atas: blur progresif ala iOS — penuh di belakang tombol & judul, menipis di ekor 16 dp, tanpa garis
+        // pemisah (Beranda memakai versi tanpa ekor: bilahnya kosong). Kapsul melayang memakai kaca cair biasa.
+        if (!floatTop) {
+            sc.topBar.fade = true
+            sc.topBar.fadeTail = root.context.dp(16)
+        }
         sc.background = root.background
         (root.background as? ColorDrawable)?.color?.let { sc.topBar.baseColor = it; sc.bottomBar.baseColor = it; sc.miniBar.baseColor = it }
         val thin = root.context.dp(2)

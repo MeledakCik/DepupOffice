@@ -484,7 +484,8 @@ class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
     fun gap() = addView(View(context), LayoutParams(0, 1, 1f))
 
     fun addTab(index: Int, iconRes: Int, label: String, onTap: () -> Unit) {
-        val ic = context.icon(iconRes, C.MUTED, 22)
+        // tab tak terpilih: warna teks utama (putih di tema gelap, hitam di tema terang), bukan abu — jelas di atas kaca
+        val ic = context.icon(iconRes, C.TEXT, 22)
         val lb = context.tv(label, 14f, C.ON_PRIMARY, true).apply {
             isSingleLine = true   // saat menyempit, teks terpotong rapi — tidak pindah baris
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -592,7 +593,8 @@ class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
 
     /**
      * Ikon berganti warna mengikuti seberapa tertutup lensa — tab mana pun yang sedang dilewati, seperti lensa iOS
-     * (berpindah halus, bukan saklar) — dan membesar sedikit selama lensa terangkat. Di atas kapsul solid isi tab
+     * (berpindah halus, bukan saklar) — dan membesar sedikit selama lensa terangkat. Tab tak terpilih memakai warna teks
+     * utama (putih di tema gelap, hitam di tema terang). Di atas kapsul solid isi tab
      * putih; di atas lensa kaca bening isi tab berwarna merek (biru), berpindah halus mengikuti [PillIndicator.lift].
      * Nama tab hanya tampak di bagian yang tertutup pil — tidak pernah muncul abu lalu berganti warna.
      */
@@ -602,7 +604,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
         val onLens = mixColor(C.ON_PRIMARY, C.PRIMARY, lift)
         for (t in tabs) {
             if (r == null) {
-                val ci = if (t.index == selected) C.ON_PRIMARY else C.MUTED
+                val ci = if (t.index == selected) C.ON_PRIMARY else C.TEXT
                 if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
                 if (t.icon.scaleX != 1f) { t.icon.scaleX = 1f; t.icon.scaleY = 1f }
                 continue
@@ -611,7 +613,7 @@ class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
             val il = px + t.icon.left
             val iw = t.icon.width.toFloat()
             val cov = cover(r, il + iw * 0.3f, il + iw * 0.7f)
-            val ci = mixColor(C.MUTED, onLens, cov)
+            val ci = mixColor(C.TEXT, onLens, cov)
             if (ci != t.iconColor) { t.iconColor = ci; t.icon.setColorFilter(ci) }
             // pembesaran lensa: ikon di bawah lensa yang terangkat tampak membesar
             val sc = if (realGlass) 1f else 1f + 0.18f * lift * cov   // shader membesarkan sendiri

@@ -567,11 +567,13 @@ class ScanEditActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(C.BG) }
 
         // ----- bar atas -----
-        // tanpa latar sendiri: kaca bilah atas (Glass.scaffold) yang tampil, sama seperti layar lain
+        // tanpa latar sendiri: kapsul kaca cair melayang (Glass.scaffold floatTop) seperti navigasi Beranda — bukan blur
+        // progresif, yang di atas foto & tombol biru hanya tampak sebagai noda buram. Jarak dalam 6 dp: tombol tutup &
+        // "Lanjut" sepusat dengan ujung kapsul.
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(8), dp(16), dp(8))
+            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
         bar.add(icon(R.drawable.ic_close, C.TEXT, 24).asButton("Tutup editor scan").apply {
             setOnClickListener { askDiscard() }
@@ -806,7 +808,7 @@ class ScanEditActivity : AppCompatActivity() {
             .also { (foot.getChildAt(foot.childCount - 1).layoutParams as LinearLayout.LayoutParams).marginStart = dp(8) }
         root.add(foot)
 
-        setContentView(Glass.scaffold(root))
+        setContentView(Glass.scaffold(root, floatTop = true))
         onBackPressedDispatcher.addCallback(this, PreviewBack(this) { askDiscard() })
         paintFilters()
         show()
