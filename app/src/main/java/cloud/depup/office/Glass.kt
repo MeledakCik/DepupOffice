@@ -602,7 +602,26 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
                 canvas.restoreToCount(sl)
             } else drawLight(canvas, top, dark)
         }
+        drawHairline(canvas, top, dark, mat)
         super.dispatchDraw(canvas)
+    }
+
+    /**
+     * Garis luar abu sangat tipis (±0,5 dp) di sekeliling kaca berbentuk kapsul — kaca cair maupun biasa — supaya
+     * batasnya tetap terbaca di atas latar sewarna. Terang: abu gelap samar; gelap: abu terang samar.
+     */
+    private fun drawHairline(canvas: Canvas, top: Float, dark: Boolean, mat: Float) {
+        if (corner <= 0f) return
+        val w = max(width - trimRight, height - top)
+        val h = height.toFloat()
+        val sw = resources.displayMetrics.density * 0.5f
+        val r = min(corner, (h - top) / 2f)
+        line.style = Paint.Style.STROKE; line.strokeWidth = sw; line.isAntiAlias = true
+        val a = ((if (dark) 46 else 34) * mat).roundToInt()
+        line.color = if (dark) Color.argb(a, 200, 200, 200) else Color.argb(a, 60, 60, 60)
+        val i = sw / 2f
+        canvas.drawRoundRect(i, top + i, w - i, h - i, max(0f, r - i), max(0f, r - i), line)
+        line.style = Paint.Style.FILL
     }
 
     /**
@@ -656,12 +675,6 @@ open class GlassSurface(ctx: Context) : FrameLayout(ctx) {
                     intArrayOf(white(if (dark) 24 else 44), white(0), white(if (dark) 8 else 14)),
                     floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
                 inner.strokeWidth = dp(6).toFloat()
-            }
-            if (!dark) {   // garis luar tipis: batas kapsul tetap jelas di atas latar putih
-                line.style = Paint.Style.STROKE; line.strokeWidth = 1f; line.isAntiAlias = true
-                line.color = Color.argb(28, 0, 0, 0)
-                canvas.drawRoundRect(0.5f, top + 0.5f, w - 0.5f, h - 0.5f, r, r, line)
-                line.style = Paint.Style.FILL
             }
             val gi = inner.strokeWidth / 2f
             canvas.drawRoundRect(gi, top + gi, w - gi, h - gi, max(0f, r - gi), max(0f, r - gi), inner)
