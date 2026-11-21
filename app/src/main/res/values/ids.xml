@@ -12,4 +12,6 @@
     <item name="swap_anim" type="id" />
     <!-- OfficeView: ukuran halaman dokumen (pt) dari @page, untuk "Simpan sebagai PDF" & cetak. -->
     <item name="page_pt" type="id" />
+    <!-- Motion.springPress: pegas fisika tekan-lepas milik tampilan. -->
+    <item name="press_spring" type="id" />
 </resources>
