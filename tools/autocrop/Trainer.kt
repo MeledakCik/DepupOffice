@@ -128,9 +128,10 @@ object Trainer {
         println("penilaian pertama ${(System.currentTimeMillis() - t1) / 1000} s")
         // [0] pangkat tepi, [1] sisi terlemah, [2] keseragaman, [3] mirip kertas, [4] benda gelap, [5] kontras, [6] luas,
         // [7] jauh dari tengah, [8] 2 sisi di bingkai, [9] isi/tinta, [10] skala tinta, [11] kesejajaran rata-rata,
-        // [12] kesejajaran sisi terlemah, [13] MIN_SCORE, [14] ALIGN_DROP, [15] MESSY, [16] INNER_AL
-        val lo = floatArrayOf(0.5f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0.5f, 0f, 0.01f, 0f, 0f, 0.02f, 0f, 0f, 0.2f)
-        val hi = floatArrayOf(4f, 1f, 0.95f, 0.95f, 4f, 0.95f, 1.2f, 0.9f, 1f, 0.95f, 0.12f, 0.95f, 0.95f, 0.3f, 0.6f, 0.8f, 0.8f)
+        // [12] kesejajaran sisi terlemah, [13] tinta pengganti lembar polos bersih, [14] MIN_SCORE, [15] ALIGN_DROP,
+        // [16] MESSY, [17] INNER_AL
+        val lo = floatArrayOf(0.5f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0.5f, 0f, 0.01f, 0f, 0f, 0f, 0.02f, 0f, 0f, 0.2f)
+        val hi = floatArrayOf(4f, 1f, 0.95f, 0.95f, 4f, 0.95f, 1.2f, 0.9f, 1f, 0.95f, 0.12f, 0.95f, 0.95f, 0.15f, 0.3f, 0.6f, 0.8f, 0.8f)
         val fixed = (System.getenv("FIX") ?: "").split(",").filter { it.isNotBlank() }.map { it.toInt() }.toSet()
         // titik awal ikut bersaing: hasil latih yang tidak lebih baik di set uji tidak dipakai
         var best = P0.copyOf()

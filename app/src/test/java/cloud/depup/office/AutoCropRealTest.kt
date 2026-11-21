@@ -9,7 +9,8 @@ import java.util.zip.GZIPInputStream
 /**
  * Uji regresi "AI potong" dengan foto ASLI pengguna yang pernah gagal di HP (tools/autocrop/real/): sudut hasil
  * deteksi harus menutupi dokumen yang benar (IoU ≥ 0,85). Termasuk papan merah tergantung (dokumen berwarna — dulu
- * kalah oleh atap putih) dan struk yang dipegang tangan (dulu sisi kanannya melebar ke silau lampu).
+ * kalah oleh atap putih), struk yang dipegang tangan (dulu sisi kanannya melebar ke silau lampu), dan papan putih
+ * POLOS di tengah rak besi (dulu terpilih seluruh rangka: lembar tanpa tulisan dianggap bidang polos).
  *
  * Classpath uji Android tidak memuat javax.imageio, jadi yang dibaca adalah `<foto>.small.gz`: foto yang sudah
  * diperkecil persis seperti ScanAi.small (dibuat oleh `java -cp h.jar HarnessKt new realsmall <folder real>`).

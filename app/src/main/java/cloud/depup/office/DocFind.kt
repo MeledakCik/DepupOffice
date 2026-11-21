@@ -188,15 +188,28 @@ object DocFind {
      * [6] pangkat luas, [7] penalti jauh dari tengah, [8] penalti 2 sisi menempel bingkai, [9] bobot isi/tinta (bidang
      * polos — lampu, jendela, dinding — bukan dokumen), [10] pecahan tinta untuk nilai penuh, [11] bobot kesejajaran tepi
      * rata-rata, [12] bobot kesejajaran sisi terlemah (keduanya ±0: kesejajaran dipakai lewat aturan [ALIGN_DROP] &
-     * [MESSY], yang ternyata lebih baik pada set uji daripada sebagai faktor nilai).
+     * [MESSY], yang ternyata lebih baik pada set uji daripada sebagai faktor nilai), [13] isi/tinta pengganti untuk lembar
+     * polos bersih ([cleanBlank]).
      */
-    @JvmField val W = floatArrayOf(1.945f, 0f, 0.662f, 0f, 0.6f, 0.285f, 0.49f, 0.299f, 0.916f, 0.95f, 0.12f, 0.047f, 0f)
+    @JvmField val W = floatArrayOf(1.945f, 0f, 0.662f, 0f, 0.6f, 0.285f, 0.49f, 0.299f, 0.916f, 0.95f, 0.12f, 0.047f, 0f, 0.12f)
 
     /**
      * Ambang perbandingan nilai antar-kandidat dirancang untuk skala lama (tepi pangkat 2). Setelah bobot dilatih,
      * skala nilai berubah; [rr] menerjemahkan ambang lama ke skala baru supaya aturannya tetap sama ketatnya.
      */
     private fun rr(r: Float, P: FloatArray = W): Float = Math.pow(r.toDouble(), (P[0] / 2f).toDouble()).toFloat()
+
+    /**
+     * Lembar POLOS yang bersih: keempat tepi tegas & lurus, isinya rata seperti kertas, tidak menempel bingkai dan tidak
+     * silau. Kertas kosong / papan putih di tengah rak — bukan lampu atau jendela (terang jenuh) dan bukan dinding
+     * (menempel bingkai). Tanpa tulisan, lembar seperti ini dulu dianggap "bidang polos" dan kalah oleh wilayah ramai.
+     */
+    internal fun cleanBlank(f: FloatArray) =
+        f[3] >= 0.95f && f[4] >= 0.9f && f[0] >= 0.85f && f[11] >= 0.85f && f[2] == 0f && f[5] in 120f..240f
+
+    /** Isi/tinta efektif: lembar polos bersih mendapat kelonggaran [W] indeks 13 (ikut dilatih; 0 = tanpa kelonggaran). */
+    internal fun inkOf(f: FloatArray, P: FloatArray): Float =
+        if (P.size > 13 && cleanBlank(f)) max(f[9], P[13]) else f[9]
 
     /**
      * Nilai kandidat dari fitur mentahnya [f] (urutan seperti [debugFeat]) dengan bobot [P]. Satu-satunya rumus
@@ -210,7 +223,7 @@ object DocFind {
         val darkF = if (med < 60) 0.45f else if (med < 90) 0.75f else 1f
         val centerF = 1f - P[7] * min(1f, f[8])
         // isi: dokumen hampir selalu memuat tulisan/gambar; bidang polos (lampu, jendela, dinding) tidak
-        val ink = min(1f, f[9] / max(1e-3f, P[10]))
+        val ink = min(1f, inkOf(f, P) / max(1e-3f, P[10]))
         return Math.pow(edge.toDouble(), P[0].toDouble()).toFloat() * (1f - P[2] + P[2] * f[3]) * (1f - P[3] + P[3] * f[4]) *
             Math.pow(darkF.toDouble(), P[4].toDouble()).toFloat() * (1f - P[5] + P[5] * f[6]) *
             Math.pow(f[7].toDouble(), P[6].toDouble()).toFloat() * centerF * (1f - P[9] + P[9] * ink) *
@@ -339,7 +352,7 @@ object DocFind {
             val cur = win
             val inner = scored.filter {
                 it.area < cur.area * 0.8f && it.edge >= 0.7f && it.f[3] >= cur.f[3] + 0.3f && it.f[11] >= cur.f[11] &&
-                    it.f[9] >= 0.03f && it.s >= cur.s * rr(0.5f, P) && contains(cur.q, it.q, 0.02f * max(w, h))
+                    inkOf(it.f, P) >= 0.03f && it.s >= cur.s * rr(0.5f, P) && contains(cur.q, it.q, 0.02f * max(w, h))
             }.maxByOrNull { it.s }
             if (inner != null) {
                 debugParts?.invoke("INNER %s s=%.3f hom=%.2f al=%.2f".format(key(inner.q), inner.s, inner.f[3], inner.f[11]))
@@ -354,7 +367,7 @@ object DocFind {
             val cur = win
             val inner = scored.filter {
                 it.area < cur.area * 0.9f && it.area > cur.area * 0.45f && it.edge >= 0.85f &&
-                    it.f[11] >= max(0.8f, cur.f[11] + INNER_AL) && it.f[3] >= cur.f[3] + 0.1f && it.f[9] >= 0.03f &&
+                    it.f[11] >= max(0.8f, cur.f[11] + INNER_AL) && it.f[3] >= cur.f[3] + 0.1f && inkOf(it.f, P) >= 0.03f &&
                     it.f[8] <= cur.f[8] + 0.05f && it.s >= cur.s * rr(0.95f, P) && contains(cur.q, it.q, 0.02f * max(w, h))
             }.maxByOrNull { it.s }
             if (inner != null) {
@@ -373,6 +386,9 @@ object DocFind {
                     // sisi-sisi yang lebih besar harus tetap tepi lurus yang nyata — bukan batas kabur silau/latar terang di
                     // samping struk yang dipegang (yang juga "terang seperti kertas")
                     it.f[11] >= cur.f[11] - ALIGN_DROP &&
+                    // lembar polos bersih hanya diperluas bila tambahannya juga kertas (halaman/formulir yang sama),
+                    // bukan rak, jaring besi, atau latar di sekelilingnya
+                    (!cleanBlank(cur.f) || gt.memo.getOrPut("X" + key(it.q) + "|" + key(cur.q)) { extraIsPaper(gt.img, it.q, cur.q) } as Boolean) &&
                     // hampir seri tapi lebih besar & tepinya sama tegas: dokumen utuh (pita judul faktur ikut)
                     ((it.edge >= 0.85f && it.edge >= cur.edge - 0.05f && it.s >= cur.s * rr(0.92f, P)) ||
                      (it.area > cur.area * 1.25f && it.edge >= 0.85f && it.s >= cur.s * rr(if (it.edge >= cur.edge + 0.1f) 0.5f else 0.8f, P)) ||

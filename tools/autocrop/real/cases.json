@@ -1,5 +1,6 @@
 [
 {"file": "user1.png", "quad": [0.272, 0.289, 0.729, 0.293, 0.82, 0.768, 0.272, 0.786]},
 {"file": "user2.png", "quad": [0.262, 0.3608, 0.732, 0.3464, 0.7518, 0.5337, 0.2048, 0.5498], "note": "papan merah tergantung (dokumen berwarna) — dulu terdeteksi lampu atap putih di bawahnya"},
-{"file": "user3.png", "quad": [0.3681, 0.4032, 0.6078, 0.3882, 0.6372, 0.5848, 0.3989, 0.5938], "note": "struk dipegang tangan di bawah papan merah — dulu sisi kanan melebar ke silau lampu"}
+{"file": "user3.png", "quad": [0.3681, 0.4032, 0.6078, 0.3882, 0.6372, 0.5848, 0.3989, 0.5938], "note": "struk dipegang tangan di bawah papan merah — dulu sisi kanan melebar ke silau lampu"},
+{"file": "user4.png", "quad": [0.4134, 0.3345, 0.7064, 0.3255, 0.6820, 0.6670, 0.3945, 0.6491], "note": "papan putih POLOS di tengah rak besi toko (foto miring 90°; diambil dari screenshot layar Potong mode Penuh, garis bantu & pegangan dihapus) — dulu terpilih seluruh rangka besi: lembar tanpa tulisan dianggap bidang polos"}
 ]
