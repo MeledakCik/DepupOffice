@@ -68,6 +68,16 @@ Kompilasi (Kotlin 2.2.10, sama dengan proyek):
 
 Persentase foto dengan IoU ≥ 0,85.
 
+### 21-11-2026 (2) — lembar POLOS di tempat ramai (`real/user4`)
+
+Foto asli pengguna: papan putih polos di tengah rak besi toko — yang terpilih seluruh rangka besi (IoU 0,17). Kandidat
+yang pas (IoU 0,97, keempat tepi sempurna) bernilai isi/tinta 0, jadi dihukum ±20× sebagai "bidang polos" (lampu,
+jendela, dinding); aturan "lebih besar" lalu memperluasnya ke rangka. Perbaikan: `cleanBlank` — lembar polos bersih
+(tepi tegas & lurus di keempat sisi, isi rata seperti kertas, tidak menempel bingkai, median 120–240 alias tidak silau
+seperti lampu/jendela) mendapat isi/tinta pengganti `W[13]` = 0,12 dan hanya boleh diperluas bila tambahannya juga
+kertas (`extraIsPaper`). Hasil: `user4` 0,17 → 0,95; semua set lain TIDAK berubah (6: 218, 7: 144, 8: 89, 9: 49,
+10: 184, 11: 114, mock 14/17, foto asli 4/4).
+
 ### 21-11-2026 — foto contoh label, kartu, brosur & koran (`mock/`)
 
 | set | sebelum | sesudah |
