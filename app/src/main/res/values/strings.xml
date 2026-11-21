@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">Depup Office</string>
+    <string name="widget_note_label">Catatan</string>
+    <string name="widget_note_desc">Satu catatan atau daftar centang di layar utama. Item bisa dicentang langsung dari widget.</string>
+    <string name="widget_notes_label">Daftar catatan</string>
+    <string name="widget_notes_desc">Catatan terbaru, plus tombol tulis catatan dan daftar centang baru.</string>
+    <string name="widget_note_pick">Ketuk untuk memilih catatan Depup yang tampil di sini.</string>
+    <string name="widget_notes_empty">Belum ada catatan.\nKetuk + untuk menulis.</string>
+    <string name="widget_notes_open">Buka semua catatan</string>
+    <string name="widget_new_note">Catatan baru</string>
+    <string name="widget_new_list">Daftar centang baru</string>
 </resources>

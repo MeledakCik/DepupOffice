@@ -1400,6 +1400,24 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         p.add(twoCols(t1, t2), top = 12)
         statValue(t1)?.countUp(nRecent, 260); statValue(t2)?.countUp(nOut, 300)
 
+        // Catatan: terbaru (disematkan dulu) di korsel kertas tempel; tekan lama = opsi (warna, widget layar utama, …)
+        val notes = Notes.all(this)
+        p.add(sectionTitle("Catatan", if (notes.isNotEmpty()) "Semua" else null) {
+            startActivity(Intent(this, NotesActivity::class.java))
+        }, top = 22)
+        if (notes.isEmpty()) {
+            p.add(actionRow(R.drawable.ic_note, "Tulis catatan", "Catatan & daftar centang, bisa dipasang di layar utama HP",
+                C.AMBER, C.AMBER_BG, shadow = false) { startActivity(Intent(this, NotesActivity::class.java)) }, top = 8)
+        } else {
+            val cards = ArrayList<View>()
+            cards.add(newNoteCard(156) { openNote(-1L) })
+            notes.take(8).forEach { n ->
+                cards.add(noteCard(n, 156, 6, onOpen = { openNote(n.id) }, onLong = { noteActions(n.id, { render() }, { render() }) }))
+            }
+            val nc = carousel(cards)
+            p.add(nc, top = 6); bleed(nc)
+        }
+
         // Buka berkas: 4 pintasan sejajar
         p.add(sectionTitle("Buka berkas"), top = 22)
         fun quick(res: Int, fg: Int, bg: Int, label: String, desc: String, f: () -> Unit): View = vbox().apply {
@@ -1821,6 +1839,14 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             tile(R.drawable.ic_download, C.PRIMARY, C.PRIMARY_C, "Simpan ke HP", "Salin ke Documents/DepUp Office") { exportFlow() },
             tile(R.drawable.ic_print, C.PRIMARY, C.PRIMARY_C, "Cetak", "Printer atau simpan PDF") {
                 pickFile(arrayOf(PDF)) { u -> printPdfUri(u, Files.nameOf(this, u)) }
+            }
+        )
+        section("Catatan",
+            tile(R.drawable.ic_note, C.AMBER, C.AMBER_BG, "Catatan", "Teks & daftar centang, tersimpan di HP") {
+                startActivity(Intent(this, NotesActivity::class.java))
+            },
+            tile(R.drawable.ic_widget, C.AMBER, C.AMBER_BG, "Widget catatan", "Pasang catatan di layar utama", "Baru", C.AMBER, C.AMBER_BG) {
+                noteWidgetSheet()
             }
         )
     }

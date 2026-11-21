@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Satu item daftar centang di widget: seluruh baris = target sentuh untuk mencentang. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/row"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
+    android:gravity="top"
+    android:minHeight="36dp"
+    android:orientation="horizontal"
+    android:paddingTop="7dp"
+    android:paddingBottom="7dp"
+    tools:ignore="UseAppTint">
+
+    <ImageView
+        android:id="@+id/box"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_checkbox"
+        android:tint="@color/widget_text" />
+
+    <TextView
+        android:id="@+id/text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:fontFamily="@font/funnel_display_regular"
+        android:importantForAccessibility="no"
+        android:maxLines="3"
+        android:textColor="@color/widget_text"
+        android:textSize="14sp" />
+</LinearLayout>

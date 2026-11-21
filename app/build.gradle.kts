@@ -155,4 +155,6 @@ dependencies {
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
     testImplementation("junit:junit:4.13.2")
+    // org.json di android.jar hanya kerangka kosong saat uji JVM: pakai implementasi aslinya (NotesTest)
+    testImplementation("org.json:json:20240303")
 }

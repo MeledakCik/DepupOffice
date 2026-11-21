@@ -15,4 +15,11 @@
     <color name="ic_launcher_background">#0037FF</color>
     <color name="logo_body">#111111</color>
     <color name="splash_bg">#111111</color>
+    <!-- Widget catatan (pratinjau & tampilan awal; saat berjalan warnanya diatur NoteWidget.kt / WidgetPaint) -->
+    <color name="widget_surface">#FFFFFF</color>
+    <color name="widget_row">#F1F0EC</color>
+    <color name="widget_text">#111111</color>
+    <color name="widget_muted">#5C5953</color>
+    <color name="widget_primary">#1652F6</color>
+    <color name="widget_yellow">#FFF0B3</color>
 </resources>

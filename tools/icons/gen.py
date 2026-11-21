@@ -290,6 +290,44 @@ def _():
     return plus(12, 12, 7.2, 2.4)
 
 
+@icon("checkbox")
+def _():
+    # kotak centang kosong (daftar centang di Catatan & widget)
+    return outline(squircle(3.4, 3.4, 20.6, 20.6, 4.4), SW)
+
+
+@icon("checkbox_on")
+def _():
+    # kotak centang terisi: kotak solid dengan lubang centang
+    return knock(squircle(3.0, 3.0, 21.0, 21.0, 4.6), line(check_pts(12, 12, 1.05), KW))
+
+
+@icon("checklist")
+def _():
+    # daftar centang: dua baris tercentang + satu baris berpoin
+    c1 = line([(3.2, 6.6), (5.3, 8.6), (8.9, 4.8)], 2.3)
+    c2 = line([(3.2, 12.6), (5.3, 14.6), (8.9, 10.8)], 2.3)
+    dot = circle(5.8, 18.6, 1.8)
+    rows = [line([(12.2, y), (20.6, y)], 2.3) for y in (6.6, 12.6, 18.6)]
+    return unary_union([c1, c2, dot] + rows)
+
+
+@icon("palette")
+def _():
+    # palet cat: piringan dengan lekuk ibu jari & empat titik warna (lubang)
+    disc = circle(12, 12, 9.4).difference(circle(15.6, 16.6, 2.9))
+    disc = smooth(disc, 0.6)
+    return knock(disc, circle(7.4, 12.0, 1.55), circle(9.0, 7.6, 1.55), circle(13.4, 6.4, 1.55), circle(17.0, 9.4, 1.55))
+
+
+@icon("widget")
+def _():
+    # widget layar utama: tiga ubin + tanda tambah (pasang ke layar utama)
+    tiles = unary_union([squircle(2.6, 2.6, 10.9, 10.9, 2.6), squircle(13.1, 2.6, 21.4, 10.9, 2.6),
+                         squircle(2.6, 13.1, 10.9, 21.4, 2.6)])
+    return unary_union([tiles, plus(17.25, 17.25, 3.9, 2.4)])
+
+
 @icon("minus")
 def _():
     # pasangan ic_plus (pengatur jumlah salinan cetak, dsb.)
