@@ -83,24 +83,73 @@ class SpringInterpolator(private val zeta: Float, private val omega: Float) : an
 }
 
 /**
- * Tekan-lepas seperti jeli: turun cepat ke [to] saat ditekan, dilepas memantul kembali ke 1 ([Motion.SPRING]).
- * Lewat StateListAnimator (status "ditekan") — TIDAK memasang pendengar sentuh, jadi aman dipakai bersama
- * ketukan, seret, tekan lama & ripple apa pun.
+ * Pegas fisika untuk [springPress]: skala bergerak sebagai massa-pegas sungguhan (bukan kurva berdurasi tetap), jadi
+ * kecepatannya terbawa saat arah berubah — tekan lalu cepat dilepas tetap mulus, seperti di iPhone.
+ */
+private class PressSpring(private val v: View) : android.view.Choreographer.FrameCallback {
+    private var x = 1f
+    private var vel = 0f
+    private var target = 1f
+    private var k = 1f
+    private var zeta = 1f
+    private var last = 0L
+    private var running = false
+
+    fun go(t: Float, stiffness: Float, damping: Float) {
+        target = t; k = stiffness; zeta = damping
+        if (!Motion.on() || !v.isAttachedToWindow) {
+            stop(); x = t; vel = 0f; v.scaleX = t; v.scaleY = t; return
+        }
+        if (!running) {
+            x = v.scaleX
+            running = true
+            last = 0L
+            android.view.Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
+    private fun stop() {
+        running = false
+        android.view.Choreographer.getInstance().removeFrameCallback(this)
+    }
+
+    override fun doFrame(now: Long) {
+        if (!running) return
+        var dt = if (last == 0L) 1f / 60f else ((now - last) / 1e9f).coerceIn(0f, 1f / 30f)
+        last = now
+        val c = 2f * zeta * kotlin.math.sqrt(k)
+        while (dt > 0f) {   // langkah kecil (2 ms) supaya stabil di layar 60–144 Hz
+            val h = minOf(dt, 0.002f)
+            vel += (-k * (x - target) - c * vel) * h
+            x += vel * h
+            dt -= h
+        }
+        if (kotlin.math.abs(x - target) < 4e-4f && kotlin.math.abs(vel) < 4e-3f) {
+            x = target; vel = 0f; running = false
+        }
+        v.scaleX = x; v.scaleY = x
+        if (running) android.view.Choreographer.getInstance().postFrameCallback(this)
+    }
+}
+
+/**
+ * Tekan-lepas seperti jeli ala iPhone, memantul DUA arah: saat jari menekan, tampilan mengecil ke [to] dengan pegas
+ * (sedikit melewati lalu mengendap — terasa kenyal walau masih dipegang); saat dilepas memantul kembali melewati 1.
+ * Pemicu lewat StateListAnimator (status "ditekan") — TIDAK memasang pendengar sentuh, jadi aman dipakai bersama
+ * ketukan, seret, tekan lama & ripple apa pun, dan tetap menghormati jeda tekan di dalam daftar gulir.
  */
 fun View.springPress(to: Float = 0.97f) {
-    val down = android.animation.AnimatorSet().apply {
-        playTogether(android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_X, to),
-            android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_Y, to))
-        duration = Motion.PRESS_DOWN; interpolator = Motion.STANDARD
-    }
-    val up = android.animation.AnimatorSet().apply {
-        playTogether(android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_X, 1f),
-            android.animation.ObjectAnimator.ofFloat(this@springPress, View.SCALE_Y, 1f))
-        duration = Motion.SPRING_MS; interpolator = Motion.SPRING
+    val spring = (getTag(R.id.press_spring) as? PressSpring) ?: PressSpring(this).also { setTag(R.id.press_spring, it) }
+    fun trigger(f: () -> Unit) = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 0L
+        addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationStart(animation: Animator) = f()
+        })
     }
     stateListAnimator = android.animation.StateListAnimator().apply {
-        addState(intArrayOf(android.R.attr.state_pressed, android.R.attr.state_enabled), down)
-        addState(intArrayOf(), up)
+        // ditekan: cepat & kenyal (lewat ±15% lalu mengendap); dilepas: lebih lentur, pantulan ±20%
+        addState(intArrayOf(android.R.attr.state_pressed, android.R.attr.state_enabled), trigger { spring.go(to, 900f, 0.5f) })
+        addState(intArrayOf(), trigger { spring.go(1f, 480f, 0.45f) })
     }
 }
 
