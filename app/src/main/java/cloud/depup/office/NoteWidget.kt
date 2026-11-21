@@ -27,7 +27,7 @@ internal object WidgetPaint {
     const val ROW_L = 0xFFF1F0EC.toInt()
     const val ROW_D = 0xFF272725.toInt()
 
-    private fun systemDark() =
+    fun systemDark() =
         (Resources.getSystem().configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
     fun set(v: RemoteViews, id: Int, method: String, light: Int, dark: Int) {
@@ -76,6 +76,82 @@ internal object WidgetPaint {
 }
 
 /**
+ * Tepi kaca cair untuk widget, digambar sesuai ukuran widget: kilau spekular di tepi (terang di kiri-atas & kanan-bawah,
+ * seperti kaca Depup), cahaya dalam yang tebal & lembut untuk kesan tebal, bayangan dalam tipis di bawah, dan pinggiran
+ * warna (dispersi) halus. Widget tidak bisa membaca/mengaburkan wallpaper di belakangnya, jadi refraksi & blur latar —
+ * yang ada di kaca dalam aplikasi — tidak mungkin di sini; sisanya dibuat semirip mungkin.
+ */
+internal object WidgetGlass {
+    fun apply(ctx: Context, v: RemoteViews, id: Int, wDp: Int, hDp: Int) {
+        if (wDp <= 0 || hDp <= 0) return   // ukuran belum diketahui: pakai drawable bawaan (widget_glass)
+        val bmp = try { render(ctx, wDp, hDp) } catch (_: Throwable) { null } ?: return
+        v.setImageViewBitmap(id, bmp)
+        // tema gelap: kilau lebih redup (sama seperti kaca dalam aplikasi)
+        if (Build.VERSION.SDK_INT >= 31) v.setColorInt(id, "setImageAlpha", 255, 165)
+        else v.setInt(id, "setImageAlpha", if (WidgetPaint.systemDark()) 165 else 255)
+    }
+
+    private fun rounded(l: Float, t: Float, r: Float, b: Float, rad: Float) =
+        android.graphics.Path().apply { addContinuousRect(l, t, r, b, rad.coerceAtLeast(0f)) }
+
+    fun render(ctx: Context, wDp: Int, hDp: Int): android.graphics.Bitmap {
+        val d = ctx.resources.displayMetrics.density
+        // sisi terpanjang maks. 900 px: tajam di layar, ringan dikirim ke peluncur
+        val s = minOf(d, 900f / maxOf(wDp, hDp))
+        val w = (wDp * s).toInt().coerceAtLeast(16)
+        val h = (hDp * s).toInt().coerceAtLeast(16)
+        val radDp = if (Build.VERSION.SDK_INT >= 31)
+            ctx.resources.getDimension(android.R.dimen.system_app_widget_background_radius) / d else 22f
+        val rad = minOf(radDp * s, minOf(w, h) / 2f)
+        val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(bmp)
+        val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        val clamp = android.graphics.Shader.TileMode.CLAMP
+        val wf = w.toFloat(); val hf = h.toFloat()
+        val shape = rounded(0f, 0f, wf, hf, rad)
+
+        c.save()
+        c.clipPath(shape)
+        // volume: atas sedikit terang, bawah sedikit gelap
+        p.shader = android.graphics.LinearGradient(0f, 0f, 0f, hf,
+            intArrayOf(0x24FFFFFF, 0x00FFFFFF, 0x00000000, 0x1A000000), floatArrayOf(0f, 0.38f, 0.7f, 1f), clamp)
+        c.drawRect(0f, 0f, wf, hf, p)
+        // cahaya dalam tebal & lembut di sepanjang tepi (kesan kaca tebal yang membengkokkan cahaya)
+        val glow = 14f * s
+        p.style = android.graphics.Paint.Style.STROKE
+        p.strokeWidth = glow
+        p.maskFilter = android.graphics.BlurMaskFilter(glow * 0.9f, android.graphics.BlurMaskFilter.Blur.NORMAL)
+        p.shader = android.graphics.LinearGradient(0f, 0f, wf, hf,
+            intArrayOf(0x99FFFFFF.toInt(), 0x1AFFFFFF, 0x0DFFFFFF, 0x66FFFFFF), floatArrayOf(0f, 0.4f, 0.6f, 1f), clamp)
+        c.drawPath(shape, p)
+        // bayangan dalam tipis di tepi bawah
+        p.strokeWidth = 6f * s
+        p.maskFilter = android.graphics.BlurMaskFilter(5f * s, android.graphics.BlurMaskFilter.Blur.NORMAL)
+        p.shader = android.graphics.LinearGradient(0f, hf * 0.6f, 0f, hf,
+            intArrayOf(0x00000000, 0x2E000000), null, clamp)
+        c.drawPath(shape, p)
+        p.maskFilter = null
+        c.restore()
+
+        // dispersi: pinggiran biru di kiri-atas, merah muda di kanan-bawah, bergeser setengah piksel
+        val sw = 1.2f * s
+        p.style = android.graphics.Paint.Style.STROKE
+        p.strokeWidth = sw
+        p.shader = android.graphics.LinearGradient(0f, 0f, wf, hf,
+            intArrayOf(0x5970C8FF, 0x00000000, 0x00000000, 0x4DFF8FC8), floatArrayOf(0f, 0.35f, 0.65f, 1f), clamp)
+        c.drawPath(rounded(sw * 1.4f, sw * 1.4f, wf - sw * 1.4f, hf - sw * 1.4f, rad - sw * 1.4f), p)
+        // kilau spekular di tepi: paling terang kiri-atas, pantulan kedua kanan-bawah
+        val rim = 1.6f * s
+        p.strokeWidth = rim
+        p.shader = android.graphics.LinearGradient(0f, 0f, wf, hf,
+            intArrayOf(0xF2FFFFFF.toInt(), 0x40FFFFFF, 0x14FFFFFF, 0x26FFFFFF, 0xBFFFFFFF.toInt()),
+            floatArrayOf(0f, 0.22f, 0.5f, 0.78f, 1f), clamp)
+        c.drawPath(rounded(rim / 2, rim / 2, wf - rim / 2, hf - rim / 2, rad - rim / 2), p)
+        return bmp
+    }
+}
+
+/**
  * Widget SATU catatan (seperti kertas tempel): judul + isi yang bisa digulir. Daftar centang bisa dicentang langsung
  * dari widget; ketuk judul/isi teks membuka catatan. Widget yang belum memilih catatan (atau catatannya dihapus)
  * meminta pengguna memilih lewat [NoteWidgetConfigActivity].
@@ -108,7 +184,8 @@ class NoteWidget : AppWidgetProvider() {
             val v = RemoteViews(ctx.packageName, R.layout.widget_note)
             val nid = NoteWidgets.noteFor(ctx, id)
             val n = if (nid >= 0) Notes.get(ctx, nid) else null
-            val (_, hDp) = WidgetPaint.size(ctx, id)
+            val (wDp, hDp) = WidgetPaint.size(ctx, id)
+            WidgetGlass.apply(ctx, v, R.id.rim, wDp, hDp)
             // pendek (±1 baris petak): judul saja, satu baris — ketuk membuka catatan
             val compact = hDp in 1..109
             v.setInt(R.id.title, "setMaxLines", if (compact) 1 else 2)
@@ -272,6 +349,7 @@ class NotesListWidget : AppWidgetProvider() {
         private fun build(ctx: Context, id: Int): RemoteViews {
             val v = RemoteViews(ctx.packageName, R.layout.widget_notes)
             val (wDp, hDp) = WidgetPaint.size(ctx, id)
+            WidgetGlass.apply(ctx, v, R.id.rim, wDp, hDp)
             v.setViewVisibility(R.id.add_list, if (wDp in 1..159) View.GONE else View.VISIBLE)
             v.setViewVisibility(R.id.count, if (wDp in 1..129) View.GONE else View.VISIBLE)
             v.setViewVisibility(R.id.list_box, if (hDp in 1..109) View.GONE else View.VISIBLE)

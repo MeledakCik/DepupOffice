@@ -14,7 +14,7 @@
         android:layout_height="match_parent"
         android:importantForAccessibility="no"
         android:scaleType="fitXY"
-        android:alpha="0.62"
+        android:alpha="0.5"
         android:src="@drawable/widget_row_bg"
         android:tint="@color/widget_row" />
 
