@@ -19,17 +19,31 @@ android {
         applicationId = "cloud.depup.office"
         minSdk = 29
         targetSdk = 36
+        ndkVersion = "28.2.13676358"
         // versionCode = mayor*10000 + minor*100 + patch (4.1.0 -> 40100). 40000 sudah dipakai di alpha.
         versionCode = 40100
         versionName = "4.1.0"
-        // Sertifikat tambahan yang sah (mis. "App signing key" Play Console, SHA-256 dipisah koma). Opsional:
-        // tanpa ini, APK dari Play Store tetap diterima lewat pemeriksaan installer.
-        val extraCerts = (project.findProperty("DEPUP_EXTRA_CERTS") as String?) ?: System.getenv("DEPUP_EXTRA_CERTS") ?: ""
-        buildConfigField("String", "EXTRA_CERTS", "\"" + extraCerts.replace("\"", "") + "\"")
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64") }
+        externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
+        val localProps = Properties().apply {
+            val f = rootProject.file("local.properties")
+            if (f.exists()) f.inputStream().use { load(it) }
+        }
+        fun buildValue(name: String): String =
+            (project.findProperty(name) as String?) ?: System.getenv(name) ?: localProps.getProperty(name) ?: ""
+        fun javaString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        // Signing certificate hashes stay in local.properties / build environment, never in source.
+        val releaseCerts = (buildValue("DEPUP_RELEASE_CERTS").split(',') + buildValue("DEPUP_EXTRA_CERTS").split(','))
+            .map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(",")
+        buildConfigField("String", "RELEASE_CERTS", javaString(releaseCerts))
         // App hanya berbahasa Indonesia (values/ tunggal, tanpa values-xx). Tanpa baris ini, string
         // terjemahan dari AndroidX/Play Services/CameraX untuk puluhan bahasa lain tetap ikut terbundel.
         // (Sengaja TIDAK membatasi density: mipmap launcher sudah kecil, dan membatasi density
         // berisiko menghilangkan ikon yang pas untuk sebagian perangkat demi penghematan tak berarti.)
+    }
+
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
     }
 
     androidResources {

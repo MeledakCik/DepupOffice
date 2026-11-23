@@ -2,6 +2,8 @@ package cloud.depup.office
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.view.Display
@@ -12,6 +14,9 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Mode aman untuk dokumen TERKUNCI (PDF berpassword, Word "hanya bisa diedit dengan password", Dokumen Terlindungi):
@@ -105,4 +110,46 @@ class SecureGuard(private val a: Activity) {
         (a.window.decorView as ViewGroup).addView(f, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         return f
     }
+}
+
+/** Repeated, time-varying watermark for protected PDF pages. */
+internal class ProtectedWatermarkView(context: Activity, docId: String) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x44FFFFFF
+        textSize = context.dp(12).toFloat()
+        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+    }
+    private val shortId = docId.take(8)
+    private val device = Build.MODEL.orEmpty().take(24)
+    private val clock = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT)
+    private val refresh = object : Runnable {
+        override fun run() {
+            invalidate()
+            if (isAttachedToWindow) postDelayed(this, 60_000L)
+        }
+    }
+
+    init { isClickable = false; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val label = "DOC $shortId  •  $device  •  ${clock.format(Date())}"
+        val save = canvas.save()
+        canvas.rotate(-22f, width / 2f, height / 2f)
+        val stepX = (paint.measureText(label) + dp(90)).toInt().coerceAtLeast(dp(240))
+        val stepY = dp(92)
+        var y = -height
+        while (y < height * 2) {
+            var x = -width
+            while (x < width * 2) {
+                canvas.drawText(label, x.toFloat(), y.toFloat(), paint)
+                x += stepX
+            }
+            y += stepY
+        }
+        canvas.restoreToCount(save)
+    }
+
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); post(refresh) }
+    override fun onDetachedFromWindow() { removeCallbacks(refresh); super.onDetachedFromWindow() }
 }

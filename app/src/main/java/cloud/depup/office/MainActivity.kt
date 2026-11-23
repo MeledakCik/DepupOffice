@@ -3134,7 +3134,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         }
         val box = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         box.add(tv("Buat Dokumen Terlindungi", 16f, C.TEXT, true))
-        box.add(tv("Dokumen akan dibungkus dengan halaman sampul DepUp dan dienkripsi AES-256-GCM + HMAC integritas penuh. Guru dapat mengekspor PDF asli nanti dengan password edit.", 13f, C.MUTED), top = 6)
+        box.add(tv("Dokumen dienkripsi dengan kunci Android Keystore pada perangkat ini. Hanya instalasi ini yang dapat membukanya; akses hilang jika aplikasi dihapus atau data aplikasi di-reset.", 13f, C.MUTED), top = 6)
         box.add(pwField, top = 12)
         AlertDialog.Builder(this)
             .setTitle("Proteksi Dokumen")
@@ -3149,11 +3149,12 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
                 val out = Files.newOut(this, base + "_terlindungi", "pdf")
                 work("Melindungi dokumen…", {
                     val originalBytes = Files.readOrNull(this@MainActivity, uri) ?: throw IllegalStateException("Tidak bisa membaca file")
-                    ProtectedDoc.protect(originalBytes, editPw, out)
+                    try { ProtectedDoc.protect(originalBytes, editPw, out) }
+                    finally { originalBytes.fill(0) }
                 }) { res ->
                     res.onSuccess {
                         showResult("Dokumen Terlindungi Dibuat", out, PDF, "Sampul, enkripsi AES-256-GCM, integritas HMAC, dan password edit guru berhasil diterapkan.")
-                    }.onFailure { fail(it) }
+                    }.onFailure { out.delete(); fail(it) }
                 }
             }
             .setNegativeButton("Batal", null)

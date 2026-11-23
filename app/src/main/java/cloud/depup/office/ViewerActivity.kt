@@ -30,6 +30,10 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+private class ZeroingByteArrayOutputStream : java.io.ByteArrayOutputStream() {
+    fun wipe() { buf.fill(0); reset() }
+}
+
 /** Pembungkus scroll horizontal + pinch-zoom + ketuk dua kali. Zoom memperbesar lebar halaman (tajam, bukan sekadar membesarkan gambar). */
 class PinchScroll(ctx: Context) : HorizontalScrollView(ctx) {
     var target: View? = null
@@ -201,11 +205,6 @@ class ViewerActivity : AppCompatActivity() {
     private lateinit var pageBadge: TextView
     private lateinit var zoomLabel: TextView
     private var protectedBytes: ByteArray? = null
-    /**
-     * Salinan terdekripsi buatan layar INI. Hanya ini yang dihapus saat layar ditutup — dulu semua "decrypted_*" &
-     * "unlocked/" dihapus, sehingga menutup pembaca kedua merusak dokumen yang masih terbuka di pembaca pertama.
-     */
-    private val ownPlain = java.util.Collections.synchronizedList(ArrayList<java.io.File>())
     /** Proteksi Word ("hanya bisa diedit dengan password") — untuk memverifikasi password sebelum berbagi/ekspor. */
     private var docxProt: DocxProtect.Prot? = null
     /** Berkas yang dibuka pengguna (bukan salinan cache / terdekripsi). */
@@ -309,15 +308,21 @@ class ViewerActivity : AppCompatActivity() {
 
             var uri = Files.cacheCopy(this, rawUri)
             if (uri.scheme == "file") uri.path?.let { DocxProtect.of(java.io.File(it)) }?.takeIf { it.hasPassword }?.let { docxProt = it; secureDocx = true }
+            var protectedPdf: OpenedPdf? = null
             if (ProtectedDoc.isProtected(rawBytes)) {
                 protectedBytes = rawBytes
                 try {
                     val decryptedBytes = ProtectedDoc.openProtected(rawBytes)
-                    val cacheFile = java.io.File(cacheDir, "decrypted_${System.nanoTime()}.pdf")
-                    ownPlain.add(cacheFile)
-                    cacheFile.writeBytes(decryptedBytes)
-                    uri = android.net.Uri.fromFile(cacheFile)
+                    try {
+                        val fd = IntegrityNative.createSealedMemfd(decryptedBytes)
+                        if (fd < 0) throw SecurityException("Penyimpanan memori aman tidak tersedia.")
+                        protectedPdf = openPdfDescriptor(ParcelFileDescriptor.adoptFd(fd))
+                        if (protectedPdf?.renderer == null) throw SecurityException("PDF terlindungi tidak dapat dirender dari memori aman.")
+                    } finally {
+                        decryptedBytes.fill(0)
+                    }
                 } catch (e: Throwable) {
+                    protectedPdf?.close()
                     runOnUiThread {
                         if (!isFinishing && !isDestroyed) {
                             androidx.appcompat.app.AlertDialog.Builder(this)
@@ -336,12 +341,15 @@ class ViewerActivity : AppCompatActivity() {
             if (isExe(uri, Files.nameOf(this, rawUri))) exeAsPdf(uri, Files.nameOf(this, rawUri))?.let { uri = it }
             // PDF juga DIBUKA di latar: PdfRenderer membaca struktur seluruh berkas, untuk PDF ratusan halaman bisa
             // ratusan milidetik — dulu dikerjakan di main thread sehingga layar sempat membeku.
-            val pdf = openPdf(uri)
+            val pdf = protectedPdf ?: openPdf(uri)
             val u = uri
             // PDF terenkripsi: PdfRenderer menolak. Coba tanpa password (PDF yang hanya dibatasi izin), selain itu minta.
             if (pdf.locked) {
-                val dec = decryptCopy(u, "")
-                if (dec != null) { pdf.close(); val p2 = openPdf(dec); runOnUiThread { lockedSource = rawUri; if (isFinishing || isDestroyed) p2.close() else build(rawUri, dec, p2) }; return@Thread }
+                val dec = try { decryptInMemory(u, "") } catch (error: Throwable) {
+                    runOnUiThread { if (!isFinishing && !isDestroyed) { toast("Tidak bisa membuka PDF dari memori aman."); finish() } }
+                    return@Thread
+                }
+                if (dec != null) { pdf.close(); runOnUiThread { lockedSource = rawUri; if (isFinishing || isDestroyed) dec.close() else build(rawUri, u, dec) }; return@Thread }
                 runOnUiThread { if (!isFinishing && !isDestroyed) askPassword(rawUri, u, pdf, false) }
                 return@Thread
             }
@@ -351,21 +359,28 @@ class ViewerActivity : AppCompatActivity() {
         }.start()
     }
 
-    /**
-     * Salinan PDF yang sudah didekripsi (cache aplikasi, tidak pernah disimpan di luar) — dibuat dengan pembaca PDF
-     * sendiri ([PdfFile] + [PdfSave]) karena PdfRenderer tidak bisa membuka PDF terkunci. Null bila password salah.
-     */
-    private fun decryptCopy(uri: android.net.Uri, pw: String): android.net.Uri? = try {
-        val bytes = Files.readOrNull(this@ViewerActivity, uri) ?: throw IllegalStateException()
-        val f = PdfFile.open(bytes, pw)
-        if (!f.encrypted) null else {
-            val dir = java.io.File(cacheDir, "unlocked").apply { mkdirs() }
-            val out = java.io.File(dir, "buka_${System.nanoTime()}.pdf")
-            ownPlain.add(out)
-            java.io.FileOutputStream(out).use { PdfSave.write(f, it.buffered(1 shl 16)) }
-            android.net.Uri.fromFile(out)
+    /** Decrypts password PDFs into a sealed anonymous memfd; plaintext never gets a filesystem path. */
+    private fun decryptInMemory(uri: android.net.Uri, pw: String): OpenedPdf? {
+        val encryptedBytes = Files.readOrNull(this@ViewerActivity, uri) ?: return null
+        try {
+            val file = try { PdfFile.open(encryptedBytes, pw) } catch (_: Throwable) { return null }
+            if (!file.encrypted) return null
+            val output = ZeroingByteArrayOutputStream()
+            var plaintext: ByteArray? = null
+            try {
+                PdfSave.write(file, output)
+                plaintext = output.toByteArray()
+                val fd = IntegrityNative.createSealedMemfd(plaintext)
+                if (fd < 0) throw SecurityException("Penyimpanan memori aman tidak tersedia.")
+                return openPdfDescriptor(ParcelFileDescriptor.adoptFd(fd))
+            } finally {
+                plaintext?.fill(0)
+                output.wipe()
+            }
+        } finally {
+            encryptedBytes.fill(0)
         }
-    } catch (_: Throwable) { null }
+    }
 
     private fun askPassword(rawUri: android.net.Uri, uri: android.net.Uri, locked: OpenedPdf, wrong: Boolean) {
         val f = android.widget.EditText(this).apply {
@@ -379,11 +394,13 @@ class ViewerActivity : AppCompatActivity() {
             .setPositiveButton("Buka") { _, _ ->
                 val pw = f.text.toString()
                 Thread {
-                    val dec = decryptCopy(uri, pw)
+                    var openFailure: Throwable? = null
+                    val dec = try { decryptInMemory(uri, pw) } catch (error: Throwable) { openFailure = error; null }
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        if (dec == null) askPassword(rawUri, uri, locked, true)
-                        else { locked.close(); val p2 = openPdf(dec); lockedSource = rawUri; build(rawUri, dec, p2) }
+                        if (openFailure != null) { locked.close(); toast("Tidak bisa membuka PDF dari memori aman."); finish() }
+                        else if (dec == null) askPassword(rawUri, uri, locked, true)
+                        else { locked.close(); lockedSource = rawUri; build(rawUri, uri, dec) }
                     }
                 }.start()
             }
@@ -453,6 +470,22 @@ class ViewerActivity : AppCompatActivity() {
         } catch (_: Exception) {
             try { fd?.close() } catch (_: Exception) {}
             OpenedPdf(null, null, false, 0f)
+        }
+    }
+
+    /** Renders protected plaintext only from an anonymous, sealed memfd; never creates a cache file. */
+    private fun openPdfDescriptor(fd: ParcelFileDescriptor): OpenedPdf {
+        return try {
+            val r = PdfRenderer(fd)
+            var a = 0f
+            if (r.pageCount > 0) {
+                val page = r.openPage(0)
+                try { if (page.width > 0) a = page.height.toFloat() / page.width } finally { page.close() }
+            }
+            OpenedPdf(fd, r, false, a)
+        } catch (error: Throwable) {
+            try { fd.close() } catch (_: Throwable) {}
+            throw error
         }
     }
 
@@ -549,6 +582,20 @@ class ViewerActivity : AppCompatActivity() {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 val office = officeWeb != null
+                if (protectedBytes != null) {
+                    pm.menu.add(0, 1, 0, "Bagikan cadangan terenkripsi (khusus perangkat ini)")
+                    pm.menu.add(0, 6, 1, "Pengaturan Reader PDF")
+                    pm.setOnMenuItemClickListener { item ->
+                        when (item.itemId) {
+                            1 -> try { Files.share(this@ViewerActivity, srcUri ?: rawUri, mime, false) }
+                                catch (_: Exception) { toast("Tidak bisa membagikan dokumen") }
+                            6 -> showPdfSettingsSheet()
+                        }
+                        true
+                    }
+                    pm.show()
+                    return@setOnClickListener
+                }
                 // Dokumen terkunci: fitur bagikan/ekspor tetap ada tetapi meminta password pemilik/guru (lihat requirePassword).
                 // dikunci: ikon gembok dari paket ikon (bukan emoji) di ujung nama menu
                 fun locked(t: String): CharSequence = if (secure) withIcon(t, R.drawable.ic_lock, C.MUTED, 15) else t
@@ -714,6 +761,10 @@ class ViewerActivity : AppCompatActivity() {
         }
 
         root.add(stage, w = MATCH, h = 0, weight = 1f)
+        if (protectedBytes != null && isPdfLoaded) {
+            val docId = try { ProtectedDoc.documentId(protectedBytes!!) } catch (_: Throwable) { "unknown" }
+            stage.addView(ProtectedWatermarkView(this, docId), FrameLayout.LayoutParams(MATCH, MATCH))
+        }
         applyChromeDensity()
         setContentView(Glass.scaffold(root))
     }
@@ -1521,10 +1572,6 @@ class ViewerActivity : AppCompatActivity() {
     override fun onDestroy() {
         zoomAnim?.cancel()
         guard.disable()
-        // salinan terdekripsi (PDF terkunci / Dokumen Terlindungi) tidak boleh tertinggal di cache
-        try {
-            synchronized(ownPlain) { ownPlain.forEach { it.delete() }; ownPlain.clear() }
-        } catch (_: Exception) {}
         Perf.removeTrim(trimHook)
         if (::rv.isInitialized) rv.removeCallbacks(showFloats)
         try { officeWeb?.destroy() } catch (_: Exception) {}

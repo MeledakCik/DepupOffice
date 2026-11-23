@@ -196,11 +196,11 @@ object ProtectedDocumentManager {
             val tempFile = File(activity.cacheDir, "temp_prot_${System.currentTimeMillis()}.pdf")
             try {
                 PdfTools.lockLossless(activity, uri, tempFile, userPassword, ownerPw, perms)
-                val lockedBytes = tempFile.readBytes()
-
                 // Step 2: Sampul DepUp & Integritas HMAC jika diaktifkan
                 if (useCoverHmac) {
-                    ProtectedDoc.protect(lockedBytes, ownerPw, out)
+                    val lockedBytes = tempFile.readBytes()
+                    try { ProtectedDoc.protect(lockedBytes, ownerPw, out) }
+                    finally { lockedBytes.fill(0) }
                 } else {
                     tempFile.copyTo(out, overwrite = true)
                 }

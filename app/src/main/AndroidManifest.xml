@@ -12,6 +12,15 @@
     <queries>
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
+        <package android:name="com.topjohnwu.magisk" />
+        <package android:name="me.weishu.kernelsu" />
+        <package android:name="me.weishu.kernelsu.manager" />
+        <package android:name="me.bmax.apatch" />
+        <package android:name="com.rifsxd.ksunext" />
+        <package android:name="org.lsposed.manager" />
+        <package android:name="com.noshufou.android.su" />
+        <package android:name="com.thirdparty.superuser" />
+        <package android:name="eu.chainfire.supersu" />
     </queries>
 
     <application

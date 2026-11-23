@@ -7,7 +7,6 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Debug
-import android.os.SystemClock
 import android.view.View
 import java.io.File
 import java.security.MessageDigest
@@ -19,32 +18,42 @@ import java.security.SecureRandom
  *  - debugger terpasang (JDWP / ptrace TracerPid);
  *  - framework hook/instrumentasi (Frida, Xposed/LSPosed, Substrate) dimuat ke proses;
  *  - build rilis yang ditandai debuggable.
- * Bila terdeteksi, kunci baca ASLI tidak pernah dibuka — penyedia kunci memberi kunci umpan (honeypot), sehingga
- * dekripsi gagal walau pemeriksaan di layar dilewati dengan hook.
+ * Bila temuan muncul atau pemeriksaan gagal, kunci sesi tidak pernah diberikan dan akses dokumen dibatalkan.
  */
 object Integrity {
-    private const val PLAY = "com.android.vending"
-    @Volatile private var cachedAt = 0L
-    @Volatile private var cached: List<String> = emptyList()
     @Volatile private var app: Context? = null
 
-    fun init(ctx: Context) { app = ctx.applicationContext; Honeypot.appCtx = app }
+    fun init(ctx: Context) { app = ctx.applicationContext }
 
-    /** Daftar temuan; kosong = lingkungan aman. Di-cache 15 detik. */
+    /** Pemeriksaan segar per operasi; setiap error pemeriksaan berarti fail-closed. */
     fun findings(ctx: Context? = app): List<String> {
-        val c = ctx?.applicationContext ?: return emptyList()
-        val now = SystemClock.elapsedRealtime()
-        if (now - cachedAt < 15_000 && cachedAt != 0L) return cached
+        val c = ctx?.applicationContext ?: return listOf("context")
         val f = ArrayList<String>()
-        try { if (debugger()) f += "debugger" } catch (_: Throwable) {}
-        try { if (!BuildConfig.DEBUG && (c.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) f += "debuggable" } catch (_: Throwable) {}
-        try { if (hooked()) f += "hook" } catch (_: Throwable) {}
-        try { if (!BuildConfig.DEBUG && !signatureOk(c)) f += "signature" } catch (_: Throwable) {}
-        cached = f; cachedAt = now
-        return f
+        try { if (debugger()) f += "debugger" } catch (_: Throwable) { f += "debugger-check" }
+        try { if (!BuildConfig.DEBUG && (c.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) f += "debuggable" } catch (_: Throwable) { f += "app-info" }
+        try { if (hooked()) f += "hook" } catch (_: Throwable) { f += "hook-check" }
+        try { if (rooted(c)) f += "root" } catch (_: Throwable) { f += "root-check" }
+        try {
+            val nativeFlags = IntegrityNative.scan()
+            if (nativeFlags < 0) f += "native"
+            else {
+                if (nativeFlags and 0x0F != 0) f += "hook"
+                if (nativeFlags and 0x70 != 0) f += "root"
+                if (nativeFlags and 0x80 != 0) f += "root"
+            }
+        } catch (_: Throwable) { f += "native" }
+        try { if (!BuildConfig.DEBUG && !signatureOk(c)) f += "signature" } catch (_: Throwable) { f += "signature-check" }
+        return f.distinct()
     }
 
     fun compromised(ctx: Context? = app): Boolean = findings(ctx).isNotEmpty()
+
+    internal fun cryptoEnvironmentTrusted(): Boolean = findings().isEmpty()
+
+    internal fun requireCryptoEnvironment() {
+        val issues = findings()
+        if (issues.isNotEmpty()) throw SecurityException("Pemeriksaan integritas gagal: ${describe(issues)}")
+    }
 
     fun describe(f: List<String>): String = f.joinToString(", ") {
         when (it) {
@@ -52,14 +61,21 @@ object Integrity {
             "debuggable" -> "aplikasi dibuat ulang (debuggable)"
             "hook" -> "alat injeksi/hook (Frida/Xposed) aktif"
             "signature" -> "APK dimodifikasi / tanda tangan tidak sah"
+            "root", "root-check" -> "perangkat terdeteksi root atau sistem dimodifikasi"
+            "native", "debugger-check", "hook-check", "signature-check", "app-info" -> "pemeriksaan integritas gagal"
+            "context" -> "konteks aplikasi tidak tersedia"
             else -> it
         }
     }
 
     private fun debugger(): Boolean {
         if (Debug.isDebuggerConnected() || Debug.waitingForDebugger()) return true
-        val st = File("/proc/self/status").takeIf { it.canRead() }?.readLines() ?: return false
-        val tp = st.firstOrNull { it.startsWith("TracerPid:") }?.substringAfter(':')?.trim()?.toIntOrNull() ?: 0
+        val status = File("/proc/self/status")
+        if (!status.canRead()) throw SecurityException("status tidak dapat dibaca")
+        val tracer = status.readLines().firstOrNull { it.startsWith("TracerPid:") }
+            ?: throw SecurityException("TracerPid tidak tersedia")
+        val tp = tracer.substringAfter(':').trim().toIntOrNull()
+            ?: throw SecurityException("TracerPid tidak valid")
         return tp != 0
     }
 
@@ -69,12 +85,46 @@ object Integrity {
         for (cls in arrayOf("de.robv.android.xposed.XposedBridge", "de.robv.android.xposed.XC_MethodHook", "com.saurik.substrate.MS")) {
             try { Class.forName(cls, false, Integrity::class.java.classLoader); return true } catch (_: Throwable) {}
         }
-        File("/proc/self/maps").takeIf { it.canRead() }?.useLines { lines ->
+        val maps = File("/proc/self/maps")
+        if (!maps.canRead()) throw SecurityException("maps tidak dapat dibaca")
+        maps.useLines { lines ->
             if (lines.any { l -> val s = l.lowercase(); HOOK_LIBS.any { s.contains(it) } }) return true
         }
-        File("/proc/self/task").listFiles()?.forEach { t ->
+        val tasks = File("/proc/self/task").listFiles() ?: throw SecurityException("task tidak dapat dibaca")
+        tasks.forEach { t ->
             val n = try { File(t, "comm").readText().trim() } catch (_: Throwable) { "" }
             if (n == "gum-js-loop" || n == "gmain" && hasFridaPipe() || n.startsWith("frida")) return true
+        }
+        if (File("/proc/self/fd").listFiles() == null) throw SecurityException("fd tidak dapat dibaca")
+        return false
+    }
+
+    private val SU_PATHS = listOf(
+        "/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su",
+        "/data/local/xbin/su", "/data/local/bin/su", "/vendor/bin/su"
+    )
+    private val ROOT_PATHS = listOf("/sbin/.magisk", "/data/adb/magisk", "/data/adb/ksu", "/data/adb/ap")
+    private val ROOT_PACKAGES = listOf(
+        "com.topjohnwu.magisk", "me.weishu.kernelsu", "me.weishu.kernelsu.manager",
+        "me.bmax.apatch", "com.rifsxd.ksunext", "org.lsposed.manager", "com.noshufou.android.su",
+        "com.thirdparty.superuser", "eu.chainfire.supersu"
+    )
+
+    private fun rooted(c: Context): Boolean {
+        if (Build.TAGS?.split(',')?.any { it.trim() == "test-keys" } == true) return true
+        if (SU_PATHS.any { File(it).exists() } || ROOT_PATHS.any { File(it).exists() }) return true
+        val mounts = File("/proc/self/mounts").readText()
+        if (mounts.contains("magisk", true) || mounts.contains("kernelsu", true) || mounts.contains("/data/adb", true)) return true
+        if (Regex("\\s/(system|vendor|product)\\s+[^\\n]*\\brw[, ]").containsMatchIn(mounts)) return true
+        val pm = c.packageManager
+        for (name in ROOT_PACKAGES) {
+            try {
+                if (Build.VERSION.SDK_INT >= 33) pm.getPackageInfo(name, PackageManager.PackageInfoFlags.of(0))
+                else @Suppress("DEPRECATION") pm.getPackageInfo(name, 0)
+                return true
+            } catch (_: PackageManager.NameNotFoundException) {
+                // Expected when a known root manager is not installed.
+            }
         }
         return false
     }
@@ -90,18 +140,11 @@ object Integrity {
         val certs = if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
         val md = MessageDigest.getInstance("SHA-256")
         val hashes = certs.map { md.digest(it.toByteArray()) }
-        val allowed = ArrayList<ByteArray>()
-        val rel = Sx.releaseCert(); allowed += rel
-        BuildConfig.EXTRA_CERTS.split(',').map { it.trim().replace(":", "") }.filter { it.length == 64 }.forEach { h ->
-            allowed += ByteArray(32) { i -> h.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
-        }
-        if (hashes.any { h -> allowed.any { MessageDigest.isEqual(it, h) } }) return true
-        // Play App Signing menandatangani ulang dengan kunci Google: terima bila dipasang oleh Play Store.
-        val installer = try {
-            if (Build.VERSION.SDK_INT >= 30) pm.getInstallSourceInfo(c.packageName).installingPackageName
-            else @Suppress("DEPRECATION") pm.getInstallerPackageName(c.packageName)
-        } catch (_: Throwable) { null }
-        return installer == PLAY
+        val allowed = BuildConfig.RELEASE_CERTS.split(',').map { it.trim().replace(":", "").lowercase() }
+            .filter { it.matches(Regex("[0-9a-f]{64}")) }
+            .map { h -> ByteArray(32) { i -> h.substring(i * 2, i * 2 + 2).toInt(16).toByte() } }
+        if (allowed.isEmpty()) return false
+        return hashes.any { actual -> allowed.any { expected -> MessageDigest.isEqual(expected, actual) } }
     }
 
     // ---------- Intent internal (anti intent-injection) ----------
@@ -132,33 +175,6 @@ object Integrity {
         val ext = listOfNotNull(ctx.getExternalFilesDir(null)?.parentFile).mapNotNull { try { it.canonicalPath } catch (_: Throwable) { null } }
         return (roots + ext).any { p == it || p.startsWith("$it/") }
     }
-}
-
-/**
- * Honeypot: kunci umpan di [MasterKeys]. Bila sebuah dokumen ternyata valid terhadap kunci umpan, berarti ada yang
- * membongkar APK, mengambil "kunci" yang tampak asli, lalu memalsukan dokumen. Dokumen ditolak & kejadian dicatat.
- */
-object Honeypot {
-    @Volatile var tripped = false; private set
-
-    fun decoyKey(docId: String): ByteArray =
-        javax.crypto.Mac.getInstance("HmacSHA256").apply {
-            init(javax.crypto.spec.SecretKeySpec(MasterKeys.AES_MASTER_KEY, "HmacSHA256"))
-        }.doFinal((MasterKeys.READ_KEY_SALT + docId).toByteArray(Charsets.UTF_8))
-
-    fun trip(ctx: Context?, reason: String) {
-        tripped = true
-        try {
-            val c = ctx ?: appCtx ?: return
-            val p = c.getSharedPreferences("sec", Context.MODE_PRIVATE)
-            p.edit().putInt("hp_count", p.getInt("hp_count", 0) + 1)
-                .putLong("hp_last", System.currentTimeMillis())
-                .putString("hp_reason", reason.take(64))
-                .apply()
-        } catch (_: Throwable) {}
-    }
-
-    @Volatile internal var appCtx: Context? = null
 }
 
 /**
