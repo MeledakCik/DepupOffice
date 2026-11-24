@@ -2,11 +2,13 @@ import PDFKit
 import CoreImage.CIFilterBuiltins
 import CryptoKit
 import LocalAuthentication
+import PencilKit
 import Security
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import Vision
+import VisionKit
 
 struct GeneratedDocument: Identifiable {
     let id = UUID()
@@ -355,6 +357,9 @@ private struct OfficeTool: Identifiable {
         .init(id: "ocr", title: "OCR dokumen", detail: "Kenali teks pada hasil scan dan ekspor ke TXT", symbol: "text.viewfinder", group: "Konversi"),
         .init(id: "extractText", title: "Ekstrak teks PDF", detail: "Simpan teks PDF ke berkas TXT", symbol: "doc.text.magnifyingglass", group: "Konversi"),
         .init(id: "pdfToWord", title: "PDF ke Word", detail: "Ekspor teks PDF ke format RTF yang bisa dibuka Word", symbol: "doc.text", group: "Konversi"),
+        .init(id: "organize", title: "Susun & putar halaman", detail: "Urutkan, hapus, putar halaman, dan sisipkan halaman kosong", symbol: "rectangle.stack", group: "Kelola PDF"),
+        .init(id: "sign", title: "Tanda tangan PDF", detail: "Gambar tanda tangan lalu tempel di halaman pilihan", symbol: "signature", group: "Dokumen"),
+        .init(id: "liveQR", title: "Pindai QR dari kamera", detail: "Arahkan kamera ke QR atau barcode", symbol: "camera.viewfinder", group: "Konversi"),
         .init(id: "search", title: "Cari isi PDF", detail: "Temukan kata dalam dokumen PDF", symbol: "magnifyingglass", group: "Dokumen"),
         .init(id: "qrScan", title: "Pindai QR / barcode", detail: "Kenali kode dari foto lalu simpan hasilnya", symbol: "qrcode.viewfinder", group: "Konversi", imagesOnly: true),
         .init(id: "batchImagePDF", title: "Konversi foto massal", detail: "Buat satu PDF untuk setiap gambar", symbol: "photo.stack", group: "Konversi", multiple: true, imagesOnly: true),
@@ -375,6 +380,9 @@ struct NativeToolsScreen: View {
     @State private var shareTemporaryURL: URL?
     @State private var draftKind: DraftKind?
     @State private var isQRGeneratorPresented = false
+    @State private var editorTarget: EditorTarget?
+    @State private var editorCopy: URL?
+    @State private var isLiveQRPresented = false
 
     var body: some View {
         List {
@@ -386,7 +394,9 @@ struct NativeToolsScreen: View {
             ForEach(["Kelola PDF", "Konversi", "Gambar", "Dokumen", "Keamanan", "Bagikan & ekspor"], id: \.self) { group in
                 Section(group) {
                     ForEach(OfficeTool.all.filter { $0.group == group }) { tool in
-                        Button { selectedTool = tool } label: {
+                        Button {
+                            if tool.id == "liveQR" { isLiveQRPresented = true } else { selectedTool = tool }
+                        } label: {
                             HStack(spacing: 13) {
                                 Image(systemName: tool.symbol)
                                     .font(.system(size: 17, weight: .medium))
@@ -428,6 +438,20 @@ struct NativeToolsScreen: View {
             } else {
                 SpreadsheetDraftEditor { name, text in documents.saveSpreadsheetDraft(name: name, text: text) }
             }
+        }
+        .sheet(item: $editorTarget, onDismiss: { cleanupEditorCopies() }) { target in
+            if target.kind == "sign" {
+                SignPDFView(url: target.url) { data in
+                    documents.savePDF(data, name: target.url.deletingPathExtension().lastPathComponent + "_ttd")
+                }
+            } else {
+                PageOrganizerView(url: target.url) { data in
+                    documents.savePDF(data, name: target.url.deletingPathExtension().lastPathComponent + "_susun")
+                }
+            }
+        }
+        .sheet(isPresented: $isLiveQRPresented) {
+            LiveQRScannerSheet { text in documents.saveText(text, name: "QR_\(Int(Date().timeIntervalSince1970))") }
         }
         .sheet(isPresented: $isQRGeneratorPresented) {
             QRCodeGeneratorSheet { name, data in documents.saveGeneratedData(data, name: name) }
@@ -472,9 +496,25 @@ struct NativeToolsScreen: View {
         return [.pdf]
     }
 
+    /// Salinan sementara untuk editor dihapus setelah lembar ditutup (hasil sudah disimpan ke folder DepUp Office).
+    private func cleanupEditorCopies() {
+        if let editorCopy { try? FileManager.default.removeItem(at: editorCopy) }
+        editorCopy = nil
+    }
+
     private func handlePicked(_ urls: [URL]) {
         guard let tool = importTool else { return }
         defer { importTool = nil }
+        if tool.id == "organize" || tool.id == "sign" {
+            guard let url = urls.first else { return }
+            do {
+                let copy = try documents.makeShareCopy(from: url)
+                editorCopy = copy
+                editorTarget = EditorTarget(url: copy, kind: tool.id)
+            }
+            catch { documents.statusMessage = error.localizedDescription }
+            return
+        }
         if tool.id == "share" {
             guard let url = urls.first else { return }
             do {
@@ -951,6 +991,304 @@ private struct NativeVaultScreen: View {
         }
         return await withCheckedContinuation { continuation in
             context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in continuation.resume(returning: success) }
+        }
+    }
+}
+
+// MARK: - Fitur setara Android: susun halaman, tanda tangan PDF, pindai QR dari kamera
+
+struct EditorTarget: Identifiable {
+    let id = UUID()
+    let url: URL
+    let kind: String
+}
+
+private final class OrganizerPage: Identifiable {
+    let id = UUID()
+    let page: PDFPage
+    let thumbnail: UIImage
+    var extraRotation = 0
+
+    init(page: PDFPage) {
+        self.page = page
+        self.thumbnail = page.thumbnail(of: CGSize(width: 120, height: 160), for: .cropBox)
+    }
+}
+
+/// Urutkan (seret), hapus (geser), putar per halaman, dan sisipkan halaman kosong A4 — setara "Susun & Putar Halaman" Android.
+struct PageOrganizerView: View {
+    let url: URL
+    let onSave: (Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var pages: [OrganizerPage] = []
+    @State private var editMode: EditMode = .active
+    @State private var failure: String?
+    @State private var refreshToken = 0
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let failure { Text(failure).foregroundStyle(.red) }
+                ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
+                    HStack(spacing: 14) {
+                        Image(uiImage: item.thumbnail)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 54, height: 72)
+                            .rotationEffect(.degrees(Double(item.extraRotation)))
+                            .background(Color(uiColor: .secondarySystemBackground))
+                        Text("Halaman \(index + 1)")
+                        Spacer()
+                        Button {
+                            item.extraRotation = (item.extraRotation + 90) % 360
+                            refreshToken += 1
+                        } label: { Image(systemName: "rotate.right") }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Putar halaman \(index + 1)")
+                    }
+                    .id("\(item.id)-\(refreshToken)")
+                }
+                .onMove { pages.move(fromOffsets: $0, toOffset: $1) }
+                .onDelete { pages.remove(atOffsets: $0) }
+            }
+            .environment(\.editMode, $editMode)
+            .navigationTitle("Susun Halaman")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Simpan") { save() }.disabled(pages.isEmpty) }
+                ToolbarItem(placement: .bottomBar) {
+                    Button { addBlankPage() } label: { Label("Halaman kosong", systemImage: "doc.badge.plus") }
+                }
+            }
+        }
+        .task { load() }
+    }
+
+    private func load() {
+        guard pages.isEmpty else { return }
+        guard let document = PDFDocument(url: url) else { failure = OfficeError.invalidPDF(url.lastPathComponent).localizedDescription; return }
+        if document.isLocked { failure = "PDF terkunci kata sandi tidak bisa disusun."; return }
+        pages = (0..<document.pageCount).compactMap { document.page(at: $0).map(OrganizerPage.init) }
+    }
+
+    private func addBlankPage() {
+        let size = pages.first?.page.bounds(for: .mediaBox).size ?? CGSize(width: 595, height: 842)
+        let data = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { $0.beginPage() }
+        if let page = PDFDocument(data: data)?.page(at: 0) { pages.append(OrganizerPage(page: page)) }
+    }
+
+    private func save() {
+        let output = PDFDocument()
+        for item in pages {
+            guard let copy = item.page.copy() as? PDFPage else { continue }
+            copy.rotation = (copy.rotation + item.extraRotation) % 360
+            output.insert(copy, at: output.pageCount)
+        }
+        guard output.pageCount > 0, let data = output.dataRepresentation() else { failure = OfficeError.cannotWrite.localizedDescription; return }
+        onSave(data)
+        dismiss()
+    }
+}
+
+private struct SignatureCanvas: UIViewRepresentable {
+    @Binding var drawing: PKDrawing
+
+    func makeUIView(context: Context) -> PKCanvasView {
+        let canvas = PKCanvasView()
+        canvas.drawingPolicy = .anyInput
+        canvas.tool = PKInkingTool(.pen, color: .black, width: 3)
+        canvas.backgroundColor = .white
+        canvas.overrideUserInterfaceStyle = .light
+        canvas.delegate = context.coordinator
+        return canvas
+    }
+
+    func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        if drawing.strokes.isEmpty && !canvas.drawing.strokes.isEmpty { canvas.drawing = PKDrawing() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    @MainActor final class Coordinator: NSObject, PKCanvasViewDelegate {
+        let parent: SignatureCanvas
+        init(_ parent: SignatureCanvas) { self.parent = parent }
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) { parent.drawing = canvasView.drawing }
+    }
+}
+
+/// Tanda tangan tangan di layar, ditempel sebagai anotasi tinta (vektor) pada halaman pilihan — setara SignatureManager Android.
+struct SignPDFView: View {
+    let url: URL
+    let onSave: (Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var drawing = PKDrawing()
+    @State private var pageCount = 1
+    @State private var pageNumber = 1
+    @State private var position = 2
+    @State private var widthFraction = 0.32
+    @State private var failure: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Tanda tangan") {
+                    SignatureCanvas(drawing: $drawing)
+                        .frame(height: 180)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3)))
+                    Button("Hapus coretan", role: .destructive) { drawing = PKDrawing() }
+                        .disabled(drawing.strokes.isEmpty)
+                }
+                Section("Penempatan") {
+                    Stepper("Halaman \(pageNumber) dari \(pageCount)", value: $pageNumber, in: 1...max(pageCount, 1))
+                    Picker("Posisi", selection: $position) {
+                        Text("Kiri bawah").tag(0)
+                        Text("Tengah bawah").tag(1)
+                        Text("Kanan bawah").tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                    VStack(alignment: .leading) {
+                        Text("Lebar \(Int(widthFraction * 100))% halaman").font(.caption).foregroundStyle(.secondary)
+                        Slider(value: $widthFraction, in: 0.15...0.6)
+                    }
+                }
+                if let failure { Section { Text(failure).foregroundStyle(.red) } }
+            }
+            .navigationTitle("Tanda Tangan PDF")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Tempel") { save() }.disabled(drawing.strokes.isEmpty) }
+            }
+        }
+        .task {
+            if let document = PDFDocument(url: url) {
+                pageCount = max(document.pageCount, 1)
+                pageNumber = pageCount
+            } else {
+                failure = OfficeError.invalidPDF(url.lastPathComponent).localizedDescription
+            }
+        }
+    }
+
+    private func save() {
+        guard let document = PDFDocument(url: url), !document.isLocked,
+              let page = document.page(at: pageNumber - 1) else { failure = OfficeError.invalidPDF(url.lastPathComponent).localizedDescription; return }
+        let source = drawing.bounds
+        guard source.width > 1, source.height > 1 else { failure = "Buat tanda tangan terlebih dahulu."; return }
+        let crop = page.bounds(for: .cropBox)
+        let targetWidth = crop.width * widthFraction
+        let scale = targetWidth / source.width
+        let targetHeight = source.height * scale
+        let margin: CGFloat = 36
+        let x: CGFloat
+        switch position {
+        case 0: x = crop.minX + margin
+        case 1: x = crop.midX - targetWidth / 2
+        default: x = crop.maxX - margin - targetWidth
+        }
+        let rect = CGRect(x: x, y: crop.minY + margin, width: targetWidth, height: targetHeight)
+        let annotation = PDFAnnotation(bounds: rect, forType: .ink, withProperties: nil)
+        for stroke in drawing.strokes {
+            let path = UIBezierPath()
+            var first = true
+            for point in stroke.path.interpolatedPoints(in: nil, by: .distance(1)) {
+                let p = point.location.applying(stroke.transform)
+                // Koordinat PDF: titik asal kiri-bawah, relatif terhadap bounds anotasi.
+                let q = CGPoint(x: (p.x - source.minX) * scale, y: targetHeight - (p.y - source.minY) * scale)
+                if first { path.move(to: q); first = false } else { path.addLine(to: q) }
+            }
+            if !first { annotation.add(path) }
+        }
+        let border = PDFBorder()
+        border.lineWidth = max(1.0, 3 * scale)
+        annotation.border = border
+        annotation.color = .black
+        page.addAnnotation(annotation)
+        guard let data = document.dataRepresentation() else { failure = OfficeError.cannotWrite.localizedDescription; return }
+        onSave(data)
+        dismiss()
+    }
+}
+
+/// Pindai QR/barcode langsung dari kamera (VisionKit) — setara pemindai kamera Android.
+struct LiveQRScannerSheet: View {
+    let onSave: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var result: String?
+
+    private var supported: Bool { DataScannerViewController.isSupported && DataScannerViewController.isAvailable }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let result {
+                    Form {
+                        Section("Hasil") {
+                            Text(result).textSelection(.enabled)
+                        }
+                        Section {
+                            Button("Salin") { UIPasteboard.general.string = result }
+                            if let link = URL(string: result), let scheme = link.scheme?.lowercased(), scheme == "https" || scheme == "http" {
+                                Link("Buka tautan", destination: link)
+                            }
+                            Button("Simpan sebagai TXT") { onSave(result); dismiss() }
+                            Button("Pindai lagi") { self.result = nil }
+                        }
+                    }
+                } else if supported {
+                    LiveScanner { self.result = AiText.clean($0) }
+                        .ignoresSafeArea(edges: .bottom)
+                } else {
+                    ContentUnavailableView("Kamera tidak tersedia", systemImage: "camera.metering.unknown",
+                                           description: Text("Pemindai langsung membutuhkan kamera dan izin kamera. Gunakan \"Pindai QR / barcode\" dari foto sebagai gantinya."))
+                }
+            }
+            .navigationTitle("Pindai QR")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Tutup") { dismiss() } } }
+        }
+    }
+}
+
+private struct LiveScanner: UIViewControllerRepresentable {
+    let onFound: (String) -> Void
+
+    func makeUIViewController(context: Context) -> DataScannerViewController {
+        let scanner = DataScannerViewController(recognizedDataTypes: [.barcode()], qualityLevel: .balanced,
+                                                recognizesMultipleItems: false, isHighFrameRateTrackingEnabled: false,
+                                                isHighlightingEnabled: true)
+        scanner.delegate = context.coordinator
+        try? scanner.startScanning()
+        return scanner
+    }
+
+    func updateUIViewController(_ controller: DataScannerViewController, context: Context) {
+        if !context.coordinator.done && !controller.isScanning { try? controller.startScanning() }
+    }
+
+    static func dismantleUIViewController(_ controller: DataScannerViewController, coordinator: Coordinator) {
+        controller.stopScanning()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onFound: onFound) }
+
+    @MainActor final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        let onFound: (String) -> Void
+        var done = false
+        init(onFound: @escaping (String) -> Void) { self.onFound = onFound }
+
+        func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
+            guard !done else { return }
+            for item in addedItems {
+                if case let .barcode(code) = item, let value = code.payloadStringValue {
+                    done = true
+                    dataScanner.stopScanning()
+                    onFound(value)
+                    return
+                }
+            }
         }
     }
 }

@@ -14,9 +14,17 @@ Porting sedang berjalan; build iOS belum menyamai seluruh fitur Android. Fondasi
 - Navigasi utama, impor banyak berkas, pustaka dokumen lokal, preview berkas melalui Quick Look, dan scan multi-halaman menjadi PDF.
 - Gabung/pisah PDF, rotasi halaman, nomor halaman, watermark PDF, kompresi dengan rasterisasi, ekspor PDF ke JPG/RTF, ekstraksi teks, pencarian teks PDF, OCR ke TXT, dan gambar ke PDF.
 - QR generator, pemindaian QR/barcode dari gambar, kompresi foto, watermark foto, dan konversi foto massal ke PDF.
-- Berbagi berkas melalui lembar berbagi iOS, editor teks sederhana yang menyimpan RTF, editor tabel sederhana yang menyimpan CSV, PDF berkata sandi, brankas AES-GCM dengan kunci di Keychain serta autentikasi perangkat, dan membuka Dokumen Terlindungi Android di penampil aman (anti tangkapan/rekam layar, tanpa salin) dengan deteksi debugger/injeksi/jailbreak.
+- Berbagi berkas melalui lembar berbagi iOS, editor teks sederhana yang menyimpan RTF, editor tabel sederhana yang menyimpan CSV, PDF berkata sandi, dan brankas AES-GCM dengan kunci di Keychain serta autentikasi perangkat.
+- Susun & putar halaman PDF (urutkan, hapus, putar per halaman, sisipkan halaman kosong), tanda tangan PDF (anotasi tinta vektor), dan pindai QR/barcode langsung dari kamera.
+- **Dokumen Terlindungi setara Android**: membuat dan membuka format v3 (kode akses, PBKDF2-SHA256 600.000 iterasi → HKDF → AES-256-GCM + HMAC-SHA256), membuka format v1 (DepUp 4.1.0) dengan honeypot, kode akses diingat di Keychain, ekspor PDF asli dengan password guru, penampil aman (anti tangkapan/rekam layar, tanpa salin/Look Up), watermark ID dokumen per menit, PT_DENY_ATTACH, serta deteksi debugger/injeksi/jailbreak/aplikasi ditandatangani ulang. Format v2 lama ("khusus perangkat Android") memang tidak bisa dibuka di perangkat lain.
 
-Fitur yang masih perlu dipindahkan sebelum parity penuh: editor DOCX/XLSX dengan format dan rumus, template dokumen/sheet, chart spreadsheet, tanda tangan dan anotasi PDF interaktif, pengaturan halaman (urut/hapus/halaman kosong), ekstraksi objek gambar dari PDF, OCR tertanam ke PDF, alat foto khusus (pembersih bayangan, pasfoto, kartu nama, tanda tangan transparan), invoice/katalog/perencana, pemindaian tabel/struk ke Excel, membuat Dokumen Terlindungi baru di iOS, dan pemindaian QR langsung dari kamera. Quick Look dapat menampilkan dokumen Office, tetapi belum menggantikan editor Android.
+Fitur yang masih perlu dipindahkan sebelum parity penuh: editor DOCX/XLSX dengan format dan rumus, template dokumen/sheet, chart spreadsheet, anotasi PDF bebas (stabilo, teks), ekstraksi objek gambar dari PDF, OCR tertanam ke PDF, alat foto khusus (pembersih bayangan, pasfoto, kartu nama, tanda tangan transparan), invoice/katalog/perencana, pemindaian tabel/struk ke Excel, catatan + widget, dan pembaca suara. Quick Look dapat menampilkan dokumen Office, tetapi belum menggantikan editor Android.
+
+## Format Dokumen Terlindungi
+
+Spesifikasi byte ada di `app/src/main/java/cloud/depup/office/SecurePackage.kt` (Android) dan `SecurePackage` di `iosApp/DepupOffice/SecurityCore.swift` (iOS). Keduanya harus diubah bersamaan. Vektor uji v3 di `SecurePackageTest` (SHA-256 paket `d3fd862f…a843`) dihasilkan identik oleh Kotlin dan referensi Python independen.
+
+Bundle ID iOS diperiksa (`cloud.depup.office.ios`): bila diganti untuk akun Apple Developer, perbarui juga `expectedBundleId` di `RuntimeIntegrity`.
 
 Semua kemampuan iOS di atas menggunakan implementasi native Apple. Logika bisnis murni dapat dievaluasi untuk dibagikan melalui Kotlin Multiplatform setelah batas platform dan API masing-masing fitur jelas.
 

@@ -127,6 +127,10 @@ final class DocumentStore: ObservableObject {
         saveGeneratedFile(Data(text.utf8), name: name, extension: "csv")
     }
 
+    func saveText(_ text: String, name: String) {
+        saveGeneratedFile(Data(text.utf8), name: name, extension: "txt")
+    }
+
     func savePDF(_ data: Data, name: String) {
         saveGeneratedFile(data, name: name, extension: "pdf")
     }
