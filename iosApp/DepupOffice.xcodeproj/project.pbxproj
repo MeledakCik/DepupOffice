@@ -21,6 +21,8 @@
 		B10000000000000000000002 /* NotesShared.swift in Sources (widget) */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* NotesShared.swift */; };
 		B10000000000000000000003 /* NotesWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* NotesWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B10000000000000000000004 /* DepupOfficeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* DepupOfficeTests.swift */; };
+		B10000000000000000000005 /* DepupOfficeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000008 /* DepupOfficeUITests.swift */; };
+		A10000000000000000000012 /* UITestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* UITestSupport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,11 +45,15 @@
 		B20000000000000000000005 /* DepupOfficeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepupOfficeTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000006 /* DepupOfficeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DepupOfficeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000007 /* DepupOffice.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DepupOffice.entitlements; sourceTree = "<group>"; };
+		B20000000000000000000008 /* DepupOfficeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepupOfficeUITests.swift; sourceTree = "<group>"; };
+		B20000000000000000000009 /* DepupOfficeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DepupOfficeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000013 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
 		BA0000000000000000000001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A60000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B50000000000000000000001; remoteInfo = NotesWidgetExtension; };
 		BA0000000000000000000002 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A60000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A50000000000000000000001; remoteInfo = DepupOffice; };
+		BA0000000000000000000003 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A60000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A50000000000000000000001; remoteInfo = DepupOffice; };
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -58,6 +64,7 @@
 		A30000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		B30000000000000000000001 /* Frameworks (widget) */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		B30000000000000000000004 /* Frameworks (tests) */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000007 /* Frameworks (ui tests) */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -67,6 +74,7 @@
 				A40000000000000000000002 /* DepupOffice */,
 				B40000000000000000000001 /* NotesWidget */,
 				B40000000000000000000002 /* DepupOfficeTests */,
+				B40000000000000000000003 /* DepupOfficeUITests */,
 				A40000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -79,6 +87,7 @@
 				A20000000000000000000003 /* RootTabView.swift */,
 				A20000000000000000000006 /* NativeOfficeFeatures.swift */,
 				A20000000000000000000007 /* SecurityCore.swift */,
+				A20000000000000000000013 /* UITestSupport.swift */,
 				A20000000000000000000012 /* NotesShared.swift */,
 				A20000000000000000000011 /* ParityEditors.swift */,
 				A20000000000000000000010 /* ParityMakers.swift */,
@@ -106,9 +115,15 @@
 			path = DepupOfficeTests;
 			sourceTree = "<group>";
 		};
+		B40000000000000000000003 /* DepupOfficeUITests */ = {
+			isa = PBXGroup;
+			children = (B20000000000000000000008 /* DepupOfficeUITests.swift */);
+			path = DepupOfficeUITests;
+			sourceTree = "<group>";
+		};
 		A40000000000000000000003 /* Products */ = {
 			isa = PBXGroup;
-			children = (A20000000000000000000005 /* DepupOffice.app */, B20000000000000000000004 /* NotesWidgetExtension.appex */, B20000000000000000000006 /* DepupOfficeTests.xctest */);
+			children = (A20000000000000000000005 /* DepupOffice.app */, B20000000000000000000004 /* NotesWidgetExtension.appex */, B20000000000000000000006 /* DepupOfficeTests.xctest */, B20000000000000000000009 /* DepupOfficeUITests.xctest */);
 			name = Products;
 			sourceTree = "<group>";
 		};
@@ -161,6 +176,21 @@
 			productReference = B20000000000000000000006 /* DepupOfficeTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		B50000000000000000000003 /* DepupOfficeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B90000000000000000000003 /* Build configuration list for PBXNativeTarget "DepupOfficeUITests" */;
+			buildPhases = (
+				B30000000000000000000008 /* Sources (ui tests) */,
+				B30000000000000000000007 /* Frameworks (ui tests) */,
+				B30000000000000000000009 /* Resources (ui tests) */,
+			);
+			buildRules = ();
+			dependencies = (BB0000000000000000000003 /* PBXTargetDependency */);
+			name = DepupOfficeUITests;
+			productName = DepupOfficeUITests;
+			productReference = B20000000000000000000009 /* DepupOfficeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -173,6 +203,7 @@
 					A50000000000000000000001 = { CreatedOnToolsVersion = 16.0; };
 					B50000000000000000000001 = { CreatedOnToolsVersion = 16.0; };
 					B50000000000000000000002 = { CreatedOnToolsVersion = 16.0; TestTargetID = A50000000000000000000001; };
+					B50000000000000000000003 = { CreatedOnToolsVersion = 16.0; TestTargetID = A50000000000000000000001; };
 				};
 			};
 			buildConfigurationList = A90000000000000000000001 /* Build configuration list for PBXProject "DepupOffice" */;
@@ -182,7 +213,7 @@
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (A50000000000000000000001 /* DepupOffice */, B50000000000000000000001 /* NotesWidgetExtension */, B50000000000000000000002 /* DepupOfficeTests */);
+			targets = (A50000000000000000000001 /* DepupOffice */, B50000000000000000000001 /* NotesWidgetExtension */, B50000000000000000000002 /* DepupOfficeTests */, B50000000000000000000003 /* DepupOfficeUITests */);
 		};
 /* End PBXProject section */
 
@@ -190,6 +221,7 @@
 		A30000000000000000000003 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000004 /* Assets.xcassets in Resources */); runOnlyForDeploymentPostprocessing = 0; };
 		B30000000000000000000003 /* Resources (widget) */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		B30000000000000000000006 /* Resources (tests) */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000009 /* Resources (ui tests) */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -199,6 +231,7 @@
 			A10000000000000000000003 /* RootTabView.swift in Sources */,
 			A10000000000000000000005 /* NativeOfficeFeatures.swift in Sources */,
 			A10000000000000000000006 /* SecurityCore.swift in Sources */,
+			A10000000000000000000012 /* UITestSupport.swift in Sources */,
 			A10000000000000000000011 /* NotesShared.swift in Sources */,
 			A10000000000000000000010 /* ParityEditors.swift in Sources */,
 			A10000000000000000000009 /* ParityMakers.swift in Sources */,
@@ -212,11 +245,15 @@
 		B30000000000000000000005 /* Sources (tests) */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
 			B10000000000000000000004 /* DepupOfficeTests.swift in Sources */,
 		); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000008 /* Sources (ui tests) */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			B10000000000000000000005 /* DepupOfficeUITests.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
 		BB0000000000000000000001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B50000000000000000000001 /* NotesWidgetExtension */; targetProxy = BA0000000000000000000001 /* PBXContainerItemProxy */; };
 		BB0000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A50000000000000000000001 /* DepupOffice */; targetProxy = BA0000000000000000000002 /* PBXContainerItemProxy */; };
+		BB0000000000000000000003 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A50000000000000000000001 /* DepupOffice */; targetProxy = BA0000000000000000000003 /* PBXContainerItemProxy */; };
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -334,6 +371,28 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DepupOffice.app/DepupOffice";
 			}; name = Release; };
+		B70000000000000000000005 /* Debug ui tests */ = {isa = XCBuildConfiguration; buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.depup.office.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = DepupOffice;
+			}; name = Debug; };
+		B70000000000000000000006 /* Release ui tests */ = {isa = XCBuildConfiguration; buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.depup.office.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = DepupOffice;
+			}; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -341,6 +400,7 @@
 		A90000000000000000000002 /* Build configuration list for PBXNativeTarget "DepupOffice" */ = {isa = XCConfigurationList; buildConfigurations = (A70000000000000000000003 /* Debug target settings */, A70000000000000000000004 /* Release target settings */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		B90000000000000000000001 /* Build configuration list for PBXNativeTarget "NotesWidgetExtension" */ = {isa = XCConfigurationList; buildConfigurations = (B70000000000000000000001 /* Debug widget */, B70000000000000000000002 /* Release widget */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		B90000000000000000000002 /* Build configuration list for PBXNativeTarget "DepupOfficeTests" */ = {isa = XCConfigurationList; buildConfigurations = (B70000000000000000000003 /* Debug tests */, B70000000000000000000004 /* Release tests */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		B90000000000000000000003 /* Build configuration list for PBXNativeTarget "DepupOfficeUITests" */ = {isa = XCConfigurationList; buildConfigurations = (B70000000000000000000005 /* Debug ui tests */, B70000000000000000000006 /* Release ui tests */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 	};
 	rootObject = A60000000000000000000001 /* Project object */;

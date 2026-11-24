@@ -1,3 +1,4 @@
+import CoreImage
 import CryptoKit
 import PDFKit
 import UIKit
@@ -141,7 +142,7 @@ final class OfficeFileTests: XCTestCase {
         let rows = try Xlsx.readFirstSheet(data)
         XCTAssertEqual(rows[0], ["Barang", "Harga"])
         XCTAssertEqual(rows[1][0], "Kopi & <gula>")
-        XCTAssertEqual(Double(rows[1][1]), 18000)
+        XCTAssertEqual(rows[1][1], "18000")   // bilangan bulat tanpa ".0"
         XCTAssertEqual(Double(rows[2][1]), 12500.5)
         XCTAssertEqual(Xlsx.columnName(0), "A")
         XCTAssertEqual(Xlsx.columnName(25), "Z")
@@ -338,5 +339,119 @@ final class ToolTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let out = try ParityEngine.removeBlankPages(url)
         XCTAssertEqual(PDFDocument(data: out.data)?.pageCount, 1)
+    }
+}
+
+/// Semua alat dijalankan pada berkas contoh realistis (sama dengan yang dipakai tur UI) dan hasilnya diperiksa isinya.
+final class EngineTests: XCTestCase {
+    var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("engine-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+
+    func write(_ data: Data?, _ name: String) throws -> URL {
+        let u = dir.appendingPathComponent(name)
+        try XCTUnwrap(data, name).write(to: u)
+        return u
+    }
+
+    func run(_ tool: String, _ urls: [URL], _ options: [String: String] = [:]) throws -> [GeneratedDocument] {
+        let out = try NativeOfficeEngine.run(tool: tool, urls: urls, options: options)
+        XCTAssertFalse(out.isEmpty, tool)
+        for d in out { XCTAssertGreaterThan(d.data.count, 0, "\(tool): \(d.name)") }
+        return out
+    }
+
+    func pdfPages(_ d: GeneratedDocument) -> Int { PDFDocument(data: d.data)?.pageCount ?? -1 }
+    func text(_ d: GeneratedDocument) -> String { String(decoding: d.data, as: UTF8.self) }
+
+    func testPdfTools() throws {
+        let pdf = try write(UITestSupport.samplePDF(), "Contoh.pdf")
+        XCTAssertEqual(pdfPages(try run("merge", [pdf, pdf])[0]), 6)
+        XCTAssertEqual(pdfPages(try run("split", [pdf], ["range": "1,3"])[0]), 2)
+        XCTAssertEqual(PDFDocument(data: try run("rotate", [pdf], ["degrees": "90"])[0].data)?.page(at: 0)?.rotation, 90)
+        XCTAssertEqual(pdfPages(try run("watermark", [pdf], ["text": "RAHASIA"])[0]), 3)
+        XCTAssertEqual(pdfPages(try run("number", [pdf])[0]), 3)
+        XCTAssertEqual(pdfPages(try run("compress", [pdf])[0]), 3)
+        XCTAssertEqual(try run("pdfImages", [pdf]).count, 3)
+        XCTAssertTrue(text(try run("extractText", [pdf])[0]).contains("anggaran"))
+        XCTAssertTrue(text(try run("search", [pdf], ["query": "anggaran"])[0]).lowercased().contains("anggaran"))
+        XCTAssertTrue(text(try run("ocr", [pdf])[0]).lowercased().contains("laporan"))
+        XCTAssertNotNil(try run("pdfToWord", [pdf])[0])
+        XCTAssertEqual(pdfPages(try run("removeBlank", [pdf])[0]), 2)
+        let locked = try run("protect", [pdf], ["password": "1234"])[0]
+        XCTAssertTrue(PDFDocument(data: locked.data)?.isLocked == true)
+        let secured = try run("secureDoc", [pdf], ["accessCode": "ABCD-EFGH-JKMN", "editPassword": "guru123!"])[0]
+        XCTAssertEqual(try ProtectedDocReader.open(secured.data, code: "abcdefghjkmn"), try Data(contentsOf: pdf))
+        // sudah terlindungi → ditolak, bukan dibungkus dua kali
+        let securedURL = try write(secured.data, "x_terlindungi.pdf")
+        XCTAssertThrowsError(try NativeOfficeEngine.run(tool: "secureDoc", urls: [securedURL], options: ["accessCode": "ABCD-EFGH-JKMN", "editPassword": "guru123!"]))
+    }
+
+    func testImageAndOcrTools() throws {
+        let photo = try write(UITestSupport.textImage(["Laporan Kegiatan", "Anggaran disetujui"], shadow: true).jpegData(compressionQuality: 0.9), "Foto.jpg")
+        let card = try write(UITestSupport.textImage(["Budi Santoso", "PT Maju Jaya", "0812-3456-7890", "budi@majujaya.co.id"], shadow: false).jpegData(compressionQuality: 0.9), "Kartu.jpg")
+        let table = try write(UITestSupport.tableImage().jpegData(compressionQuality: 0.95), "Tabel.jpg")
+        let receipt = try write(UITestSupport.textImage(["TOKO MAKMUR", "Kopi Susu        18.000", "Roti Bakar       12.500", "TOTAL            30.500"], shadow: false, mono: true).jpegData(compressionQuality: 0.95), "Struk.jpg")
+
+        let imagePdf = try run("imagePDF", [photo, table])[0]
+        XCTAssertEqual(pdfPages(imagePdf), 2)
+        let scanned = try write(imagePdf.data, "Scan.pdf")
+        XCTAssertGreaterThanOrEqual(try run("extractImages", [scanned]).count, 2)
+        let searchable = try run("searchablePDF", [scanned])[0]
+        XCTAssertTrue((PDFDocument(data: searchable.data)?.string ?? "").lowercased().contains("anggaran"), "teks OCR tertanam harus bisa dicari")
+        XCTAssertNotNil(UIImage(data: try run("shadowRemove", [photo])[0].data))
+        XCTAssertNotNil(UIImage(data: try run("transparentSign", [table])[0].data))
+        XCTAssertEqual(try run("compressImages", [photo, card]).count, 2)
+        XCTAssertEqual(try run("batchImagePDF", [photo, card]).count, 2)
+        XCTAssertEqual(try run("photoWatermark", [photo], ["text": "DepUp"]).count, 1)
+
+        let vcf = text(try run("businessCard", [card])[0])
+        XCTAssertTrue(vcf.contains("BEGIN:VCARD") && vcf.contains("Budi"), vcf)
+        XCTAssertTrue(vcf.contains("TEL") && vcf.contains("EMAIL"), vcf)
+
+        let rows = try Xlsx.readFirstSheet(try run("tableToExcel", [table])[0].data)
+        let flat = rows.flatMap { $0 }.joined(separator: "|")
+        XCTAssertTrue(flat.contains("Ani") && flat.contains("90"), flat)
+
+        let rec = try Xlsx.readFirstSheet(try run("receiptToExcel", [receipt])[0].data)
+        let recFlat = rec.flatMap { $0 }.joined(separator: "|")
+        XCTAssertTrue(recFlat.contains("|18000|") || recFlat.hasSuffix("|18000") || recFlat.contains("18000"), recFlat)
+        XCTAssertTrue(recFlat.contains("TOTAL"), recFlat)
+        XCTAssertFalse(recFlat.contains("30500"), "baris TOTAL di struk tidak boleh ikut dihitung sebagai barang")
+
+        // pasfoto tanpa orang → pesan jelas, bukan crash
+        XCTAssertThrowsError(try NativeOfficeEngine.run(tool: "idPhoto", urls: [table], options: ["size": "3x4", "background": "red"]))
+    }
+
+    func testQrScan() throws {
+        let filter = CIFilter(name: "CIQRCodeGenerator", parameters: ["inputMessage": Data("https://depup.cloud".utf8)])!
+        let ci = filter.outputImage!.transformed(by: CGAffineTransform(scaleX: 12, y: 12))
+        let cg = CIContext().createCGImage(ci, from: ci.extent)!
+        let qr = try write(UIImage(cgImage: cg).pngData(), "qr.png")
+        XCTAssertTrue(text(try run("qrScan", [qr])[0]).contains("https://depup.cloud"))
+    }
+
+    func testCompressTargetAndOfficeToPdf() throws {
+        let big = try write(UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842)).pdfData { ctx in
+            for i in 0..<4 {
+                ctx.beginPage()
+                UITestSupport.textImage(["Halaman \(i + 1)"], shadow: true).draw(in: CGRect(x: 0, y: 0, width: 595, height: 842))
+            }
+        }, "Besar.pdf")
+        let original = try Data(contentsOf: big).count
+        if original > 200 * 1024 {
+            let out = try run("compressTarget", [big], ["targetKB": "200"])[0]
+            XCTAssertLessThan(out.data.count, original)
+            XCTAssertEqual(pdfPages(out), 4)
+        }
+        let docx = try write(DocTemplate.hadir.docx, "Hadir.docx")
+        XCTAssertGreaterThanOrEqual(PDFDocument(data: try OfficeRender.pdf(docx))?.pageCount ?? 0, 1)
+        let xlsx = try write(Xlsx.write(sheets: [(name: "A", rows: [[.text("A"), .text("B")], [.number(1), .number(2)]], boldRows: [0])]), "A.xlsx")
+        XCTAssertEqual(PDFDocument(data: try OfficeRender.pdf(xlsx))?.pageCount, 1)
     }
 }

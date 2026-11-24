@@ -149,6 +149,13 @@ enum Xlsx {
         return o
     }
 
+    /// Bilangan bulat tanpa ".0" (1400000, bukan 1400000.0), sama seperti Excel.
+    static func numberText(_ v: Double) -> String {
+        guard v.isFinite else { return "0" }
+        if v == v.rounded() && abs(v) < 1e15 { return String(Int64(v)) }
+        return String(v)
+    }
+
     static func columnName(_ index: Int) -> String {
         var n = index + 1
         var s = ""
@@ -199,7 +206,7 @@ enum Xlsx {
             let widths = (0..<columns).map { c -> Int in
                 let longest = sheet.rows.map { r -> Int in
                     guard c < r.count else { return 0 }
-                    switch r[c] { case .text(let t): return t.count; case .number(let v): return String(v).count; default: return 6 }
+                    switch r[c] { case .text(let t): return t.count; case .number(let v): return numberText(v).count; default: return 6 }
                 }.max() ?? 8
                 return min(60, max(8, longest + 2))
             }
@@ -212,7 +219,7 @@ enum Xlsx {
                     let ref = "\(columnName(c))\(r + 1)"
                     switch cell {
                     case .text(let t): rowsXml += "<c r=\"\(ref)\" t=\"inlineStr\"\(style)><is><t xml:space=\"preserve\">\(escape(t))</t></is></c>"
-                    case .number(let v): rowsXml += "<c r=\"\(ref)\"\(style)><v>\(v.isFinite ? String(v) : "0")</v></c>"
+                    case .number(let v): rowsXml += "<c r=\"\(ref)\"\(style)><v>\(numberText(v))</v></c>"
                     case .formula(let f): rowsXml += "<c r=\"\(ref)\"\(style)><f>\(escape(f))</f></c>"
                     case .empty: break
                     }

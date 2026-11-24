@@ -19,6 +19,9 @@ struct RootTabView: View {
     @EnvironmentObject private var documents: DocumentStore
     @State private var selectedTab: AppTab = .home
     @State private var noteLink: NoteLink?
+    #if DEBUG
+    @State private var uiTestRoute: UITestRoute?
+    #endif
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -71,6 +74,21 @@ struct RootTabView: View {
             .tag(AppTab.profile)
         }
         .quickLookPreview($documents.previewURL)
+        #if DEBUG
+        .sheet(item: $uiTestRoute) { route in UITestScreenView(route: route).environmentObject(documents) }
+        .task {
+            guard let screen = UITestSupport.screen else { return }
+            switch screen {
+            case "tab:home": selectedTab = .home
+            case "tab:documents": selectedTab = .documents
+            case "tab:scan": selectedTab = .scan
+            case "tab:tools": selectedTab = .tools
+            case "tab:profile": selectedTab = .profile
+            case "protected": documents.protectedFile = ProtectedFile(url: UITestSupport.url("Rahasia_terlindungi.pdf"))
+            default: uiTestRoute = UITestRoute(id: screen)
+            }
+        }
+        #endif
         .onOpenURL { url in
             if let id = NotesFile.noteId(from: url) { noteLink = NoteLink(id: id) }
         }

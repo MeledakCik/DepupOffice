@@ -27,7 +27,7 @@ annotate() {
 }
 if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Debug \
   -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/ios-test \
-  CODE_SIGNING_ALLOWED=NO test > build/ios-test.log 2>&1; then
+  -only-testing:DepupOfficeTests CODE_SIGNING_ALLOWED=NO test > build/ios-test.log 2>&1; then
   annotate build/ios-test.log
   tail -60 build/ios-test.log
   exit 65
@@ -35,6 +35,46 @@ fi
 grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" build/ios-test.log | tail -60
 echo "::notice title=Uji iOS::$(grep -E 'Executed [0-9]+ test' build/ios-test.log | tail -1 | sed 's/^[[:space:]]*//')"
 echo "::notice title=Uji iOS (daftar)::$(grep -oE "Test Case '-\[DepupOfficeTests\.[A-Za-z]+ [A-Za-z0-9]+\]' passed" build/ios-test.log | sed -E "s/Test Case '-\[DepupOfficeTests\.([A-Za-z]+) ([A-Za-z0-9]+)\]' passed/\2/" | tr '\n' ' ')"
+
+# 1b) Uji UI (tur semua layar + alur). Kegagalan dicatat sebagai peringatan; screenshot selalu diekspor.
+UI_OK=1
+if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Debug \
+  -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/ios-test -resultBundlePath build/ui.xcresult \
+  -only-testing:DepupOfficeUITests CODE_SIGNING_ALLOWED=NO test > build/ios-ui.log 2>&1; then
+  UI_OK=0
+  grep -E "error:|XCTAssert|failed \(" build/ios-ui.log | sort -u | head -40 | while IFS= read -r line; do echo "::warning title=Uji UI::$line"; done
+fi
+echo "::notice title=Uji UI::$(grep -E 'Executed [0-9]+ test' build/ios-ui.log | tail -1 | sed 's/^[[:space:]]*//')"
+mkdir -p build/shots-raw build/shots
+if xcrun xcresulttool export attachments --path build/ui.xcresult --output-path build/shots-raw > /dev/null 2>&1; then
+  python3 - <<'PY'
+import json, os, shutil, re
+raw = "build/shots-raw"
+manifest = json.load(open(os.path.join(raw, "manifest.json")))
+n = 0
+for test in manifest:
+    for att in test.get("attachments", []):
+        name = att.get("suggestedHumanReadableName") or att["exportedFileName"]
+        name = re.sub(r"_\d+_[0-9A-F-]{36}", "", name)
+        shutil.copy(os.path.join(raw, att["exportedFileName"]), os.path.join("build/shots", name))
+        n += 1
+print(f"{n} screenshot diekspor")
+PY
+fi
+ls build/shots | head -80
+if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "$(ls -A build/shots 2>/dev/null)" ]; then
+  ( cd build/shots
+    {
+      echo "# Screenshot uji UI iOS"
+      echo "Commit: ${GITHUB_SHA:-?} · $(date -u '+%Y-%m-%d %H:%M UTC') · UI_OK=$UI_OK"
+      echo
+      for f in *.png *.jpeg *.jpg; do [ -e "$f" ] && echo "- [$f]($f)"; done
+    } > README.md
+    git init -q && git checkout -q -b ci-screenshots
+    git -c user.name="github-actions" -c user.email="actions@github.com" add -A
+    git -c user.name="github-actions" -c user.email="actions@github.com" commit -qm "Screenshot uji UI ${GITHUB_SHA:-}"
+    git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-screenshots && echo "::notice title=Screenshot::branch ci-screenshots diperbarui" )
+fi
 
 # 2) Build rilis Simulator & perangkat (tanpa tanda tangan) + IPA
 if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Release \
