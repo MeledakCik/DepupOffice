@@ -178,7 +178,7 @@ enum Xlsx {
         }.joined()
         files.append(("xl/workbook.xml", Data(("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
             "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
-            "<sheets>\(sheetTags)</sheets></workbook>").utf8)))
+            "<sheets>\(sheetTags)</sheets><calcPr fullCalcOnLoad=\"1\"/></workbook>").utf8)))
         let rels = sheets.indices.map {
             "<Relationship Id=\"rId\($0 + 1)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet\($0 + 1).xml\"/>"
         }.joined() + "<Relationship Id=\"rId\(sheets.count + 1)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"

@@ -15,6 +15,7 @@
 		A10000000000000000000007 /* OfficeFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* OfficeFiles.swift */; };
 		A10000000000000000000008 /* ParityTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* ParityTools.swift */; };
 		A10000000000000000000009 /* ParityMakers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* ParityMakers.swift */; };
+		A10000000000000000000010 /* ParityEditors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* ParityEditors.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 		A20000000000000000000008 /* OfficeFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfficeFiles.swift; sourceTree = "<group>"; };
 		A20000000000000000000009 /* ParityTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParityTools.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* ParityMakers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParityMakers.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* ParityEditors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParityEditors.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +53,7 @@
 				A20000000000000000000003 /* RootTabView.swift */,
 				A20000000000000000000006 /* NativeOfficeFeatures.swift */,
 				A20000000000000000000007 /* SecurityCore.swift */,
+				A20000000000000000000011 /* ParityEditors.swift */,
 				A20000000000000000000010 /* ParityMakers.swift */,
 				A20000000000000000000009 /* ParityTools.swift */,
 				A20000000000000000000008 /* OfficeFiles.swift */,
@@ -115,6 +118,7 @@
 			A10000000000000000000003 /* RootTabView.swift in Sources */,
 			A10000000000000000000005 /* NativeOfficeFeatures.swift in Sources */,
 			A10000000000000000000006 /* SecurityCore.swift in Sources */,
+			A10000000000000000000010 /* ParityEditors.swift in Sources */,
 			A10000000000000000000009 /* ParityMakers.swift in Sources */,
 			A10000000000000000000008 /* ParityTools.swift in Sources */,
 			A10000000000000000000007 /* OfficeFiles.swift in Sources */,

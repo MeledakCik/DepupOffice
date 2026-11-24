@@ -381,6 +381,11 @@ private struct OfficeTool: Identifiable {
         .init(id: "searchAll", title: "Cari teks dalam file", detail: "Cari kata di semua PDF, Word, Excel & teks", symbol: "doc.text.magnifyingglass", group: "Dokumen"),
         .init(id: "priceTag", title: "Label harga & barcode", detail: "Buat label harga toko & lembar A4", symbol: "barcode", group: "Dokumen"),
         .init(id: "print", title: "Cetak", detail: "Printer AirPrint atau simpan PDF", symbol: "printer", group: "Bagikan & ekspor"),
+        .init(id: "annotate", title: "Coret-coret PDF", detail: "Stabilo, pena, catatan & sorot teks", symbol: "pencil.and.scribble", group: "Kelola PDF"),
+        .init(id: "docEditor", title: "Edit Word", detail: "Buka & ubah .docx / RTF, simpan ke Word atau PDF", symbol: "doc.text", group: "Buat"),
+        .init(id: "sheetEditor", title: "Edit Excel", detail: "Buka & ubah .xlsx / CSV dengan rumus SUM, AVERAGE…", symbol: "tablecells", group: "Buat"),
+        .init(id: "templates", title: "Template dokumen", detail: "Surat izin, keterangan RT/RW, undangan, notulen, proposal", symbol: "doc.on.doc", group: "Buat"),
+        .init(id: "signLibrary", title: "Pustaka TTD", detail: "Simpan tanda tangan untuk dipakai ulang", symbol: "signature", group: "Dokumen"),
         .init(id: "organize", title: "Susun & putar halaman", detail: "Urutkan, hapus, putar halaman, dan sisipkan halaman kosong", symbol: "rectangle.stack", group: "Kelola PDF"),
         .init(id: "sign", title: "Tanda tangan PDF", detail: "Gambar tanda tangan lalu tempel di halaman pilihan", symbol: "signature", group: "Dokumen"),
         .init(id: "liveQR", title: "Pindai QR dari kamera", detail: "Arahkan kamera ke QR atau barcode", symbol: "camera.viewfinder", group: "Konversi"),
@@ -463,9 +468,9 @@ struct NativeToolsScreen: View {
         }
         .sheet(item: $draftKind) { kind in
             if kind == .word {
-                WordDraftEditor { name, text in documents.saveWordDraft(name: name, text: text) }
+                DocEditorView(source: nil) { documents.saveGenerated($0) }
             } else {
-                SpreadsheetDraftEditor { name, text in documents.saveSpreadsheetDraft(name: name, text: text) }
+                SheetEditorView(source: nil, template: nil) { documents.saveGenerated($0) }
             }
         }
         .sheet(item: $editorTarget, onDismiss: { cleanupEditorCopies() }) { target in
@@ -481,6 +486,14 @@ struct NativeToolsScreen: View {
                 VoiceReaderView(url: target.url)
             } else if target.kind == "slideshow" {
                 SlideshowView(url: target.url)
+            } else if target.kind == "annotate" {
+                AnnotatePDFView(url: target.url) { data in
+                    documents.savePDF(data, name: target.url.deletingPathExtension().lastPathComponent + "_coret")
+                }
+            } else if target.kind == "docEditor" {
+                DocEditorView(source: target.url) { documents.saveGenerated($0) }
+            } else if target.kind == "sheetEditor" {
+                SheetEditorView(source: target.url, template: nil) { documents.saveGenerated($0) }
             } else if target.kind == "officeToPdf" {
                 OfficeToPDFView(url: target.url) { documents.saveGenerated($0) }
             } else {
@@ -496,6 +509,11 @@ struct NativeToolsScreen: View {
             case .schedule: SchedulePlannerView { documents.saveGenerated($0) }
             case .notes: NotesScreen()
             case .searchAll: SearchAllView().environmentObject(documents)
+            case .templates: DocTemplatePicker(onSave: { documents.saveGenerated($0) }, onEdit: { _ in })
+            case .sheetInvoice: SheetEditorView(source: nil, template: "invoice") { documents.saveGenerated($0) }
+            case .sheetPresensi: SheetEditorView(source: nil, template: "presensi") { documents.saveGenerated($0) }
+            case .sheetKeuangan: SheetEditorView(source: nil, template: "keuangan") { documents.saveGenerated($0) }
+            case .signLibrary: SignatureLibraryView(onPick: nil)
             }
         }
         .sheet(isPresented: $isPriceTagPresented) {
@@ -511,8 +529,14 @@ struct NativeToolsScreen: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { draftKind = .word } label: { Label("Dokumen Word (RTF)", systemImage: "doc.text") }
-                    Button { draftKind = .spreadsheet } label: { Label("Spreadsheet Excel (CSV)", systemImage: "tablecells") }
+                    Button { draftKind = .word } label: { Label("Dokumen Word", systemImage: "doc.text") }
+                    Button { directTool = .templates } label: { Label("Template surat & proposal", systemImage: "doc.on.doc") }
+                    Button { draftKind = .spreadsheet } label: { Label("Spreadsheet Excel", systemImage: "tablecells") }
+                    Menu {
+                        Button("Invoice / Kuitansi") { directTool = .sheetInvoice }
+                        Button("Presensi & Daftar Hadir") { directTool = .sheetPresensi }
+                        Button("Laporan Keuangan") { directTool = .sheetKeuangan }
+                    } label: { Label("Template Excel", systemImage: "tablecells.badge.ellipsis") }
                     Button { isQRGeneratorPresented = true } label: { Label("Buat QR Code", systemImage: "qrcode") }
                 } label: {
                     Image(systemName: "plus")
@@ -547,6 +571,8 @@ struct NativeToolsScreen: View {
         if tool.id == "exeToPdf" { return [.data] }
         if tool.id == "chart" { return [.commaSeparatedText, .plainText] + [UTType(filenameExtension: "xlsx")].compactMap { $0 } }
         if tool.id == "summary" || tool.id == "voice" { return DocText.readableTypes }
+        if tool.id == "docEditor" { return [.rtf, .plainText] + [UTType(filenameExtension: "docx")].compactMap { $0 } }
+        if tool.id == "sheetEditor" { return [.commaSeparatedText] + [UTType(filenameExtension: "xlsx")].compactMap { $0 } }
         if tool.id == "officeToPdf" { return ["docx", "xlsx", "pptx", "doc", "xls", "ppt"].compactMap { UTType(filenameExtension: $0) } + [.rtf] }
         return [.pdf]
     }
@@ -560,7 +586,7 @@ struct NativeToolsScreen: View {
     private func handlePicked(_ urls: [URL]) {
         guard let tool = importTool else { return }
         defer { importTool = nil }
-        if ["organize", "sign", "chart", "summary", "voice", "slideshow", "officeToPdf"].contains(tool.id) {
+        if ["organize", "sign", "chart", "summary", "voice", "slideshow", "officeToPdf", "annotate", "docEditor", "sheetEditor"].contains(tool.id) {
             guard let url = urls.first else { return }
             do {
                 let copy = try documents.makeShareCopy(from: url)
@@ -1086,7 +1112,7 @@ private struct NativeVaultScreen: View {
 // MARK: - Fitur setara Android: susun halaman, tanda tangan PDF, pindai QR dari kamera
 
 enum DirectTool: String, Identifiable {
-    case invoice, catalog, schedule, notes, searchAll
+    case invoice, catalog, schedule, notes, searchAll, templates, sheetInvoice, sheetPresensi, sheetKeuangan, signLibrary
     var id: String { rawValue }
 }
 
@@ -1198,7 +1224,7 @@ private struct SignatureCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
-        if drawing.strokes.isEmpty && !canvas.drawing.strokes.isEmpty { canvas.drawing = PKDrawing() }
+        if canvas.drawing.strokes.count != drawing.strokes.count { canvas.drawing = drawing }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -1220,6 +1246,8 @@ struct SignPDFView: View {
     @State private var pageNumber = 1
     @State private var position = 2
     @State private var widthFraction = 0.32
+    @State private var showLibrary = false
+    @State private var saved = false
     @State private var failure: String?
 
     var body: some View {
@@ -1230,8 +1258,15 @@ struct SignPDFView: View {
                         .frame(height: 180)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3)))
-                    Button("Hapus coretan", role: .destructive) { drawing = PKDrawing() }
-                        .disabled(drawing.strokes.isEmpty)
+                    HStack {
+                        Button("Hapus coretan", role: .destructive) { drawing = PKDrawing() }
+                            .disabled(drawing.strokes.isEmpty)
+                        Spacer()
+                        Button("Pustaka") { showLibrary = true }
+                        Button("Simpan ke pustaka") { SignatureLibrary.save(drawing); saved = true }
+                            .disabled(drawing.strokes.isEmpty || saved)
+                    }
+                    .buttonStyle(.borderless)
                 }
                 Section("Penempatan") {
                     Stepper("Halaman \(pageNumber) dari \(pageCount)", value: $pageNumber, in: 1...max(pageCount, 1))
@@ -1247,6 +1282,9 @@ struct SignPDFView: View {
                     }
                 }
                 if let failure { Section { Text(failure).foregroundStyle(.red) } }
+            }
+            .sheet(isPresented: $showLibrary) {
+                SignatureLibraryView { picked in drawing = picked; saved = true }
             }
             .navigationTitle("Tanda Tangan PDF")
             .navigationBarTitleDisplayMode(.inline)
