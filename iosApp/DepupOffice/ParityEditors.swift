@@ -673,12 +673,17 @@ final class TableAttachment: NSTextAttachment {
     var rows: [[String]]
     var widths: [Int]
     var borders: Bool
+    /// Hanya tampilan editor saat mode gelap. Berkas yang disimpan/PDF selalu memakai salinan terang (lihat AttributedPDF.black).
+    var dark: Bool
     static let renderWidth: CGFloat = 500
+    /// Diatur editor sesuai mode tampilan; tabel baru mengikuti nilai ini.
+    static var editorDark = false
 
-    init(rows: [[String]], widths: [Int], borders: Bool) {
+    init(rows: [[String]], widths: [Int], borders: Bool, dark: Bool? = nil) {
         self.rows = rows
         self.widths = widths
         self.borders = borders
+        self.dark = dark ?? TableAttachment.editorDark
         super.init(data: nil, ofType: nil)
         refresh()
     }
@@ -687,14 +692,12 @@ final class TableAttachment: NSTextAttachment {
         rows = [[""]]
         widths = [1]
         borders = true
+        dark = false
         super.init(coder: coder)
     }
 
     func refresh() {
-        let img = TableAttachment.render(rows: rows, widths: widths, borders: borders, width: Self.renderWidth)
-        // Varian gelap hanya untuk tampilan editor; PDF/ekspor tetap memakai gambar terang.
-        let dark = TableAttachment.render(rows: rows, widths: widths, borders: borders, width: Self.renderWidth, dark: true)
-        img.imageAsset?.register(dark, with: UITraitCollection(userInterfaceStyle: .dark))
+        let img = TableAttachment.render(rows: rows, widths: widths, borders: borders, width: Self.renderWidth, dark: dark)
         image = img
         bounds = CGRect(origin: .zero, size: img.size)
     }
@@ -851,6 +854,12 @@ enum AttributedPDF {
     static func black(_ text: NSAttributedString) -> NSAttributedString {
         let m = NSMutableAttributedString(attributedString: text)
         m.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: m.length))
+        // Tabel tampilan gelap → salinan terang untuk berkas/PDF.
+        m.enumerateAttribute(.attachment, in: NSRange(location: 0, length: m.length)) { value, r, _ in
+            if let t = value as? TableAttachment, t.dark {
+                m.addAttribute(.attachment, value: TableAttachment(rows: t.rows, widths: t.widths, borders: t.borders, dark: false), range: r)
+            }
+        }
         return m
     }
 }
@@ -1128,6 +1137,22 @@ struct DocTemplatePicker: View {
         textView.setNeedsLayout()
     }
 
+    /// Samakan warna tabel dengan mode tampilan editor (terang/gelap).
+    func applyAppearance(dark: Bool) {
+        TableAttachment.editorDark = dark
+        let storage = textView.textStorage
+        var changed = false
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, r, _ in
+            if let t = value as? TableAttachment, t.dark != dark {
+                t.dark = dark
+                t.refresh()
+                storage.edited(.editedAttributes, range: r, changeInLength: 0)
+                changed = true
+            }
+        }
+        if changed { textView.setNeedsDisplay() }
+    }
+
     /// Salinan untuk disimpan: warna label sistem diganti hitam agar tetap terbaca di Word.
     var exportText: NSAttributedString {
         AttributedPDF.black(textView.attributedText ?? NSAttributedString())
@@ -1136,8 +1161,13 @@ struct DocTemplatePicker: View {
 
 private struct RichTextView: UIViewRepresentable {
     let controller: RichTextController
-    func makeUIView(context: Context) -> UITextView { controller.textView }
-    func updateUIView(_ view: UITextView, context: Context) {}
+    func makeUIView(context: Context) -> UITextView {
+        controller.applyAppearance(dark: context.environment.colorScheme == .dark)
+        return controller.textView
+    }
+    func updateUIView(_ view: UITextView, context: Context) {
+        controller.applyAppearance(dark: context.environment.colorScheme == .dark)
+    }
 }
 
 struct DocEditorView: View {

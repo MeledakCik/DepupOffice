@@ -317,6 +317,16 @@ final class ToolTests: XCTestCase {
         XCTAssertTrue(points[0].hasPrefix("Kegiatan bulan ini"))
     }
 
+    func testDarkTableExportsLightCopy() {
+        let dark = TableAttachment(rows: [["No", "Nama"], ["1", "Budi"]], widths: [1, 4], borders: true, dark: true)
+        let out = AttributedPDF.black(NSAttributedString(attachment: dark))
+        let copy = out.attribute(.attachment, at: 0, effectiveRange: nil) as? TableAttachment
+        XCTAssertNotNil(copy)
+        XCTAssertEqual(copy?.dark, false)
+        XCTAssertEqual(copy?.rows, [["No", "Nama"], ["1", "Budi"]])
+        XCTAssertTrue(dark.dark, "tabel di editor tidak boleh ikut berubah")
+    }
+
     func testAiTextStripsHiddenCharacters() {
         let smuggled = "Halo" + String(UnicodeScalar(0xE0049)!) + "\u{200B}dunia\u{202E}"
         XCTAssertEqual(AiText.clean(smuggled), "Halodunia")
