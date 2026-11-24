@@ -33,6 +33,8 @@ if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -confi
   exit 65
 fi
 grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" build/ios-test.log | tail -60
+echo "::notice title=Uji iOS::$(grep -E 'Executed [0-9]+ test' build/ios-test.log | tail -1 | sed 's/^[[:space:]]*//')"
+echo "::notice title=Uji iOS (daftar)::$(grep -oE "Test Case '-\[DepupOfficeTests\.[A-Za-z]+ [A-Za-z0-9]+\]' passed" build/ios-test.log | sed -E "s/Test Case '-\[DepupOfficeTests\.([A-Za-z]+) ([A-Za-z0-9]+)\]' passed/\2/" | tr '\n' ' ')"
 
 # 2) Build rilis Simulator & perangkat (tanpa tanda tangan) + IPA
 if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Release \
@@ -52,3 +54,4 @@ mkdir -p dist/Payload
 cp -R "$APP" dist/Payload/
 ( cd dist && zip -qry "DepupOffice_iOS_v${v}_unsigned.ipa" Payload && rm -rf Payload && shasum -a 256 *.ipa > SHA256SUMS-ios.txt )
 ls -la dist
+echo "::notice title=Widget::NotesWidgetExtension.appex tertanam di DepupOffice.app"
