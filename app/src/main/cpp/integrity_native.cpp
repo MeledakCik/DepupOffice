@@ -111,7 +111,8 @@ int scan_process() {
         memset(buf, 0, sizeof(buf));
     }
 
-    const char* const thread_names[] = {"gum-js-loop", "gmain", "frida"};
+    // "gmain" sendiri bukan bukti Frida (thread GLib biasa); Kotlin memeriksanya bersama pipa Frida.
+    const char* const thread_names[] = {"gum-js-loop", "frida"};
     int taskfd = open_read("/proc/self/task");
     if (taskfd >= 0) {
         walk_dir(taskfd, [&](const char* name) {

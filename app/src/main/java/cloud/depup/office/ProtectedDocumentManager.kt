@@ -48,7 +48,7 @@ object ProtectedDocumentManager {
             val pad = activity.vbox().apply { setPadding(activity.dp(16), 0, activity.dp(16), activity.dp(20)) }
 
             val chkCoverHmac = CheckBox(activity).apply {
-                text = "Bungkus Sampul DepUp & Integritas HMAC"
+                text = "Sampul DepUp + Kode Akses (bisa dibuka di Android & iPhone)"
                 setTextColor(C.TEXT)
                 isChecked = true
             }
@@ -186,6 +186,7 @@ object ProtectedDocumentManager {
         val outName = baseName + "_terlindungi"
         val out = Files.newOut(activity, outName, "pdf")
 
+        val accessCode = ProtectedDoc.generateAccessCode()
         activity.work("Menerapkan proteksi dokumen…", {
             // (dulu seluruh PDF dibaca ke RAM di sini tanpa dipakai — lockLossless membaca sendiri)
             require(teacherPassword.isNotBlank()) { "Password guru wajib diisi" }
@@ -199,7 +200,7 @@ object ProtectedDocumentManager {
                 // Step 2: Sampul DepUp & Integritas HMAC jika diaktifkan
                 if (useCoverHmac) {
                     val lockedBytes = tempFile.readBytes()
-                    try { ProtectedDoc.protect(lockedBytes, ownerPw, out) }
+                    try { ProtectedDoc.protect(lockedBytes, accessCode, ownerPw, out) }
                     finally { lockedBytes.fill(0) }
                 } else {
                     tempFile.copyTo(out, overwrite = true)
@@ -211,8 +212,9 @@ object ProtectedDocumentManager {
         }) { res ->
             res.onSuccess {
                 activity.toast("Dokumen Terlindungi Berhasil Dibuat!")
-                Files.open(activity, Files.uriFor(activity, out), PDF)
-            }.onFailure { activity.fail(it) }
+                if (useCoverHmac) AccessCodeUi.showCreatedCode(activity, accessCode) { Files.open(activity, Files.uriFor(activity, out), PDF) }
+                else Files.open(activity, Files.uriFor(activity, out), PDF)
+            }.onFailure { out.delete(); activity.fail(it) }
         }
     }
 }

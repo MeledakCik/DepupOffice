@@ -205,6 +205,8 @@ class ViewerActivity : AppCompatActivity() {
     private lateinit var pageBadge: TextView
     private lateinit var zoomLabel: TextView
     private var protectedBytes: ByteArray? = null
+    /** Kode akses Dokumen Terlindungi v3 yang berhasil membuka dokumen ini (untuk verifikasi password guru & ekspor). */
+    @Volatile private var accessCode: String? = null
     /** Proteksi Word ("hanya bisa diedit dengan password") — untuk memverifikasi password sebelum berbagi/ekspor. */
     private var docxProt: DocxProtect.Prot? = null
     /** Berkas yang dibuka pengguna (bukan salinan cache / terdekripsi). */
@@ -229,7 +231,7 @@ class ViewerActivity : AppCompatActivity() {
     /** Password pemilik/guru benar? Dokumen Terlindungi: password edit guru; PDF terkunci: password PEMILIK; Word: password edit. */
     private fun ownerPasswordOk(pw: String): Boolean {
         if (pw.isEmpty()) return false
-        protectedBytes?.let { return ProtectedDoc.verifyEditPassword(it, pw) }
+        protectedBytes?.let { return ProtectedDoc.verifyEditPassword(it, pw, accessCode) }
         lockedSource?.let { src ->
             return try {
                 val b = Files.readOrNull(this@ViewerActivity, src) ?: return false
@@ -312,7 +314,10 @@ class ViewerActivity : AppCompatActivity() {
             if (ProtectedDoc.isProtected(rawBytes)) {
                 protectedBytes = rawBytes
                 try {
-                    val decryptedBytes = ProtectedDoc.openProtected(rawBytes)
+                    val decryptedBytes = openProtectedWithCode(rawBytes) ?: run {
+                        runOnUiThread { if (!isFinishing && !isDestroyed) finish() }
+                        return@Thread
+                    }
                     try {
                         val fd = IntegrityNative.createSealedMemfd(decryptedBytes)
                         if (fd < 0) throw SecurityException("Penyimpanan memori aman tidak tersedia.")
@@ -357,6 +362,47 @@ class ViewerActivity : AppCompatActivity() {
                 if (isFinishing || isDestroyed) pdf.close() else build(rawUri, u, pdf)
             }
         }.start()
+    }
+
+    /**
+     * Buka Dokumen Terlindungi di thread latar. v3: coba kode yang diingat (Keystore), lalu minta kode ke pengguna
+     * (maks. 8 percobaan). Mengembalikan null bila pengguna membatalkan atau layar ditutup.
+     */
+    private fun openProtectedWithCode(bytes: ByteArray): ByteArray? {
+        val info = ProtectedDoc.info(bytes)
+        if (info.version != 3) return ProtectedDoc.openProtected(bytes)
+        var code: String? = AccessCodeVault.load(this, info.docId)
+        var fromVault = code != null
+        var remember = false
+        var wrong = false
+        for (attempt in 0 until 8) {
+            if (code == null) {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                var picked: Pair<String, Boolean>? = null
+                runOnUiThread {
+                    AccessCodeUi.ask(this, wrong, { c, r -> picked = c to r; latch.countDown() }, { latch.countDown() })
+                }
+                while (!latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    if (isFinishing || isDestroyed) return null
+                }
+                val p = picked ?: return null
+                code = p.first; remember = p.second; fromVault = false
+            }
+            val tryCode: String = code
+            try {
+                val plain = ProtectedDoc.openProtected(bytes, tryCode)
+                accessCode = tryCode
+                if (!fromVault) {
+                    if (remember) AccessCodeVault.save(this, info.docId, tryCode) else AccessCodeVault.forget(this, info.docId)
+                }
+                return plain
+            } catch (e: SecurePackage.AccessCodeException) {
+                if (fromVault) AccessCodeVault.forget(this, info.docId)
+                code = null; wrong = !e.missing
+                if (attempt >= 3) Thread.sleep(1_000L * (attempt - 2))   // perlambat tebakan beruntun
+            }
+        }
+        throw SecurityException("Terlalu banyak percobaan kode akses. Tutup dan buka kembali dokumen.")
     }
 
     /** Decrypts password PDFs into a sealed anonymous memfd; plaintext never gets a filesystem path. */
@@ -582,14 +628,35 @@ class ViewerActivity : AppCompatActivity() {
             setOnClickListener { v ->
                 val pm = android.widget.PopupMenu(this@ViewerActivity, v)
                 val office = officeWeb != null
-                if (protectedBytes != null) {
-                    pm.menu.add(0, 1, 0, "Bagikan cadangan terenkripsi (khusus perangkat ini)")
-                    pm.menu.add(0, 6, 1, "Pengaturan Reader PDF")
+                val pBytes = protectedBytes
+                if (pBytes != null) {
+                    // Yang dibagikan selalu berkas TERENKRIPSI aslinya; pembaca tetap butuh kode akses.
+                    pm.menu.add(0, 1, 0, "Bagikan dokumen terlindungi")
+                    pm.menu.add(0, 9, 1, "Ekspor PDF Asli (password guru)")
+                    pm.menu.add(0, 6, 2, "Pengaturan Reader PDF")
+                    if (accessCode != null) pm.menu.add(0, 12, 3, "Lupakan kode akses di perangkat ini")
                     pm.setOnMenuItemClickListener { item ->
                         when (item.itemId) {
                             1 -> try { Files.share(this@ViewerActivity, srcUri ?: rawUri, mime, false) }
                                 catch (_: Exception) { toast("Tidak bisa membagikan dokumen") }
+                            9 -> requirePassword("Ekspor PDF Asli") {
+                                work("Mengekspor PDF asli…", {
+                                    val out = Files.namedOut(this@ViewerActivity, "Asli_" + Files.baseName(name), "pdf")
+                                    val plain = ProtectedDoc.openProtected(pBytes, accessCode)
+                                    try { out.writeBytes(plain) } finally { plain.fill(0) }
+                                    out
+                                }) { r ->
+                                    r.onSuccess { out ->
+                                        toast("PDF asli diekspor ke Documents/DepUp Office!")
+                                        Files.open(this@ViewerActivity, Files.uriFor(this@ViewerActivity, out), PDF)
+                                    }.onFailure { toast("Gagal mengekspor: ${it.message}") }
+                                }
+                            }
                             6 -> showPdfSettingsSheet()
+                            12 -> {
+                                try { AccessCodeVault.forget(this@ViewerActivity, ProtectedDoc.documentId(pBytes)) } catch (_: Throwable) {}
+                                toast("Kode akses tidak lagi diingat di perangkat ini")
+                            }
                         }
                         true
                     }
@@ -637,7 +704,8 @@ class ViewerActivity : AppCompatActivity() {
                                 requirePassword("Ekspor PDF Asli") {
                                     work("Mengekspor PDF asli…", {
                                         val out = Files.namedOut(this@ViewerActivity, "Asli_" + Files.baseName(name), "pdf")
-                                        out.writeBytes(ProtectedDoc.openProtected(bytes))
+                                        val plain = ProtectedDoc.openProtected(bytes, accessCode)
+                                        try { out.writeBytes(plain) } finally { plain.fill(0) }
                                         out
                                     }) { r ->
                                         r.onSuccess { out ->

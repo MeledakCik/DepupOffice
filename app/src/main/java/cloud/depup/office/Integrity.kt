@@ -23,7 +23,7 @@ import java.security.SecureRandom
 object Integrity {
     @Volatile private var app: Context? = null
 
-    fun init(ctx: Context) { app = ctx.applicationContext }
+    fun init(ctx: Context) { app = ctx.applicationContext; Honeypot.appCtx = app }
 
     /** Pemeriksaan segar per operasi; setiap error pemeriksaan berarti fail-closed. */
     fun findings(ctx: Context? = app): List<String> {
@@ -140,11 +140,16 @@ object Integrity {
         val certs = if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
         val md = MessageDigest.getInstance("SHA-256")
         val hashes = certs.map { md.digest(it.toByteArray()) }
-        val allowed = BuildConfig.RELEASE_CERTS.split(',').map { it.trim().replace(":", "").lowercase() }
+        // Sertifikat upload resmi tertanam (tersamar) + sertifikat tambahan dari build (mis. "App signing key" Play
+        // Console lewat DEPUP_EXTRA_CERTS). Dulu hanya dari build: build tanpa variabel itu menolak SEMUA dokumen.
+        val allowed = ArrayList<ByteArray>()
+        allowed += Sx.releaseCert()
+        BuildConfig.RELEASE_CERTS.split(',').map { it.trim().replace(":", "").lowercase() }
             .filter { it.matches(Regex("[0-9a-f]{64}")) }
-            .map { h -> ByteArray(32) { i -> h.substring(i * 2, i * 2 + 2).toInt(16).toByte() } }
-        if (allowed.isEmpty()) return false
-        return hashes.any { actual -> allowed.any { expected -> MessageDigest.isEqual(expected, actual) } }
+            .forEach { h -> allowed += ByteArray(32) { i -> h.substring(i * 2, i * 2 + 2).toInt(16).toByte() } }
+        return try {
+            hashes.any { actual -> allowed.any { expected -> MessageDigest.isEqual(expected, actual) } }
+        } finally { allowed.forEach { it.fill(0) } }
     }
 
     // ---------- Intent internal (anti intent-injection) ----------

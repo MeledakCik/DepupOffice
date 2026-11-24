@@ -3127,33 +3127,45 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
             .setPositiveButton("Buka") { _, _ -> then(pw.text.toString()) }.setNegativeButton("Batal", null).show()
     }
 
-    /** Buat Dokumen Terlindungi (sampul + enkripsi AES-256-GCM + password edit guru + HMAC). */
+    /** Buat Dokumen Terlindungi v3 (sampul + AES-256-GCM + HMAC, kunci dari kode akses + password edit guru). */
     private fun protectDocFlow(uri: Uri) {
+        val codeField = AccessCodeUi.codeField(this, ProtectedDoc.generateAccessCode())
         val pwField = field("Password Edit Guru", pin = false).apply {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         val box = vbox(16).apply { setPadding(dp(16), dp(16), dp(16), dp(16)) }
         box.add(tv("Buat Dokumen Terlindungi", 16f, C.TEXT, true))
-        box.add(tv("Dokumen dienkripsi dengan kunci Android Keystore pada perangkat ini. Hanya instalasi ini yang dapat membukanya; akses hilang jika aplikasi dihapus atau data aplikasi di-reset.", 13f, C.MUTED), top = 6)
+        box.add(tv("Isi dienkripsi AES-256-GCM dengan kunci dari kode akses. Bagikan kode ke murid; dokumen bisa dibuka " +
+            "di DepUp Office Android dan iPhone. Password edit guru dipakai untuk mengekspor PDF asli.", 13f, C.MUTED), top = 6)
+        box.add(tv("Kode akses", 12f, C.MUTED), top = 12)
+        box.add(codeField, top = 2)
         box.add(pwField, top = 12)
         AlertDialog.Builder(this)
             .setTitle("Proteksi Dokumen")
             .setView(box)
             .setPositiveButton("Lindungi") { _, _ ->
+                val code = codeField.text.toString()
+                SecurePackage.validateNewCode(code)?.let { toast(it); return@setPositiveButton }
                 val editPw = pwField.text.toString().trim()
                 if (editPw.length < 6 || editPw == "123456" || editPw.toSet().size == 1) {
                     toast("Password edit minimal 6 karakter dan tidak mudah ditebak")
+                    return@setPositiveButton
+                }
+                if (SecurePackage.normalizeCode(editPw) == SecurePackage.normalizeCode(code)) {
+                    toast("Password edit guru harus berbeda dari kode akses murid")
                     return@setPositiveButton
                 }
                 val base = Files.baseName(Files.nameOf(this, uri))
                 val out = Files.newOut(this, base + "_terlindungi", "pdf")
                 work("Melindungi dokumen…", {
                     val originalBytes = Files.readOrNull(this@MainActivity, uri) ?: throw IllegalStateException("Tidak bisa membaca file")
-                    try { ProtectedDoc.protect(originalBytes, editPw, out) }
+                    try { ProtectedDoc.protect(originalBytes, code, editPw, out) }
                     finally { originalBytes.fill(0) }
                 }) { res ->
                     res.onSuccess {
-                        showResult("Dokumen Terlindungi Dibuat", out, PDF, "Sampul, enkripsi AES-256-GCM, integritas HMAC, dan password edit guru berhasil diterapkan.")
+                        AccessCodeUi.showCreatedCode(this, SecurePackage.normalizeCode(code).chunked(4).joinToString("-")) {
+                            showResult("Dokumen Terlindungi Dibuat", out, PDF, "Sampul, enkripsi AES-256-GCM, integritas HMAC, kode akses, dan password edit guru berhasil diterapkan.")
+                        }
                     }.onFailure { out.delete(); fail(it) }
                 }
             }

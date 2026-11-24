@@ -16,6 +16,8 @@
 # ---- Keamanan ----
 # Native symbol names bind the integrity scan to this unmoved JNI class.
 -keep class cloud.depup.office.IntegrityNative { *; }
+# Honeypot: kelas umpan SENGAJA dipertahankan nama & isinya agar mudah "ditemukan" pembongkar APK.
+-keep class cloud.depup.office.MasterKeys { *; }
 # Log debug dibuang dari rilis (tidak membocorkan alur keamanan lewat logcat).
 -assumenosideeffects class android.util.Log {
     public static int v(...);

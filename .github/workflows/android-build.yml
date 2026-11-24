@@ -85,6 +85,15 @@ jobs:
           chmod +x gradlew
           ./gradlew testDebugUnitTest --stacktrace
 
+      - name: Check Play signing certificate
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          DEPUP_EXTRA_CERTS: ${{ secrets.DEPUP_EXTRA_CERTS }}
+        run: |
+          if [ -z "$DEPUP_EXTRA_CERTS" ]; then
+            echo "::warning::Secret DEPUP_EXTRA_CERTS kosong. APK dari GitHub tetap lolos cek tanda tangan, tetapi versi Play Store (ditandatangani ulang Google) akan menolak membuka Dokumen Terlindungi. Isi dengan SHA-256 'App signing key' dari Play Console."
+          fi
+
       - name: Build release APK & AAB
         env:
           DEPUP_EXTRA_CERTS: ${{ secrets.DEPUP_EXTRA_CERTS }}
