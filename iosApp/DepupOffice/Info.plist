@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- "Buka di DepUp Office" dari WhatsApp, Files, Mail, dll. (setara intent-filter Android) -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Dokumen</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+				<string>org.openxmlformats.wordprocessingml.document</string>
+				<string>org.openxmlformats.spreadsheetml.sheet</string>
+				<string>org.openxmlformats.presentationml.presentation</string>
+				<string>com.microsoft.word.doc</string>
+				<string>com.microsoft.excel.xls</string>
+				<string>com.microsoft.powerpoint.ppt</string>
+				<string>public.rtf</string>
+				<string>public.plain-text</string>
+				<string>public.comma-separated-values-text</string>
+				<string>public.image</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Tautan widget catatan: depupoffice://note/<id> -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>cloud.depup.office.ios</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>depupoffice</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -91,6 +91,7 @@ struct RootTabView: View {
         #endif
         .onOpenURL { url in
             if let id = NotesFile.noteId(from: url) { noteLink = NoteLink(id: id) }
+            else if url.isFileURL { documents.importAndOpen(url) }
         }
         .sheet(item: $noteLink) { link in NotesScreen(openNoteId: link.id) }
         .fullScreenCover(item: $documents.protectedFile) { file in

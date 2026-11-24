@@ -48,6 +48,7 @@
 		B20000000000000000000008 /* DepupOfficeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepupOfficeUITests.swift; sourceTree = "<group>"; };
 		B20000000000000000000009 /* DepupOfficeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DepupOfficeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000013 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
+		B20000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -95,6 +96,7 @@
 				A20000000000000000000008 /* OfficeFiles.swift */,
 				A20000000000000000000004 /* Assets.xcassets */,
 				B20000000000000000000007 /* DepupOffice.entitlements */,
+				B20000000000000000000010 /* Info.plist */,
 			);
 			path = DepupOffice;
 			sourceTree = "<group>";
@@ -263,6 +265,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = DepupOffice/DepupOffice.entitlements;
+				INFOPLIST_FILE = DepupOffice/Info.plist;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 40200;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -288,6 +291,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = DepupOffice/DepupOffice.entitlements;
+				INFOPLIST_FILE = DepupOffice/Info.plist;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 40200;
 				GENERATE_INFOPLIST_FILE = YES;

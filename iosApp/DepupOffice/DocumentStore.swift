@@ -198,6 +198,32 @@ final class DocumentStore: ObservableObject {
         }
     }
 
+    /// Berkas dari aplikasi lain ("Buka di DepUp Office"): salin ke folder DepUp Office lalu buka.
+    /// Dokumen Terlindungi langsung masuk ke penampil aman.
+    func importAndOpen(_ url: URL) {
+        let destinationFolder = folderURL
+        if url.standardizedFileURL.path.hasPrefix(destinationFolder.standardizedFileURL.path) {
+            open(LocalDocument(url: url, modifiedAt: .now))
+            return
+        }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            do {
+                try FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+                let destination = Self.uniqueDestination(for: url, in: destinationFolder)
+                try FileManager.default.copyItem(at: url, to: destination)
+                await MainActor.run {
+                    guard let self else { return }
+                    self.refresh()
+                    self.open(LocalDocument(url: destination, modifiedAt: .now))
+                }
+            } catch {
+                await self?.setStatus("Berkas tidak bisa dibuka: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func saveScannedPDF(_ data: Data) {
         let destinationFolder = folderURL
         Task.detached(priority: .userInitiated) { [weak self] in
