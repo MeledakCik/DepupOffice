@@ -408,7 +408,10 @@ enum ParityEngine {
         let handler = VNImageRequestHandler(cgImage: cg, options: [:])
         let faces = VNDetectFaceRectanglesRequest()
         try handler.perform([seg, faces])
-        guard let maskBuffer = seg.results?.first?.pixelBuffer else { throw ParityError.message("Orang tidak terdeteksi di foto.") }
+        // Segmentasi selalu menghasilkan masker (juga untuk foto tanpa orang), jadi wajah wajib terdeteksi.
+        guard !(faces.results ?? []).isEmpty, let maskBuffer = seg.results?.first?.pixelBuffer else {
+            throw ParityError.message("Wajah tidak terdeteksi. Gunakan foto setengah badan yang menghadap kamera.")
+        }
         let ci = CIImage(cgImage: cg)
         var mask = CIImage(cvPixelBuffer: maskBuffer)
         mask = mask.transformed(by: CGAffineTransform(scaleX: ci.extent.width / mask.extent.width, y: ci.extent.height / mask.extent.height))
@@ -606,6 +609,45 @@ enum ParityEngine {
         rowsOut.append([.empty, .text("TOTAL"), .formula("SUM(C2:C\(rowsOut.count))")])
         let data = Xlsx.write(sheets: [(name: "Belanja", rows: rowsOut, boldRows: [0, rowsOut.count - 1])])
         return GeneratedDocument(name: "Struk_\(urls.count == 1 ? base(urls[0]) : "gabungan").xlsx", data: data)
+    }
+}
+
+/// Pembaca QR/barcode berlapis: Vision → Vision dengan margin putih → detektor QR CoreImage.
+enum QRReader {
+    static func read(_ image: UIImage) -> [String] {
+        guard let cg = image.cgImage else { return [] }
+        let first = vision(cg)
+        if !first.isEmpty { return first }
+        if let padded = pad(cg) {
+            let second = vision(padded)
+            if !second.isEmpty { return second }
+            let third = coreImage(padded)
+            if !third.isEmpty { return third }
+        }
+        return coreImage(cg)
+    }
+
+    private static func vision(_ cg: CGImage) -> [String] {
+        let request = VNDetectBarcodesRequest()
+        guard (try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])) != nil else { return [] }
+        var seen = Set<String>()
+        return (request.results ?? []).compactMap { $0.payloadStringValue }.filter { seen.insert($0).inserted }
+    }
+
+    private static func coreImage(_ cg: CGImage) -> [String] {
+        let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: nil, options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+        return (detector?.features(in: CIImage(cgImage: cg)) ?? []).compactMap { ($0 as? CIQRCodeFeature)?.messageString }
+    }
+
+    /// Margin putih 10% (zona tenang QR) di sekeliling gambar.
+    private static func pad(_ cg: CGImage) -> CGImage? {
+        let m = max(cg.width, cg.height) / 10
+        let size = CGSize(width: cg.width + 2 * m, height: cg.height + 2 * m)
+        let f = UIGraphicsImageRendererFormat(); f.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: f).image { ctx in
+            UIColor.white.setFill(); ctx.fill(CGRect(origin: .zero, size: size))
+            UIImage(cgImage: cg).draw(in: CGRect(x: m, y: m, width: cg.width, height: cg.height))
+        }.cgImage
     }
 }
 

@@ -189,15 +189,11 @@ enum NativeOfficeEngine {
     }
 
     private static func scanQR(_ url: URL) throws -> GeneratedDocument {
-        let request = VNDetectBarcodesRequest()
-        request.symbologies = [.qr, .ean13, .ean8, .code128, .pdf417, .aztec]
-        try VNImageRequestHandler(url: url).perform([request])
-        let results = (request.results ?? []).compactMap { item -> String? in
-            guard let value = item.payloadStringValue else { return nil }
-            return "\(item.symbology.rawValue): \(value)"
-        }
-        let text = results.isEmpty ? "Kode tidak ditemukan di \(url.lastPathComponent)." : results.joined(separator: "\n")
-        return GeneratedDocument(name: "Hasil_kode_\(url.deletingPathExtension().lastPathComponent).txt", data: Data(text.utf8))
+        let image = try ParityEngine.loadImage(url)
+        let results = QRReader.read(image)
+        guard !results.isEmpty else { throw ParityError.message("Kode QR/barcode tidak ditemukan di \(url.lastPathComponent).") }
+        return GeneratedDocument(name: "Hasil_kode_\(url.deletingPathExtension().lastPathComponent).txt",
+                                 data: Data(AiText.clean(results.joined(separator: "\n")).utf8))
     }
 
     private static func pdfToImages(_ url: URL) throws -> [GeneratedDocument] {
