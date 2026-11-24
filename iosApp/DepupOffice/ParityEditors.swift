@@ -692,6 +692,9 @@ final class TableAttachment: NSTextAttachment {
 
     func refresh() {
         let img = TableAttachment.render(rows: rows, widths: widths, borders: borders, width: Self.renderWidth)
+        // Varian gelap hanya untuk tampilan editor; PDF/ekspor tetap memakai gambar terang.
+        let dark = TableAttachment.render(rows: rows, widths: widths, borders: borders, width: Self.renderWidth, dark: true)
+        img.imageAsset?.register(dark, with: UITraitCollection(userInterfaceStyle: .dark))
         image = img
         bounds = CGRect(origin: .zero, size: img.size)
     }
@@ -712,7 +715,11 @@ final class TableAttachment: NSTextAttachment {
         fitted(proposedLineFragment.width)
     }
 
-    static func render(rows: [[String]], widths: [Int], borders: Bool, width: CGFloat) -> UIImage {
+    static func render(rows: [[String]], widths: [Int], borders: Bool, width: CGFloat, dark: Bool = false) -> UIImage {
+        let paper: UIColor = dark ? UIColor(white: 0.11, alpha: 1) : .white
+        let ink: UIColor = dark ? UIColor(white: 0.92, alpha: 1) : .black
+        let head: UIColor = dark ? UIColor(white: 0.2, alpha: 1) : UIColor(white: 0.93, alpha: 1)
+        let line: UIColor = dark ? UIColor(white: 0.45, alpha: 1) : UIColor(white: 0.55, alpha: 1)
         let cols = max(1, rows.map(\.count).max() ?? 1)
         let ws = widths.count == cols ? widths.map(CGFloat.init) : Array(repeating: 1, count: cols)
         let total = max(1, ws.reduce(0, +))
@@ -731,21 +738,21 @@ final class TableAttachment: NSTextAttachment {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 2
         return UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            UIColor.white.setFill()
+            paper.setFill()
             UIRectFill(CGRect(origin: .zero, size: size))
             var y: CGFloat = 0
             for (r, row) in rows.enumerated() {
                 var x: CGFloat = 0
-                if borders && r == 0 { UIColor(white: 0.93, alpha: 1).setFill(); UIRectFill(CGRect(x: 0, y: y, width: width, height: heights[r])) }
+                if borders && r == 0 { head.setFill(); UIRectFill(CGRect(x: 0, y: y, width: width, height: heights[r])) }
                 for c in 0..<cols {
                     let w = colW[c]
                     let text = c < row.count ? row[c] : ""
                     let style = NSMutableParagraphStyle()
                     style.alignment = borders ? .left : .center
                     (text as NSString).draw(with: CGRect(x: x + 4, y: y + 4, width: w - 8, height: heights[r] - 8), options: [.usesLineFragmentOrigin],
-                                            attributes: [.font: borders && r == 0 ? bold : font, .foregroundColor: UIColor.black, .paragraphStyle: style], context: nil)
+                                            attributes: [.font: borders && r == 0 ? bold : font, .foregroundColor: ink, .paragraphStyle: style], context: nil)
                     if borders {
-                        UIColor(white: 0.55, alpha: 1).setStroke()
+                        line.setStroke()
                         UIBezierPath(rect: CGRect(x: x + 0.25, y: y + 0.25, width: w - 0.5, height: heights[r] - 0.5)).stroke()
                     }
                     x += w
@@ -828,12 +835,14 @@ enum AttributedPDF {
             if NSMaxRange(range) >= layout.numberOfGlyphs || range.length == 0 { break }
         }
         return UIGraphicsPDFRenderer(bounds: paper).pdfData { ctx in
+            UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
             for c in containers {
                 ctx.beginPage()
                 let range = layout.glyphRange(for: c)
                 let origin = CGPoint(x: inset, y: inset)
                 layout.drawBackground(forGlyphRange: range, at: origin)
                 layout.drawGlyphs(forGlyphRange: range, at: origin)
+            }
             }
         }
     }
