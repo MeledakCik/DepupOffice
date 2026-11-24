@@ -5,6 +5,7 @@ mkdir -p build
 sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
 xcodebuild -version
 
+# Uji ditandatangani ad-hoc ("Sign to Run Locally") agar Keychain & App Group berfungsi seperti di iPhone.
 # 1) Uji unit di Simulator (logika kripto, format Office, rumus, EXE→PDF, geometri TTD, catatan)
 UDID=$(xcrun simctl list devices available -j | python3 -c '
 import json,sys
@@ -27,7 +28,7 @@ annotate() {
 }
 if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Debug \
   -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/ios-test \
-  -only-testing:DepupOfficeTests CODE_SIGNING_ALLOWED=NO test > build/ios-test.log 2>&1; then
+  -only-testing:DepupOfficeTests CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= test > build/ios-test.log 2>&1; then
   annotate build/ios-test.log
   tail -60 build/ios-test.log
   exit 65
@@ -40,7 +41,7 @@ echo "::notice title=Uji iOS (daftar)::$(grep -oE "Test Case '-\[DepupOfficeTest
 UI_OK=1
 if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Debug \
   -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/ios-test -resultBundlePath build/ui.xcresult \
-  -only-testing:DepupOfficeUITests CODE_SIGNING_ALLOWED=NO test > build/ios-ui.log 2>&1; then
+  -only-testing:DepupOfficeUITests CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= test > build/ios-ui.log 2>&1; then
   UI_OK=0
   grep -E "error:|XCTAssert|failed \(" build/ios-ui.log | sort -u | head -40 | while IFS= read -r line; do echo "::warning title=Uji UI::$line"; done
 fi

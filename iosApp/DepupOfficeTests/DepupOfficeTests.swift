@@ -327,6 +327,14 @@ final class ToolTests: XCTestCase {
         try? FileManager.default.removeItem(at: file)
     }
 
+    func testAccessCodeKeychainRoundTrip() {
+        let id = UUID().uuidString.lowercased()
+        AccessCodeKeychain.save(docId: id, code: "abcd-efgh-jkmn")
+        XCTAssertEqual(AccessCodeKeychain.load(docId: id), "ABCDEFGHJKMN", "Keychain tidak menyimpan kode akses")
+        AccessCodeKeychain.forget(docId: id)
+        XCTAssertNil(AccessCodeKeychain.load(docId: id))
+    }
+
     func testPriceTagBarcodeAndSheet() {
         XCTAssertNotNil(PriceTag.render(product: "Kopi", price: "Rp 18.000", code: "8991234567890"))
         XCTAssertNil(PriceTag.barcode(""))
