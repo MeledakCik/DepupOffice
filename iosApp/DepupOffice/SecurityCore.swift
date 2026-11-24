@@ -603,13 +603,21 @@ private final class ShieldField: UITextField {
 final class ScreenShieldView: UIView {
     private let field = ShieldField()
 
-    init(content: UIView) {
+    init(content: UIView, shielded: Bool = true) {
         super.init(frame: .zero)
+        guard shielded else {
+            addSubview(content)
+            content.translatesAutoresizingMaskIntoConstraints = false
+            pin(content, to: self)
+            return
+        }
         field.isSecureTextEntry = true
         field.translatesAutoresizingMaskIntoConstraints = false
         addSubview(field)
         pin(field, to: self)
-        let canvas = field.subviews.first
+        // Kanvas aman milik field kata sandi (nama kelas berbeda antar-versi iOS): isinya tampil di layar
+        // tetapi tidak ikut tangkapan/rekaman layar.
+        let canvas = field.subviews.first { String(describing: type(of: $0)).contains("Canvas") } ?? field.subviews.first
         if let canvas {
             canvas.subviews.forEach { $0.removeFromSuperview() }
             canvas.isUserInteractionEnabled = true
@@ -644,6 +652,9 @@ private struct ShieldedPDF: UIViewRepresentable {
         pdf.displayMode = .singlePageContinuous
         pdf.displayDirection = .vertical
         pdf.document = document
+        #if DEBUG
+        if UITestSupport.noShield { return ScreenShieldView(content: pdf, shielded: false) }
+        #endif
         return ScreenShieldView(content: pdf)
     }
 

@@ -380,7 +380,7 @@ private struct DocumentRow: View {
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text("\(document.kind.title) · \(document.modifiedAt.formatted(date: .abbreviated, time: .shortened))")
+                    Text("\(document.kind.title) · \(document.modifiedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(Locale(identifier: "id_ID"))))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

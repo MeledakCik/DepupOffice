@@ -227,6 +227,7 @@ struct SheetEditorView: View {
                 ScrollView([.horizontal, .vertical]) {
                     grid.padding(.bottom, 40)
                 }
+                .defaultScrollAnchor(.topLeading)
                 .background(Color(uiColor: .systemBackground))
                 if let failure { Text(failure).font(.caption).foregroundStyle(.red).padding(6) }
             }
@@ -695,6 +696,22 @@ final class TableAttachment: NSTextAttachment {
         bounds = CGRect(origin: .zero, size: img.size)
     }
 
+    /// Tabel diperkecil agar muat selebar baris teks (layar iPhone lebih sempit dari halaman A4).
+    private func fitted(_ width: CGFloat) -> CGRect {
+        guard let size = image?.size, size.width > 0, width > 0, size.width > width else { return bounds }
+        return CGRect(x: 0, y: 0, width: width, height: size.height * width / size.width)
+    }
+
+    override func attachmentBounds(for textContainer: NSTextContainer?, proposedLineFragment lineFrag: CGRect,
+                                   glyphPosition position: CGPoint, characterIndex charIndex: Int) -> CGRect {
+        fitted(lineFrag.width)
+    }
+
+    override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: NSTextLocation,
+                                   textContainer: NSTextContainer?, proposedLineFragment: CGRect, position: CGPoint) -> CGRect {
+        fitted(proposedLineFragment.width)
+    }
+
     static func render(rows: [[String]], widths: [Int], borders: Bool, width: CGFloat) -> UIImage {
         let cols = max(1, rows.map(\.count).max() ?? 1)
         let ws = widths.count == cols ? widths.map(CGFloat.init) : Array(repeating: 1, count: cols)
@@ -971,7 +988,10 @@ struct DocTemplatePicker: View {
                             Text(t.title).font(.body.weight(.medium)).foregroundStyle(.primary)
                             Text(t.subtitle).font(.caption).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .navigationTitle("Template Dokumen")

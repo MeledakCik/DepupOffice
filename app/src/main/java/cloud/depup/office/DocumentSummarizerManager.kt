@@ -96,10 +96,24 @@ object DocumentSummarizerManager {
     /**
      * Algoritma ekstraksi kalimat kunci berdasarkan kata kunci & bobot posisi.
      */
-    private fun extractKeyPoints(text: String): List<String> {
-        val paragraphs = text.split("\n")
-            .map { it.trim() }
-            .filter { it.length > 25 }
+    /** Baris PDF yang terpotong (tanpa tanda akhir kalimat) disambung menjadi satu paragraf — sama dengan iOS. */
+    internal fun paragraphs(text: String): List<String> {
+        val out = ArrayList<String>()
+        val current = StringBuilder()
+        for (raw in text.split("\n")) {
+            val line = raw.trim()
+            if (line.isEmpty()) { if (current.isNotEmpty()) { out.add(current.toString()); current.clear() }; continue }
+            if (current.isNotEmpty()) current.append(' ')
+            current.append(line)
+            if (line.last() in ".!?:;)\"”") { out.add(current.toString()); current.clear() }
+        }
+        if (current.isNotEmpty()) out.add(current.toString())
+        return out
+    }
+
+    internal fun extractKeyPoints(text: String): List<String> {
+        val seen = HashSet<String>()
+        val paragraphs = paragraphs(text).filter { it.length > 25 && seen.add(it.lowercase()) }
 
         if (paragraphs.isEmpty()) {
             return listOf(text.take(200))

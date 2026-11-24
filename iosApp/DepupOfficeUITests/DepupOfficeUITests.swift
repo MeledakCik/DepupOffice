@@ -150,3 +150,22 @@ final class DepupOfficeUITests: XCTestCase {
         }
     }
 }
+
+extension DepupOfficeUITests {
+    /// Isi PDF terlindungi benar-benar terdekripsi & tampil (pelindung dimatikan khusus untuk screenshot ini;
+    /// dengan pelindung aktif, tangkapan layar sengaja kosong).
+    func testProtectedDocumentContentRenders() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestSeed", "-UITestScreen", "protected", "-UITestNoShield"]
+        app.launch()
+        let field = app.textFields.firstMatch
+        if field.waitForExistence(timeout: 15) {
+            field.tap()
+            field.typeText("ABCD-EFGH-JKMN")
+            app.buttons["Buka"].tap()
+        }
+        XCTAssertTrue(app.buttons["Opsi dokumen"].waitForExistence(timeout: 20), "dokumen tidak terbuka")
+        Thread.sleep(forTimeInterval: 2)
+        shot(app, "54_terlindungi_isi_tanpa_pelindung")
+    }
+}

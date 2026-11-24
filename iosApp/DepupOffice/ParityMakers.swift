@@ -185,7 +185,12 @@ struct InvoiceMakerView: View {
     let onSave: ([GeneratedDocument]) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var shop = "Toko Usaha Mandiri"
-    @State private var number = "INV-" + Date().formatted(.dateTime.year().month(.twoDigits).day(.twoDigits)).replacingOccurrences(of: "/", with: "") + "-" + String(Int.random(in: 100...999))
+    @State private var number: String = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd"
+        return "INV-\(f.string(from: Date()))-\(Int.random(in: 100...999))"
+    }()
     @State private var date = Date()
     @State private var customer = "Bpk. Pelanggan"
     @State private var note = "Terima kasih atas kepercayaan Anda."
@@ -538,8 +543,23 @@ struct ChartMakerView: View {
 enum Summarizer {
     static let keywords = ["tujuan", "kesimpulan", "penting", "total", "ringkasan", "rekomendasi", "hasil", "catatan", "pasal", "syarat"]
 
+    /// Baris PDF yang terpotong (tanpa tanda akhir kalimat) disambung menjadi satu paragraf.
+    static func paragraphs(_ text: String) -> [String] {
+        var out: [String] = []
+        var current = ""
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { if !current.isEmpty { out.append(current); current = "" }; continue }
+            current = current.isEmpty ? line : current + " " + line
+            if let last = line.last, ".!?:;)\"”".contains(last) { out.append(current); current = "" }
+        }
+        if !current.isEmpty { out.append(current) }
+        return out
+    }
+
     static func keyPoints(_ text: String) -> [String] {
-        let paragraphs = text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.count > 25 }
+        var seen = Set<String>()
+        let paragraphs = paragraphs(text).filter { $0.count > 25 && seen.insert($0.lowercased()).inserted }
         if paragraphs.isEmpty { return [String(text.prefix(200))] }
         let scored = paragraphs.enumerated().map { index, p -> (Int, String, Int) in
             var score = min(p.count, 300)
@@ -1075,7 +1095,10 @@ struct NotesScreen: View {
                             Text(note.isChecklist ? "\(note.checklist.filter(\.done).count)/\(note.checklist.count) selesai" : note.body)
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
                 .onDelete { idx in store.delete(idx.map { store.notes[$0].id }) }
             }

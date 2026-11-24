@@ -23,6 +23,7 @@ struct DepupOfficeApp: App {
                 .environmentObject(documents)
                 .tint(Color.depupBlue)
                 .preferredColorScheme(colorScheme)
+                .environment(\.locale, Locale(identifier: "id_ID"))
         }
     }
 }

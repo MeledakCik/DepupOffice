@@ -303,6 +303,12 @@ final class ToolTests: XCTestCase {
         XCTAssertTrue(points[0].hasPrefix("Paragraf pembuka"))
     }
 
+    func testSummarizerJoinsWrappedLinesAndDedupes() {
+        let text = "Kegiatan bulan ini berjalan lancar. Kesimpulan penting: anggaran disetujui\ndan laporan dikirim tepat waktu.\n\n" +
+            "Kegiatan bulan ini berjalan lancar. Kesimpulan penting: anggaran disetujui\ndan laporan dikirim tepat waktu."
+        XCTAssertEqual(Summarizer.keyPoints(text), ["Kegiatan bulan ini berjalan lancar. Kesimpulan penting: anggaran disetujui dan laporan dikirim tepat waktu."])
+    }
+
     func testAiTextStripsHiddenCharacters() {
         let smuggled = "Halo" + String(UnicodeScalar(0xE0049)!) + "\u{200B}dunia\u{202E}"
         XCTAssertEqual(AiText.clean(smuggled), "Halodunia")

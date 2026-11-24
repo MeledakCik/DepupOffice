@@ -13,6 +13,8 @@ enum UITestSupport {
     static var arguments: [String] { ProcessInfo.processInfo.arguments }
     static var isActive: Bool { arguments.contains("-UITestSeed") }
     static var dark: Bool { arguments.contains("-UITestDark") }
+    /// Tanpa pelindung tangkapan layar — hanya agar uji UI bisa membuktikan isi PDF benar-benar tampil.
+    static var noShield: Bool { arguments.contains("-UITestNoShield") }
 
     static var screen: String? {
         guard let i = arguments.firstIndex(of: "-UITestScreen"), i + 1 < arguments.count else { return nil }
@@ -29,8 +31,12 @@ enum UITestSupport {
     static func seed() {
         guard isActive else { return }
         let fm = FileManager.default
-        try? fm.removeItem(at: folder)
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Mulai bersih setiap peluncuran, kecuali Dokumen Terlindungi (ID dokumennya harus tetap agar
+        // "kode diingat" bisa diuji antar-peluncuran).
+        for item in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] where item.lastPathComponent != "Rahasia_terlindungi.pdf" {
+            try? fm.removeItem(at: item)
+        }
         try? samplePDF().write(to: url("Contoh Laporan.pdf"))
         try? DocTemplate.hadir.docx.write(to: url("Daftar Hadir.docx"))
         try? DocTemplate.izin.docx.write(to: url("Surat Izin.docx"))
@@ -49,7 +55,8 @@ enum UITestSupport {
         try? tableImage().jpegData(compressionQuality: 0.95)?.write(to: url("Tabel.jpg"))
         try? textImage(["TOKO MAKMUR", "Kopi Susu        18.000", "Roti Bakar       12.500", "Air Mineral       5.000", "TOTAL            35.500"], shadow: false, mono: true)
             .jpegData(compressionQuality: 0.95)?.write(to: url("Struk.jpg"))
-        if let protected = try? ProtectedDocWriter.make(original: samplePDF(), accessCode: accessCode, editPassword: "guru123!") {
+        if !fm.fileExists(atPath: url("Rahasia_terlindungi.pdf").path),
+           let protected = try? ProtectedDocWriter.make(original: samplePDF(), accessCode: accessCode, editPassword: "guru123!") {
             try? protected.write(to: url("Rahasia_terlindungi.pdf"))
         }
         NotesFile.save([Note(title: "Belanja kantor", checklist: [NoteItem(text: "Kertas A4"), NoteItem(text: "Tinta printer", done: true), NoteItem(text: "Map plastik")], isChecklist: true),
