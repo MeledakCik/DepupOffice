@@ -18,6 +18,7 @@ struct GeneratedDocument: Identifiable {
 
 enum NativeOfficeEngine {
     static func run(tool: String, urls: [URL], options: [String: String]) throws -> [GeneratedDocument] {
+        if let parity = try ParityEngine.run(tool: tool, urls: urls, options: options) { return parity }
         switch tool {
         case "merge": return [try merge(urls)]
         case "split": return [try split(urls[0], range: options["range"] ?? "1")]
@@ -357,6 +358,19 @@ private struct OfficeTool: Identifiable {
         .init(id: "ocr", title: "OCR dokumen", detail: "Kenali teks pada hasil scan dan ekspor ke TXT", symbol: "text.viewfinder", group: "Konversi"),
         .init(id: "extractText", title: "Ekstrak teks PDF", detail: "Simpan teks PDF ke berkas TXT", symbol: "doc.text.magnifyingglass", group: "Konversi"),
         .init(id: "pdfToWord", title: "PDF ke Word", detail: "Ekspor teks PDF ke format RTF yang bisa dibuka Word", symbol: "doc.text", group: "Konversi"),
+        .init(id: "removeBlank", title: "Hapus halaman kosong", detail: "Deteksi & buang halaman putih polos", symbol: "doc.badge.ellipsis", group: "Kelola PDF"),
+        .init(id: "compressTarget", title: "Kompres PDF presisi", detail: "Target < 200 KB / 500 KB / 1 MB", symbol: "gauge.with.dots.needle.33percent", group: "Kelola PDF"),
+        .init(id: "extractImages", title: "Ambil gambar", detail: "Simpan foto yang ada di dalam PDF", symbol: "photo.on.rectangle.angled", group: "Kelola PDF"),
+        .init(id: "searchablePDF", title: "PDF bisa dicari", detail: "Tanam teks OCR, bisa dicari & disalin", symbol: "text.magnifyingglass", group: "Konversi"),
+        .init(id: "exeToPdf", title: "EXE ke PDF", detail: "Ambil PDF dari berkas .exe (PDF to EXE)", symbol: "shippingbox", group: "Konversi"),
+        .init(id: "shadowRemove", title: "Pembersih bayangan foto", detail: "Hapus bayangan tangan/HP & putihkan kertas", symbol: "wand.and.rays", group: "Gambar", multiple: true, imagesOnly: true),
+        .init(id: "transparentSign", title: "TTD transparan", detail: "Foto tanda tangan jadi PNG tanpa latar", symbol: "signature", group: "Gambar", imagesOnly: true),
+        .init(id: "idPhoto", title: "Pembuat pasfoto", detail: "Potong 2x3 3x4 4x6, latar merah/biru/putih, cetak A4", symbol: "person.crop.square", group: "Gambar", imagesOnly: true),
+        .init(id: "businessCard", title: "Pindai kartu nama", detail: "Nama, HP & email jadi kontak (.vcf)", symbol: "person.text.rectangle", group: "Gambar", imagesOnly: true),
+        .init(id: "tableToExcel", title: "Pindai tabel ke Excel", detail: "Foto tabel/kuitansi jadi berkas .xlsx", symbol: "tablecells.badge.ellipsis", group: "Konversi", imagesOnly: true),
+        .init(id: "receiptToExcel", title: "Scan struk", detail: "Daftar belanja & total ke Excel", symbol: "receipt", group: "Konversi", multiple: true, imagesOnly: true),
+        .init(id: "priceTag", title: "Label harga & barcode", detail: "Buat label harga toko & lembar A4", symbol: "barcode", group: "Dokumen"),
+        .init(id: "print", title: "Cetak", detail: "Printer AirPrint atau simpan PDF", symbol: "printer", group: "Bagikan & ekspor"),
         .init(id: "organize", title: "Susun & putar halaman", detail: "Urutkan, hapus, putar halaman, dan sisipkan halaman kosong", symbol: "rectangle.stack", group: "Kelola PDF"),
         .init(id: "sign", title: "Tanda tangan PDF", detail: "Gambar tanda tangan lalu tempel di halaman pilihan", symbol: "signature", group: "Dokumen"),
         .init(id: "liveQR", title: "Pindai QR dari kamera", detail: "Arahkan kamera ke QR atau barcode", symbol: "camera.viewfinder", group: "Konversi"),
@@ -383,6 +397,7 @@ struct NativeToolsScreen: View {
     @State private var editorTarget: EditorTarget?
     @State private var editorCopy: URL?
     @State private var isLiveQRPresented = false
+    @State private var isPriceTagPresented = false
 
     var body: some View {
         List {
@@ -395,7 +410,9 @@ struct NativeToolsScreen: View {
                 Section(group) {
                     ForEach(OfficeTool.all.filter { $0.group == group }) { tool in
                         Button {
-                            if tool.id == "liveQR" { isLiveQRPresented = true } else { selectedTool = tool }
+                            if tool.id == "liveQR" { isLiveQRPresented = true }
+                            else if tool.id == "priceTag" { isPriceTagPresented = true }
+                            else { selectedTool = tool }
                         } label: {
                             HStack(spacing: 13) {
                                 Image(systemName: tool.symbol)
@@ -450,6 +467,9 @@ struct NativeToolsScreen: View {
                 }
             }
         }
+        .sheet(isPresented: $isPriceTagPresented) {
+            PriceTagSheet { docs in documents.saveGenerated(docs) }
+        }
         .sheet(isPresented: $isLiveQRPresented) {
             LiveQRScannerSheet { text in documents.saveText(text, name: "QR_\(Int(Date().timeIntervalSince1970))") }
         }
@@ -492,7 +512,8 @@ struct NativeToolsScreen: View {
         guard let tool = importTool else { return [.item] }
         if tool.imagesOnly { return [.image] }
         if tool.id == "merge" { return [.pdf] }
-        if tool.id == "share" { return [.item] }
+        if tool.id == "share" || tool.id == "print" { return [.item] }
+        if tool.id == "exeToPdf" { return [.data] }
         return [.pdf]
     }
 
@@ -513,6 +534,11 @@ struct NativeToolsScreen: View {
                 editorTarget = EditorTarget(url: copy, kind: tool.id)
             }
             catch { documents.statusMessage = error.localizedDescription }
+            return
+        }
+        if tool.id == "print" {
+            guard let url = urls.first, let copy = try? documents.makeShareCopy(from: url) else { return }
+            PrintHelper.print(copy)
             return
         }
         if tool.id == "share" {
@@ -618,6 +644,9 @@ private struct ToolSetupSheet: View {
     @State private var query = ""
     @State private var password = ""
     @State private var accessCode = SecurePackage.generateAccessCode()
+    @State private var targetKB = "500"
+    @State private var photoSize = "3x4"
+    @State private var photoBackground = "red"
     @State private var editPassword = ""
 
     var body: some View {
@@ -649,6 +678,29 @@ private struct ToolSetupSheet: View {
                     Section("Kata sandi PDF") {
                         SecureField("Minimal 4 karakter", text: $password)
                     }
+                } else if tool.id == "compressTarget" {
+                    Section("Target ukuran") {
+                        Picker("Target", selection: $targetKB) {
+                            Text("< 200 KB").tag("200")
+                            Text("< 500 KB").tag("500")
+                            Text("< 1 MB").tag("1000")
+                        }.pickerStyle(.segmented)
+                    }
+                } else if tool.id == "idPhoto" {
+                    Section("Ukuran") {
+                        Picker("Ukuran", selection: $photoSize) {
+                            Text("2x3").tag("2x3")
+                            Text("3x4").tag("3x4")
+                            Text("4x6").tag("4x6")
+                        }.pickerStyle(.segmented)
+                    }
+                    Section("Warna latar") {
+                        Picker("Latar", selection: $photoBackground) {
+                            Text("Merah").tag("red")
+                            Text("Biru").tag("blue")
+                            Text("Putih").tag("white")
+                        }.pickerStyle(.segmented)
+                    }
                 } else if tool.id == "secureDoc" {
                     Section {
                         HStack {
@@ -677,6 +729,8 @@ private struct ToolSetupSheet: View {
                         if tool.id == "photoWatermark" { values["text"] = watermark }
                         if tool.id == "search" { values["query"] = query }
                         if tool.id == "protect" { values["password"] = password }
+                        if tool.id == "compressTarget" { values["targetKB"] = targetKB }
+                        if tool.id == "idPhoto" { values["size"] = photoSize; values["background"] = photoBackground }
                         if tool.id == "secureDoc" {
                             values["accessCode"] = accessCode
                             values["editPassword"] = editPassword

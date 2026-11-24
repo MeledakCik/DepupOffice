@@ -127,6 +127,21 @@ final class DocumentStore: ObservableObject {
         saveGeneratedFile(Data(text.utf8), name: name, extension: "csv")
     }
 
+    /// Simpan hasil alat (nama sudah berekstensi) ke folder DepUp Office.
+    func saveGenerated(_ results: [GeneratedDocument]) {
+        do {
+            try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            for result in results {
+                let output = Self.uniqueDestination(for: URL(fileURLWithPath: result.name), in: folderURL)
+                try result.data.write(to: output, options: .atomic)
+            }
+            refresh()
+            statusMessage = results.count == 1 ? "Tersimpan: \(results[0].name)." : "\(results.count) berkas tersimpan di DepUp Office."
+        } catch {
+            statusMessage = "Tidak bisa disimpan: \(error.localizedDescription)"
+        }
+    }
+
     func saveText(_ text: String, name: String) {
         saveGeneratedFile(Data(text.utf8), name: name, extension: "txt")
     }
