@@ -716,16 +716,47 @@ enum ExeExtractor {
         let missing = (0..<K).filter { key[$0] == nil }
         if missing.count > 2 { return nil }
         let total = 1 << (8 * missing.count)
+        // Kandidat kunci wajib membuat baris xref valid penuh; dari yang lolos, pilih struktur PDF terbanyak.
+        var best: [UInt8]?
+        var bestScore = -1
         for combo in 0..<total {
             var kb = (0..<K).map { UInt8(truncatingIfNeeded: key[$0] ?? 0) }
             for (idx, ki) in missing.enumerated() { kb[ki] = UInt8(truncatingIfNeeded: combo >> (8 * idx)) }
-            let headLen = min(2048, d.count - pdfAt)
+            if !rowsValid(d, o, rows, kb) { continue }
+            let headLen = min(65536, d.count - pdfAt)
             let h = (0..<headLen).map { d[pdfAt + $0] ^ kb[mod(pdfAt + $0, K)] }
-            if !startsWith(h, magic) || indexOf(h, Array("obj".utf8), 0) == nil { continue }
-            let out = (pdfAt..<d.count).map { d[$0] ^ kb[mod($0, K)] }
-            if let pdf = trim(out) { return pdf }
+            if !startsWith(h, magic) || indexOf(Array(h.prefix(2048)), Array("obj".utf8), 0) == nil { continue }
+            let score = count(h, Array(" obj".utf8)) + 2 * count(h, Array("endobj".utf8))
+            if score > bestScore { bestScore = score; best = kb }
         }
-        return nil
+        guard let kb = best else { return nil }
+        return trim((pdfAt..<d.count).map { d[$0] ^ kb[mod($0, K)] })
+    }
+
+    private static func rowsValid(_ d: [UInt8], _ o: Int, _ rows: Int, _ kb: [UInt8]) -> Bool {
+        for r in 0..<min(rows, 6) {
+            let base = o + r * 20
+            for pos in 0..<20 {
+                let c = Int(d[base + pos] ^ kb[mod(base + pos, K)])
+                let fine: Bool
+                switch pos {
+                case 10, 16: fine = c == 0x20
+                case 17: fine = c == 0x6E || c == 0x66
+                case 18: fine = c == 0x0D || c == 0x20
+                case 19: fine = c == 0x0A
+                default: fine = (0x30...0x39).contains(c)
+                }
+                if !fine { return false }
+            }
+        }
+        return true
+    }
+
+    private static func count(_ a: [UInt8], _ p: [UInt8]) -> Int {
+        var n = 0
+        var i = indexOf(a, p, 0)
+        while let at = i { n += 1; i = indexOf(a, p, at + p.count) }
+        return n
     }
 
     private static func fillFrom(_ d: [UInt8], _ o: Int, _ key: inout [Int?], _ word: [UInt8]) {

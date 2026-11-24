@@ -73,7 +73,10 @@ enum RuntimeIntegrity {
         if debuggerAttached() { f.append("debugger") }
         #endif
         if injectedLibrary() { f.append("hook") }
+        #if !DEBUG
+        // Xcode/XCTest mengisi DYLD_* pada build Debug; aplikasi rilis tidak pernah memilikinya.
         if suspiciousEnv.contains(where: { getenv($0) != nil }) { f.append("dyld-insert") }
+        #endif
         #if !targetEnvironment(simulator)
         if jailbroken() { f.append("jailbreak") }
         #endif
@@ -275,13 +278,16 @@ enum SecurePackage {
     // MARK: pembuatan v3
 
     static func buildV3(plain: Data, accessCode: String, editPassword: String, docId: String,
-                        iterations: UInt32 = v3Iterations) throws -> Data {
+                        iterations: UInt32 = v3Iterations, fixedSalt: [UInt8]? = nil, fixedNonce: [UInt8]? = nil) throws -> Data {
         if let problem = validateNewCode(accessCode) { throw ProtectedDocError.invalidCode(problem) }
-        guard isLowerUUID(docId) else { throw ProtectedDocError.corrupt }
+        guard isLowerUUID(docId), (v3MinIterations...v3MaxIterations).contains(iterations) else { throw ProtectedDocError.corrupt }
         var salt = [UInt8](repeating: 0, count: 16)
         var nonce = [UInt8](repeating: 0, count: 12)
         guard SecRandomCopyBytes(kSecRandomDefault, 16, &salt) == errSecSuccess,
               SecRandomCopyBytes(kSecRandomDefault, 12, &nonce) == errSecSuccess else { throw ProtectedDocError.corrupt }
+        // Hanya untuk vektor uji lintas platform (DepupOfficeTests); produksi selalu memakai nilai acak.
+        if let fixedSalt, fixedSalt.count == 16 { salt = fixedSalt }
+        if let fixedNonce, fixedNonce.count == 12 { nonce = fixedNonce }
         var ikm = try v3Ikm(accessCode, salt: salt, iterations: iterations)
         defer { for i in ikm.indices { ikm[i] = 0 } }
         let enc = hkdf(ikm, salt: salt, info: "DepUp-v3-AES-GCM-Key")

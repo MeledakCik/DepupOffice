@@ -16,6 +16,11 @@
 		A10000000000000000000008 /* ParityTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* ParityTools.swift */; };
 		A10000000000000000000009 /* ParityMakers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* ParityMakers.swift */; };
 		A10000000000000000000010 /* ParityEditors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* ParityEditors.swift */; };
+		A10000000000000000000011 /* NotesShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* NotesShared.swift */; };
+		B10000000000000000000001 /* NotesWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* NotesWidget.swift */; };
+		B10000000000000000000002 /* NotesShared.swift in Sources (widget) */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* NotesShared.swift */; };
+		B10000000000000000000003 /* NotesWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* NotesWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B10000000000000000000004 /* DepupOfficeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* DepupOfficeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,10 +35,29 @@
 		A20000000000000000000009 /* ParityTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParityTools.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* ParityMakers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParityMakers.swift; sourceTree = "<group>"; };
 		A20000000000000000000011 /* ParityEditors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParityEditors.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* NotesShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesShared.swift; sourceTree = "<group>"; };
+		B20000000000000000000001 /* NotesWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesWidget.swift; sourceTree = "<group>"; };
+		B20000000000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B20000000000000000000003 /* NotesWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotesWidget.entitlements; sourceTree = "<group>"; };
+		B20000000000000000000004 /* NotesWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NotesWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000005 /* DepupOfficeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepupOfficeTests.swift; sourceTree = "<group>"; };
+		B20000000000000000000006 /* DepupOfficeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DepupOfficeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000007 /* DepupOffice.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DepupOffice.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXContainerItemProxy section */
+		BA0000000000000000000001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A60000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = B50000000000000000000001; remoteInfo = NotesWidgetExtension; };
+		BA0000000000000000000002 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A60000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A50000000000000000000001; remoteInfo = DepupOffice; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B30000000000000000000010 /* Embed Foundation Extensions */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = (B10000000000000000000003 /* NotesWidgetExtension.appex in Embed Foundation Extensions */); name = "Embed Foundation Extensions"; runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A30000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000001 /* Frameworks (widget) */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000004 /* Frameworks (tests) */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -41,6 +65,8 @@
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000002 /* DepupOffice */,
+				B40000000000000000000001 /* NotesWidget */,
+				B40000000000000000000002 /* DepupOfficeTests */,
 				A40000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -53,18 +79,36 @@
 				A20000000000000000000003 /* RootTabView.swift */,
 				A20000000000000000000006 /* NativeOfficeFeatures.swift */,
 				A20000000000000000000007 /* SecurityCore.swift */,
+				A20000000000000000000012 /* NotesShared.swift */,
 				A20000000000000000000011 /* ParityEditors.swift */,
 				A20000000000000000000010 /* ParityMakers.swift */,
 				A20000000000000000000009 /* ParityTools.swift */,
 				A20000000000000000000008 /* OfficeFiles.swift */,
 				A20000000000000000000004 /* Assets.xcassets */,
+				B20000000000000000000007 /* DepupOffice.entitlements */,
 			);
 			path = DepupOffice;
 			sourceTree = "<group>";
 		};
+		B40000000000000000000001 /* NotesWidget */ = {
+			isa = PBXGroup;
+			children = (
+				B20000000000000000000001 /* NotesWidget.swift */,
+				B20000000000000000000002 /* Info.plist */,
+				B20000000000000000000003 /* NotesWidget.entitlements */,
+			);
+			path = NotesWidget;
+			sourceTree = "<group>";
+		};
+		B40000000000000000000002 /* DepupOfficeTests */ = {
+			isa = PBXGroup;
+			children = (B20000000000000000000005 /* DepupOfficeTests.swift */);
+			path = DepupOfficeTests;
+			sourceTree = "<group>";
+		};
 		A40000000000000000000003 /* Products */ = {
 			isa = PBXGroup;
-			children = (A20000000000000000000005 /* DepupOffice.app */);
+			children = (A20000000000000000000005 /* DepupOffice.app */, B20000000000000000000004 /* NotesWidgetExtension.appex */, B20000000000000000000006 /* DepupOfficeTests.xctest */);
 			name = Products;
 			sourceTree = "<group>";
 		};
@@ -78,13 +122,44 @@
 				A30000000000000000000002 /* Sources */,
 				A30000000000000000000001 /* Frameworks */,
 				A30000000000000000000003 /* Resources */,
+				B30000000000000000000010 /* Embed Foundation Extensions */,
 			);
 			buildRules = ();
-			dependencies = ();
+			dependencies = (BB0000000000000000000001 /* PBXTargetDependency */);
 			name = DepupOffice;
 			productName = DepupOffice;
 			productReference = A20000000000000000000005 /* DepupOffice.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B50000000000000000000001 /* NotesWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B90000000000000000000001 /* Build configuration list for PBXNativeTarget "NotesWidgetExtension" */;
+			buildPhases = (
+				B30000000000000000000002 /* Sources (widget) */,
+				B30000000000000000000001 /* Frameworks (widget) */,
+				B30000000000000000000003 /* Resources (widget) */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = NotesWidgetExtension;
+			productName = NotesWidgetExtension;
+			productReference = B20000000000000000000004 /* NotesWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		B50000000000000000000002 /* DepupOfficeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B90000000000000000000002 /* Build configuration list for PBXNativeTarget "DepupOfficeTests" */;
+			buildPhases = (
+				B30000000000000000000005 /* Sources (tests) */,
+				B30000000000000000000004 /* Frameworks (tests) */,
+				B30000000000000000000006 /* Resources (tests) */,
+			);
+			buildRules = ();
+			dependencies = (BB0000000000000000000002 /* PBXTargetDependency */);
+			name = DepupOfficeTests;
+			productName = DepupOfficeTests;
+			productReference = B20000000000000000000006 /* DepupOfficeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -94,7 +169,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastUpgradeCheck = 1600;
-				TargetAttributes = { A50000000000000000000001 = { CreatedOnToolsVersion = 16.0; }; };
+				TargetAttributes = {
+					A50000000000000000000001 = { CreatedOnToolsVersion = 16.0; };
+					B50000000000000000000001 = { CreatedOnToolsVersion = 16.0; };
+					B50000000000000000000002 = { CreatedOnToolsVersion = 16.0; TestTargetID = A50000000000000000000001; };
+				};
 			};
 			buildConfigurationList = A90000000000000000000001 /* Build configuration list for PBXProject "DepupOffice" */;
 			compatibilityVersion = "Xcode 15.0";
@@ -103,12 +182,14 @@
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (A50000000000000000000001 /* DepupOffice */);
+			targets = (A50000000000000000000001 /* DepupOffice */, B50000000000000000000001 /* NotesWidgetExtension */, B50000000000000000000002 /* DepupOfficeTests */);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A30000000000000000000003 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000004 /* Assets.xcassets in Resources */); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000003 /* Resources (widget) */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000006 /* Resources (tests) */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -118,19 +199,33 @@
 			A10000000000000000000003 /* RootTabView.swift in Sources */,
 			A10000000000000000000005 /* NativeOfficeFeatures.swift in Sources */,
 			A10000000000000000000006 /* SecurityCore.swift in Sources */,
+			A10000000000000000000011 /* NotesShared.swift in Sources */,
 			A10000000000000000000010 /* ParityEditors.swift in Sources */,
 			A10000000000000000000009 /* ParityMakers.swift in Sources */,
 			A10000000000000000000008 /* ParityTools.swift in Sources */,
 			A10000000000000000000007 /* OfficeFiles.swift in Sources */,
 		); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000002 /* Sources (widget) */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			B10000000000000000000001 /* NotesWidget.swift in Sources */,
+			B10000000000000000000002 /* NotesShared.swift in Sources (widget) */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000005 /* Sources (tests) */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			B10000000000000000000004 /* DepupOfficeTests.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		BB0000000000000000000001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B50000000000000000000001 /* NotesWidgetExtension */; targetProxy = BA0000000000000000000001 /* PBXContainerItemProxy */; };
+		BB0000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A50000000000000000000001 /* DepupOffice */; targetProxy = BA0000000000000000000002 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
-		A70000000000000000000001 /* Debug project settings */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Debug; };
+		A70000000000000000000001 /* Debug project settings */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; ENABLE_TESTABILITY = YES; ONLY_ACTIVE_ARCH = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)"); CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Debug; };
 		A70000000000000000000002 /* Release project settings */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Release; };
 		A70000000000000000000003 /* Debug target settings */ = {isa = XCBuildConfiguration; buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = DepupOffice/DepupOffice.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 40200;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -155,6 +250,7 @@
 		A70000000000000000000004 /* Release target settings */ = {isa = XCBuildConfiguration; buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = DepupOffice/DepupOffice.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 40200;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -176,11 +272,75 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			}; name = Release; };
+		B70000000000000000000001 /* Debug widget */ = {isa = XCBuildConfiguration; buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = NotesWidget/NotesWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 40200;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NotesWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Catatan DepUp";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
+				MARKETING_VERSION = 4.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.depup.office.ios.NotesWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			}; name = Debug; };
+		B70000000000000000000002 /* Release widget */ = {isa = XCBuildConfiguration; buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = NotesWidget/NotesWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 40200;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NotesWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Catatan DepUp";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
+				MARKETING_VERSION = 4.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.depup.office.ios.NotesWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			}; name = Release; };
+		B70000000000000000000003 /* Debug tests */ = {isa = XCBuildConfiguration; buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.depup.office.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DepupOffice.app/DepupOffice";
+			}; name = Debug; };
+		B70000000000000000000004 /* Release tests */ = {isa = XCBuildConfiguration; buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = cloud.depup.office.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DepupOffice.app/DepupOffice";
+			}; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		A90000000000000000000001 /* Build configuration list for PBXProject "DepupOffice" */ = {isa = XCConfigurationList; buildConfigurations = (A70000000000000000000001 /* Debug project settings */, A70000000000000000000002 /* Release project settings */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		A90000000000000000000002 /* Build configuration list for PBXNativeTarget "DepupOffice" */ = {isa = XCConfigurationList; buildConfigurations = (A70000000000000000000003 /* Debug target settings */, A70000000000000000000004 /* Release target settings */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		B90000000000000000000001 /* Build configuration list for PBXNativeTarget "NotesWidgetExtension" */ = {isa = XCConfigurationList; buildConfigurations = (B70000000000000000000001 /* Debug widget */, B70000000000000000000002 /* Release widget */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		B90000000000000000000002 /* Build configuration list for PBXNativeTarget "DepupOfficeTests" */ = {isa = XCConfigurationList; buildConfigurations = (B70000000000000000000003 /* Debug tests */, B70000000000000000000004 /* Release tests */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 	};
 	rootObject = A60000000000000000000001 /* Project object */;

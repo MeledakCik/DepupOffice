@@ -6,6 +6,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import WebKit
+import WidgetKit
 
 // Pembuat dokumen & alat baca yang menyamai Android (Invoice, Katalog, Jadwal, Grafik, Ringkasan,
 // Pembaca Suara, Presentasi, Cari di semua berkas, Word/Excel ke PDF, Catatan).
@@ -51,21 +52,22 @@ enum Money {
 
 /// Penyusun PDF A4 sederhana: teks, tabel, gambar, halaman baru otomatis.
 final class PDFComposer {
-    let page = CGRect(x: 0, y: 0, width: 595.28, height: 841.89)
+    let page: CGRect
     let margin: CGFloat = 40
     private(set) var y: CGFloat = 40
     private let ctx: UIGraphicsPDFRendererContext
 
-    init(_ ctx: UIGraphicsPDFRendererContext) {
+    init(_ ctx: UIGraphicsPDFRendererContext, page: CGRect = CGRect(x: 0, y: 0, width: 595.28, height: 841.89)) {
         self.ctx = ctx
-        ctx.beginPage()
+        self.page = page
+        ctx.beginPage(withBounds: page, pageInfo: [:])
         y = margin
     }
 
     var width: CGFloat { page.width - 2 * margin }
 
     func ensure(_ height: CGFloat) {
-        if y + height > page.height - margin { ctx.beginPage(); y = margin }
+        if y + height > page.height - margin { ctx.beginPage(withBounds: page, pageInfo: [:]); y = margin }
     }
 
     @discardableResult
@@ -898,17 +900,11 @@ private extension String {
         finish(.success(data as Data))
     }
 
-    /// Bila WebKit tidak bisa merender, isi teks tetap dijadikan PDF.
+    /// Bila WebKit tidak bisa merender, dokumen dirender sendiri dengan format tetap terjaga.
     private func fallback() {
-        guard let source, let text = try? DocText.read(source), !text.isEmpty else {
-            finish(.failure(ParityError.message("Dokumen tidak bisa dikonversi.")))
-            return
-        }
-        let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595.28, height: 841.89)).pdfData { ctx in
-            let p = PDFComposer(ctx)
-            for para in text.components(separatedBy: "\n") { p.text(para.isEmpty ? " " : para, size: 11) }
-        }
-        finish(.success(data))
+        guard let source else { finish(.failure(ParityError.message("Dokumen tidak bisa dikonversi."))); return }
+        do { finish(.success(try OfficeRender.pdf(source))) }
+        catch { finish(.failure(error)) }
     }
 
     private func finish(_ result: Result<Data, Error>) {
@@ -958,32 +954,91 @@ struct OfficeToPDFView: View {
     }
 }
 
-// MARK: - Catatan (teks & daftar centang, tersimpan di perangkat)
+/// Perender Office → PDF tanpa WebKit (juga dipakai sebagai cadangan).
+enum OfficeRender {
+    static let a4 = CGRect(x: 0, y: 0, width: 595.28, height: 841.89)
+    static let a4Landscape = CGRect(x: 0, y: 0, width: 841.89, height: 595.28)
 
-struct NoteItem: Codable, Identifiable, Equatable { var id = UUID(); var text: String; var done = false }
+    static func pdf(_ url: URL) throws -> Data {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
+        case "docx":
+            return AttributedPDF.render(AttributedPDF.black(try Docx.read(try Data(contentsOf: url))))
+        case "rtf":
+            let text = try NSAttributedString(url: url, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
+            return AttributedPDF.render(AttributedPDF.black(text))
+        case "xlsx":
+            return table(try Xlsx.readFirstSheet(try Data(contentsOf: url)), title: url.deletingPathExtension().lastPathComponent)
+        case "csv":
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let sep: Character = text.contains(";") && !text.contains(",") ? ";" : text.contains("\t") ? "\t" : ","
+            return table(text.split(whereSeparator: \.isNewline).map { $0.split(separator: sep, omittingEmptySubsequences: false).map(String.init) },
+                         title: url.deletingPathExtension().lastPathComponent)
+        case "pptx":
+            return slides(try OfficeText.slides(try Data(contentsOf: url)))
+        default:
+            let text = try DocText.read(url)
+            guard !text.isEmpty else { throw ParityError.message("Dokumen kosong atau tidak bisa dibaca.") }
+            return AttributedPDF.render(NSAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: 11), .foregroundColor: UIColor.black]))
+        }
+    }
 
-struct Note: Codable, Identifiable, Equatable {
-    var id = UUID()
-    var title = ""
-    var body = ""
-    var checklist: [NoteItem] = []
-    var isChecklist = false
-    var updated = Date()
+    /// Tabel bergaris; kolom banyak → A4 mendatar; lebar kolom mengikuti panjang isi.
+    static func table(_ raw: [[String]], title: String) -> Data {
+        let rows = raw.filter { $0.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty } }
+        let cols = rows.map(\.count).max() ?? 0
+        guard cols > 0 else {
+            return UIGraphicsPDFRenderer(bounds: a4).pdfData { ctx in _ = PDFComposer(ctx).text("(Sheet kosong)") }
+        }
+        let padded = rows.map { $0 + Array(repeating: "", count: cols - $0.count) }
+        let weights = (0..<cols).map { c in CGFloat(min(40, max(4, padded.map { $0[c].count }.max() ?? 4))) }
+        let total = weights.reduce(0, +)
+        let page = cols > 6 ? a4Landscape : a4
+        return UIGraphicsPDFRenderer(bounds: page).pdfData { ctx in
+            let p = PDFComposer(ctx, page: page)
+            p.text(title, size: 14, weight: .semibold)
+            p.space(8)
+            p.table(padded, fractions: weights.map { $0 / total }, header: true,
+                    rightAligned: Set((0..<cols).filter { c in padded.dropFirst().contains { ParityEngine.number($0[c]) != nil } }))
+        }
+    }
+
+    /// Satu slide per halaman A4 mendatar.
+    static func slides(_ texts: [String]) -> Data {
+        UIGraphicsPDFRenderer(bounds: a4Landscape).pdfData { ctx in
+            for (i, text) in texts.enumerated() {
+                ctx.beginPage()
+                let lines = text.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                var y: CGFloat = 50
+                for (j, line) in lines.enumerated() {
+                    let font = j == 0 ? UIFont.boldSystemFont(ofSize: 28) : UIFont.systemFont(ofSize: 18)
+                    let rect = CGRect(x: 60, y: y, width: a4Landscape.width - 120, height: 400)
+                    let h = ceil((line as NSString).boundingRect(with: rect.size, options: [.usesLineFragmentOrigin], attributes: [.font: font], context: nil).height)
+                    if y + h > a4Landscape.height - 50 { break }
+                    (line as NSString).draw(with: CGRect(x: 60, y: y, width: rect.width, height: h), options: [.usesLineFragmentOrigin],
+                                            attributes: [.font: font, .foregroundColor: UIColor.black], context: nil)
+                    y += h + (j == 0 ? 24 : 10)
+                }
+                ("\(i + 1)" as NSString).draw(at: CGPoint(x: a4Landscape.width - 60, y: a4Landscape.height - 36),
+                                              withAttributes: [.font: UIFont.systemFont(ofSize: 11), .foregroundColor: UIColor.gray])
+            }
+            if texts.isEmpty { ctx.beginPage() }
+        }
+    }
 }
+
+// MARK: - Catatan (teks & daftar centang, tersimpan di perangkat)
 
 @MainActor final class NotesStore: ObservableObject {
     static let shared = NotesStore()
     @Published private(set) var notes: [Note] = []
 
-    private var fileURL: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("notes.json")
+    init() {
+        NotesFile.migrateIfNeeded()
+        notes = NotesFile.load()
     }
 
-    init() {
-        if let data = try? Data(contentsOf: fileURL), let list = try? JSONDecoder().decode([Note].self, from: data) { notes = list }
-    }
+    func reload() { notes = NotesFile.load() }
 
     func upsert(_ note: Note) {
         var n = note
@@ -996,12 +1051,13 @@ struct Note: Codable, Identifiable, Equatable {
     func delete(_ ids: [UUID]) { notes.removeAll { ids.contains($0.id) }; persist() }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(notes) else { return }
-        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        NotesFile.save(notes)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }
 
 struct NotesScreen: View {
+    var openNoteId: UUID? = nil
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var store = NotesStore.shared
     @State private var editing: Note?
@@ -1035,6 +1091,10 @@ struct NotesScreen: View {
                 }
             }
             .sheet(item: $editing) { note in NoteEditor(note: note) { store.upsert($0) } }
+        }
+        .onAppear {
+            store.reload()   // catatan bisa berubah dari widget (centang item)
+            if let openNoteId, let note = store.notes.first(where: { $0.id == openNoteId }) { editing = note }
         }
     }
 }

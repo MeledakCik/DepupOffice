@@ -13,9 +13,12 @@ extension Color {
     static let depupBackground = Color(uiColor: .systemGroupedBackground)
 }
 
+private struct NoteLink: Identifiable { let id: UUID }
+
 struct RootTabView: View {
     @EnvironmentObject private var documents: DocumentStore
     @State private var selectedTab: AppTab = .home
+    @State private var noteLink: NoteLink?
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -68,6 +71,10 @@ struct RootTabView: View {
             .tag(AppTab.profile)
         }
         .quickLookPreview($documents.previewURL)
+        .onOpenURL { url in
+            if let id = NotesFile.noteId(from: url) { noteLink = NoteLink(id: id) }
+        }
+        .sheet(item: $noteLink) { link in NotesScreen(openNoteId: link.id) }
         .fullScreenCover(item: $documents.protectedFile) { file in
             SecureDocumentView(url: file.url)
                 .environmentObject(documents)

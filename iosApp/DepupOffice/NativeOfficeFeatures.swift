@@ -1237,29 +1237,92 @@ private struct SignatureCanvas: UIViewRepresentable {
 }
 
 /// Tanda tangan tangan di layar, ditempel sebagai anotasi tinta (vektor) pada halaman pilihan — setara SignatureManager Android.
+/// Geometri penempatan tanda tangan (murni, diuji di DepupOfficeTests): titik coretan → koordinat halaman PDF,
+/// dengan posisi bebas, lebar, putaran, dan memperhitungkan rotasi halaman (0/90/180/270).
+enum SignatureGeometry {
+    /// Ukuran halaman seperti tampil di layar (lebar/tinggi tertukar untuk rotasi 90/270).
+    static func displaySize(crop: CGRect, rotation: Int) -> CGSize {
+        let r = ((rotation % 360) + 360) % 360
+        return r == 90 || r == 270 ? CGSize(width: crop.height, height: crop.width) : crop.size
+    }
+
+    /// Titik ternormalisasi di tampilan (0…1, kiri-atas) → titik halaman PDF (kiri-bawah).
+    static func displayToPage(_ n: CGPoint, crop: CGRect, rotation: Int) -> CGPoint {
+        let W = crop.width, H = crop.height
+        switch ((rotation % 360) + 360) % 360 {
+        case 90: return CGPoint(x: crop.minX + n.y * W, y: crop.minY + n.x * H)
+        case 180: return CGPoint(x: crop.maxX - n.x * W, y: crop.minY + n.y * H)
+        case 270: return CGPoint(x: crop.maxX - n.y * W, y: crop.maxY - n.x * H)
+        default: return CGPoint(x: crop.minX + n.x * W, y: crop.maxY - n.y * H)
+        }
+    }
+
+    /// Vektor di ruang tampilan (y ke bawah, dalam poin) → vektor di ruang halaman.
+    static func displayVectorToPage(_ v: CGVector, rotation: Int) -> CGVector {
+        switch ((rotation % 360) + 360) % 360 {
+        case 90: return CGVector(dx: v.dy, dy: v.dx)
+        case 180: return CGVector(dx: -v.dx, dy: v.dy)
+        case 270: return CGVector(dx: -v.dy, dy: -v.dx)
+        default: return CGVector(dx: v.dx, dy: -v.dy)
+        }
+    }
+
+    /// Coretan (koordinat kanvas, y ke bawah) → garis-garis di koordinat halaman.
+    /// [center] ternormalisasi di tampilan; [widthFraction] terhadap lebar tampilan; [degrees] searah jarum jam.
+    static func place(strokes: [[CGPoint]], drawingBounds: CGRect, crop: CGRect, pageRotation: Int,
+                      center: CGPoint, widthFraction: CGFloat, degrees: CGFloat) -> [[CGPoint]] {
+        guard drawingBounds.width > 0 else { return [] }
+        let display = displaySize(crop: crop, rotation: pageRotation)
+        let scale = display.width * widthFraction / drawingBounds.width
+        let pivot = displayToPage(center, crop: crop, rotation: pageRotation)
+        let angle = degrees * .pi / 180
+        let c = cos(angle), s = sin(angle)
+        return strokes.map { line in
+            line.map { p in
+                // relatif terhadap pusat coretan, diskalakan, diputar (y ke bawah → searah jarum jam)
+                let x = (p.x - drawingBounds.midX) * scale, y = (p.y - drawingBounds.midY) * scale
+                let rotated = CGVector(dx: x * c - y * s, dy: x * s + y * c)
+                let v = displayVectorToPage(rotated, rotation: pageRotation)
+                return CGPoint(x: pivot.x + v.dx, y: pivot.y + v.dy)
+            }
+        }
+    }
+}
+
+/// Tanda tangan tangan di layar, ditempel bebas (geser, ukuran, putar, warna) sebagai anotasi tinta vektor —
+/// setara "Tanda tangan PDF: Tempel bebas" di Android.
 struct SignPDFView: View {
     let url: URL
     let onSave: (Data) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var drawing = PKDrawing()
-    @State private var pageCount = 1
+    @State private var document: PDFDocument?
     @State private var pageNumber = 1
-    @State private var position = 2
-    @State private var widthFraction = 0.32
+    @State private var preview: UIImage?
+    @State private var center = CGPoint(x: 0.72, y: 0.86)
+    @State private var widthFraction: CGFloat = 0.32
+    @State private var degrees: Double = 0
+    @State private var colorIndex = 0
     @State private var showLibrary = false
     @State private var saved = false
     @State private var failure: String?
+
+    static let colors: [(name: String, color: UIColor)] = [
+        ("Hitam", .black), ("Biru", UIColor(red: 0.05, green: 0.2, blue: 0.65, alpha: 1)), ("Merah", UIColor(red: 0.75, green: 0.1, blue: 0.1, alpha: 1))
+    ]
+
+    private var pageCount: Int { max(document?.pageCount ?? 1, 1) }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Tanda tangan") {
                     SignatureCanvas(drawing: $drawing)
-                        .frame(height: 180)
+                        .frame(height: 160)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3)))
                     HStack {
-                        Button("Hapus coretan", role: .destructive) { drawing = PKDrawing() }
+                        Button("Hapus coretan", role: .destructive) { drawing = PKDrawing(); saved = false }
                             .disabled(drawing.strokes.isEmpty)
                         Spacer()
                         Button("Pustaka") { showLibrary = true }
@@ -1268,19 +1331,19 @@ struct SignPDFView: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                Section("Penempatan") {
-                    Stepper("Halaman \(pageNumber) dari \(pageCount)", value: $pageNumber, in: 1...max(pageCount, 1))
-                    Picker("Posisi", selection: $position) {
-                        Text("Kiri bawah").tag(0)
-                        Text("Tengah bawah").tag(1)
-                        Text("Kanan bawah").tag(2)
+                Section {
+                    placement
+                    Stepper("Halaman \(pageNumber) dari \(pageCount)", value: $pageNumber, in: 1...pageCount)
+                    labeledSlider("Ukuran \(Int(widthFraction * 100))%", value: $widthFraction, range: 0.1...0.8)
+                    VStack(alignment: .leading) {
+                        Text("Putar \(Int(degrees))°").font(.caption).foregroundStyle(.secondary)
+                        Slider(value: $degrees, in: -180...180, step: 1)
+                    }
+                    Picker("Warna", selection: $colorIndex) {
+                        ForEach(Self.colors.indices, id: \.self) { i in Text(Self.colors[i].name).tag(i) }
                     }
                     .pickerStyle(.segmented)
-                    VStack(alignment: .leading) {
-                        Text("Lebar \(Int(widthFraction * 100))% halaman").font(.caption).foregroundStyle(.secondary)
-                        Slider(value: $widthFraction, in: 0.15...0.6)
-                    }
-                }
+                } header: { Text("Penempatan") } footer: { Text("Geser tanda tangan di pratinjau halaman untuk memindahkannya.") }
                 if let failure { Section { Text(failure).foregroundStyle(.red) } }
             }
             .sheet(isPresented: $showLibrary) {
@@ -1294,48 +1357,94 @@ struct SignPDFView: View {
             }
         }
         .task {
-            if let document = PDFDocument(url: url) {
-                pageCount = max(document.pageCount, 1)
-                pageNumber = pageCount
+            if let doc = PDFDocument(url: url), !doc.isLocked {
+                document = doc
+                pageNumber = max(doc.pageCount, 1)
+                renderPreview()
             } else {
                 failure = OfficeError.invalidPDF(url.lastPathComponent).localizedDescription
             }
         }
+        .onChange(of: pageNumber) { _, _ in renderPreview() }
+    }
+
+    private func labeledSlider(_ title: String, value: Binding<CGFloat>, range: ClosedRange<CGFloat>) -> some View {
+        VStack(alignment: .leading) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Slider(value: value, in: range)
+        }
+    }
+
+    private func renderPreview() {
+        guard let page = document?.page(at: pageNumber - 1) else { return }
+        preview = ParityEngine.render(page, scale: 1.2)
+    }
+
+    @ViewBuilder private var placement: some View {
+        if let preview {
+            GeometryReader { geo in
+                let fit = min(geo.size.width / preview.size.width, geo.size.height / preview.size.height)
+                let size = CGSize(width: preview.size.width * fit, height: preview.size.height * fit)
+                let origin = CGPoint(x: (geo.size.width - size.width) / 2, y: (geo.size.height - size.height) / 2)
+                ZStack(alignment: .topLeading) {
+                    Image(uiImage: preview).resizable().frame(width: size.width, height: size.height)
+                        .border(Color.gray.opacity(0.4))
+                    if !drawing.strokes.isEmpty {
+                        let sig = SignatureLibrary.thumbnail(drawing)
+                        let w = size.width * widthFraction
+                        let h = w * sig.size.height / max(sig.size.width, 1)
+                        Image(uiImage: sig).renderingMode(.template).resizable()
+                            .foregroundStyle(Color(uiColor: Self.colors[colorIndex].color))
+                            .frame(width: w, height: h)
+                            .rotationEffect(.degrees(degrees))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.depupBlue.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [4])))
+                            .position(x: center.x * size.width, y: center.y * size.height)
+                    }
+                }
+                .frame(width: size.width, height: size.height)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { g in
+                    center = CGPoint(x: min(1, max(0, g.location.x / size.width)), y: min(1, max(0, g.location.y / size.height)))
+                })
+                .offset(x: origin.x, y: origin.y)
+            }
+            .frame(height: 320)
+        } else {
+            ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+        }
     }
 
     private func save() {
-        guard let document = PDFDocument(url: url), !document.isLocked,
-              let page = document.page(at: pageNumber - 1) else { failure = OfficeError.invalidPDF(url.lastPathComponent).localizedDescription; return }
-        let source = drawing.bounds
-        guard source.width > 1, source.height > 1 else { failure = "Buat tanda tangan terlebih dahulu."; return }
-        let crop = page.bounds(for: .cropBox)
-        let targetWidth = crop.width * widthFraction
-        let scale = targetWidth / source.width
-        let targetHeight = source.height * scale
-        let margin: CGFloat = 36
-        let x: CGFloat
-        switch position {
-        case 0: x = crop.minX + margin
-        case 1: x = crop.midX - targetWidth / 2
-        default: x = crop.maxX - margin - targetWidth
+        guard let document, let page = document.page(at: pageNumber - 1) else { failure = OfficeError.invalidPDF(url.lastPathComponent).localizedDescription; return }
+        // Thumbnail pratinjau memakai batas coretan + 8 pt; gunakan batas yang sama agar posisi cocok.
+        let source = drawing.bounds.insetBy(dx: -8, dy: -8)
+        guard drawing.bounds.width > 1 else { failure = "Buat tanda tangan terlebih dahulu."; return }
+        let strokes = drawing.strokes.map { stroke in
+            stroke.path.interpolatedPoints(in: nil, by: .distance(1)).map { $0.location.applying(stroke.transform) }
         }
-        let rect = CGRect(x: x, y: crop.minY + margin, width: targetWidth, height: targetHeight)
-        let annotation = PDFAnnotation(bounds: rect, forType: .ink, withProperties: nil)
-        for stroke in drawing.strokes {
+        let crop = page.bounds(for: .cropBox)
+        let placed = SignatureGeometry.place(strokes: strokes, drawingBounds: source, crop: crop, pageRotation: page.rotation,
+                                             center: center, widthFraction: widthFraction, degrees: CGFloat(degrees))
+        let all = placed.flatMap { $0 }
+        guard let first = all.first else { return }
+        let scale = SignatureGeometry.displaySize(crop: crop, rotation: page.rotation).width * widthFraction / source.width
+        let lineWidth = max(1.0, 3 * scale)
+        var minX = first.x, minY = first.y, maxX = first.x, maxY = first.y
+        for p in all { minX = min(minX, p.x); minY = min(minY, p.y); maxX = max(maxX, p.x); maxY = max(maxY, p.y) }
+        let bounds = CGRect(x: minX - lineWidth, y: minY - lineWidth, width: maxX - minX + 2 * lineWidth, height: maxY - minY + 2 * lineWidth)
+        let annotation = PDFAnnotation(bounds: bounds, forType: .ink, withProperties: nil)
+        for line in placed where !line.isEmpty {
             let path = UIBezierPath()
-            var first = true
-            for point in stroke.path.interpolatedPoints(in: nil, by: .distance(1)) {
-                let p = point.location.applying(stroke.transform)
-                // Koordinat PDF: titik asal kiri-bawah, relatif terhadap bounds anotasi.
-                let q = CGPoint(x: (p.x - source.minX) * scale, y: targetHeight - (p.y - source.minY) * scale)
-                if first { path.move(to: q); first = false } else { path.addLine(to: q) }
+            for (i, p) in line.enumerated() {
+                let q = CGPoint(x: p.x - bounds.minX, y: p.y - bounds.minY)
+                if i == 0 { path.move(to: q) } else { path.addLine(to: q) }
             }
-            if !first { annotation.add(path) }
+            annotation.add(path)
         }
         let border = PDFBorder()
-        border.lineWidth = max(1.0, 3 * scale)
+        border.lineWidth = lineWidth
         annotation.border = border
-        annotation.color = .black
+        annotation.color = Self.colors[colorIndex].color
         page.addAnnotation(annotation)
         guard let data = document.dataRepresentation() else { failure = OfficeError.cannotWrite.localizedDescription; return }
         onSave(data)

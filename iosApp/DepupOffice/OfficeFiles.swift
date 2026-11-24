@@ -342,6 +342,14 @@ private final class SheetParser: NSObject, XMLParserDelegate {
 // MARK: - DOCX / PPTX: teks saja (untuk pencarian, ringkasan, pembaca suara)
 
 enum OfficeText {
+    /// Teks per slide .pptx, urut sesuai nomor slide.
+    static func slides(_ data: Data) throws -> [String] {
+        let files = try Zip.read(data)
+        let names = files.keys.filter { $0.hasPrefix("ppt/slides/slide") && $0.hasSuffix(".xml") }
+            .sorted { $0.count == $1.count ? $0 < $1 : $0.count < $1.count }
+        return names.compactMap { files[$0] }.map { ParagraphText.parse($0, paragraph: "p", text: "t") }
+    }
+
     /// Teks paragraf dari .docx (word/document.xml) atau .pptx (ppt/slides/*.xml).
     static func extract(_ data: Data, ext: String) throws -> String {
         let files = try Zip.read(data)

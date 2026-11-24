@@ -119,20 +119,50 @@ object ExeToPdf {
         val missing = (0 until K).filter { key[it] == null }
         if (missing.size > 2) return null
         val total = 1 shl (8 * missing.size)
+        // Kunci kandidat wajib membuat baris xref valid penuh (dulu cukup kepala "%PDF-" + "obj", sehingga byte kunci
+        // yang hilang bisa salah dan PDF hasilnya rusak). Dari yang lolos, pilih yang struktur PDF-nya terbanyak.
+        var best: ByteArray? = null
+        var bestScore = -1
         for (combo in 0 until total) {
             val kb = ByteArray(K) { i -> (key[i] ?: 0).toByte() }
             missing.forEachIndexed { idx, ki -> kb[ki] = ((combo shr (8 * idx)) and 0xFF).toByte() }
-            // cek murah dulu: 2 KB pertama harus berkepala PDF & memuat "obj"
-            val headLen = minOf(2048, d.size - pdfAt)
+            if (!rowsValid(d, o, rows, kb)) continue
+            val headLen = minOf(65536, d.size - pdfAt)
             val head = ByteArray(headLen) { (d[pdfAt + it].toInt() xor kb[Math.floorMod(pdfAt + it, K)].toInt()).toByte() }
-            if (!startsWith(head, MAGIC) || indexOf(head, "obj".toByteArray(), 0) < 0) continue
-            val out = xorFrom(d, kb, pdfAt)
-            val pdf = trim(out) ?: continue
-            // kunci disejajarkan ke awal PDF untuk ditampilkan
-            val aligned = ByteArray(K) { kb[Math.floorMod(pdfAt + it, K)] }
-            return Result(pdf, "Kunci dipulihkan dari tabel xref", hex(aligned))
+            if (!startsWith(head, MAGIC) || indexOf(head, "obj".toByteArray(), 0, 2048) < 0) continue
+            val score = count(head, " obj".toByteArray()) + 2 * count(head, "endobj".toByteArray())
+            if (score > bestScore) { bestScore = score; best = kb }
         }
-        return null
+        val kb = best ?: return null
+        val pdf = trim(xorFrom(d, kb, pdfAt)) ?: return null
+        // kunci disejajarkan ke awal PDF untuk ditampilkan
+        val aligned = ByteArray(K) { kb[Math.floorMod(pdfAt + it, K)] }
+        return Result(pdf, "Kunci dipulihkan dari tabel xref", hex(aligned))
+    }
+
+    /** Enam baris xref pertama harus berbentuk "nnnnnnnnnn ggggg n\r\n" dengan kunci lengkap [kb]. */
+    private fun rowsValid(d: ByteArray, o: Int, rows: Int, kb: ByteArray): Boolean {
+        for (r in 0 until minOf(rows, 6)) {
+            val base = o + r * 20
+            for (pos in 0 until 20) {
+                val c = (d[base + pos].toInt() and 0xFF) xor (kb[Math.floorMod(base + pos, K)].toInt() and 0xFF)
+                val fine = when (pos) {
+                    10, 16 -> c == 0x20
+                    17 -> c == 'n'.code || c == 'f'.code
+                    18 -> c == 0x0D || c == 0x20
+                    19 -> c == 0x0A
+                    else -> c in 0x30..0x39
+                }
+                if (!fine) return false
+            }
+        }
+        return true
+    }
+
+    private fun count(a: ByteArray, p: ByteArray): Int {
+        var n = 0; var i = indexOf(a, p, 0)
+        while (i >= 0) { n++; i = indexOf(a, p, i + p.size) }
+        return n
     }
 
     /** Cari kata [word] (+ baris baru) sedikit sebelum tabel; cocokkan dengan kunci yang sudah ada lalu lengkapi. */

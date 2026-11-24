@@ -437,7 +437,14 @@ enum Docx {
     static func write(_ text: NSAttributedString, extraBody: String = "") -> Data {
         var body = ""
         let full = text.string as NSString
+        var lastWasTable = false
         full.enumerateSubstrings(in: NSRange(location: 0, length: full.length), options: [.byParagraphs, .substringNotRequired]) { _, range, _, _ in
+            if range.length > 0, let table = text.attribute(.attachment, at: range.location, effectiveRange: nil) as? TableAttachment {
+                body += Docx.table(table.rows, widths: table.widths, borders: table.borders, trailingParagraph: false)
+                lastWasTable = true
+                return
+            }
+            lastWasTable = false
             var pPr = ""
             if range.length > 0, let style = text.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle {
                 switch style.alignment {
@@ -449,6 +456,7 @@ enum Docx {
             }
             body += "<w:p>" + (pPr.isEmpty ? "" : "<w:pPr>\(pPr)</w:pPr>")
             text.enumerateAttributes(in: range, options: []) { attrs, runRange, _ in
+                if attrs[.attachment] != nil { return }
                 let runText = full.substring(with: runRange)
                 var rPr = ""
                 if let font = attrs[.font] as? UIFont {
@@ -472,6 +480,8 @@ enum Docx {
             }
             body += "</w:p>"
         }
+        // Word mewajibkan paragraf setelah tabel terakhir.
+        if lastWasTable { body += "<w:p/>" }
         return package(body + extraBody)
     }
 
@@ -507,7 +517,7 @@ enum Docx {
     }
 
     /// Tabel bergaris (atau tanpa garis untuk kolom tanda tangan) dalam XML WordprocessingML.
-    static func table(_ rows: [[String]], widths: [Int], borders: Bool = true, boldHeader: Bool = true) -> String {
+    static func table(_ rows: [[String]], widths: [Int], borders: Bool = true, boldHeader: Bool = true, trailingParagraph: Bool = true) -> String {
         let total = max(1, widths.reduce(0, +))
         let grid = widths.map { "<w:gridCol w:w=\"\(9026 * $0 / total)\"/>" }.joined()
         let border = borders ? "<w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/><w:left w:val=\"single\" w:sz=\"4\"/><w:bottom w:val=\"single\" w:sz=\"4\"/><w:right w:val=\"single\" w:sz=\"4\"/><w:insideH w:val=\"single\" w:sz=\"4\"/><w:insideV w:val=\"single\" w:sz=\"4\"/></w:tblBorders>" : ""
@@ -524,7 +534,7 @@ enum Docx {
             }
             xml += "</w:tr>"
         }
-        return xml + "</w:tbl><w:p/>"
+        return xml + "</w:tbl>" + (trailingParagraph ? "<w:p/>" : "")
     }
 
     static func paragraph(_ text: String, bold: Bool = false, align: String? = nil, size: Int? = nil) -> String {
@@ -548,9 +558,14 @@ private final class DocxReader: NSObject, XMLParserDelegate {
     private var size: CGFloat = 12
     private var inRunProps = false
     private var capture = false
-    private var cellIndex = 0
     private var tableDepth = 0
-    private var rowText = NSMutableAttributedString()
+    // tabel tingkat atas yang sedang dibaca
+    private var tableRows: [[String]] = []
+    private var tableWidths: [Int] = []
+    private var tableBorders = false
+    private var inTablePr = false
+    private var cellText = ""
+    private var cellParagraphs: [String] = []
 
     static func parse(_ data: Data) -> NSAttributedString {
         let r = DocxReader()
@@ -572,10 +587,10 @@ private final class DocxReader: NSObject, XMLParserDelegate {
     }
 
     private func append(_ s: String) {
+        if tableDepth > 0 { cellText += s == "\u{2028}" ? "\n" : s; return }
         var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.label]
         if underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
-        let target = tableDepth > 0 ? rowText : paragraph
-        target.append(NSAttributedString(string: s, attributes: attrs))
+        paragraph.append(NSAttributedString(string: s, attributes: attrs))
     }
 
     func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) {
@@ -584,7 +599,9 @@ private final class DocxReader: NSObject, XMLParserDelegate {
         switch n {
         case "p": if tableDepth == 0 { paragraph = NSMutableAttributedString(); alignment = .natural }
         case "jc":
-            switch val { case "center": alignment = .center; case "right", "end": alignment = .right; case "both", "distribute": alignment = .justified; default: alignment = .natural }
+            if tableDepth == 0 {
+                switch val { case "center": alignment = .center; case "right", "end": alignment = .right; case "both", "distribute": alignment = .justified; default: alignment = .natural }
+            }
         case "r": bold = false; italic = false; underline = false; size = 12
         case "rPr": inRunProps = true
         case "b": if inRunProps { bold = val != "0" && val != "false" }
@@ -594,9 +611,16 @@ private final class DocxReader: NSObject, XMLParserDelegate {
         case "t": capture = true
         case "tab": append("\t")
         case "br", "cr": append("\u{2028}")
-        case "tbl": tableDepth += 1
-        case "tr": if tableDepth == 1 { rowText = NSMutableAttributedString(); cellIndex = 0 }
-        case "tc": if tableDepth == 1 { if cellIndex > 0 { append("\t") }; cellIndex += 1 }
+        case "tbl":
+            tableDepth += 1
+            if tableDepth == 1 { tableRows = []; tableWidths = []; tableBorders = false }
+        case "tblPr": if tableDepth == 1 { inTablePr = true }
+        case "top", "left", "bottom", "right", "insideH", "insideV", "start", "end":
+            if inTablePr, let v = val, v != "nil", v != "none" { tableBorders = true }
+        case "tblStyle": if inTablePr { tableBorders = true }   // gaya tabel bawaan (mis. TableGrid) bergaris
+        case "gridCol": if tableDepth == 1, let w = attributes["w:w"].flatMap({ Int($0) }) { tableWidths.append(max(1, w)) }
+        case "tr": if tableDepth == 1 { tableRows.append([]) }
+        case "tc": if tableDepth == 1 { cellText = ""; cellParagraphs = [] }
         default: break
         }
     }
@@ -607,6 +631,7 @@ private final class DocxReader: NSObject, XMLParserDelegate {
         switch local(name) {
         case "t": capture = false
         case "rPr": inRunProps = false
+        case "tblPr": inTablePr = false
         case "p":
             if tableDepth == 0 {
                 let style = NSMutableParagraphStyle()
@@ -615,16 +640,192 @@ private final class DocxReader: NSObject, XMLParserDelegate {
                 paragraph.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: paragraph.length))
                 out.append(paragraph)
             } else {
-                rowText.append(NSAttributedString(string: " ", attributes: [.font: font]))
+                cellParagraphs.append(cellText)
+                cellText = ""
             }
-        case "tr":
+        case "tc":
+            if tableDepth == 1, !tableRows.isEmpty {
+                if !cellText.isEmpty { cellParagraphs.append(cellText) }
+                tableRows[tableRows.count - 1].append(cellParagraphs.joined(separator: "\n"))
+            }
+        case "tbl":
             if tableDepth == 1 {
-                rowText.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-                out.append(rowText)
+                let cols = tableRows.map(\.count).max() ?? 0
+                let rows = tableRows.map { $0 + Array(repeating: "", count: max(0, cols - $0.count)) }
+                let widths = tableWidths.count == cols ? tableWidths : Array(repeating: 1, count: cols)
+                if cols > 0 {
+                    let attachment = TableAttachment(rows: rows, widths: widths, borders: tableBorders)
+                    let block = NSMutableAttributedString(attachment: attachment)
+                    block.append(NSAttributedString(string: "\n", attributes: [.font: UIFont.systemFont(ofSize: 12)]))
+                    out.append(block)
+                }
             }
-        case "tbl": tableDepth -= 1
+            tableDepth -= 1
         default: break
         }
+    }
+}
+
+// MARK: - Tabel di editor Word (blok tabel yang bisa diketuk & diedit; disimpan sebagai tabel Word asli)
+
+final class TableAttachment: NSTextAttachment {
+    var rows: [[String]]
+    var widths: [Int]
+    var borders: Bool
+    static let renderWidth: CGFloat = 500
+
+    init(rows: [[String]], widths: [Int], borders: Bool) {
+        self.rows = rows
+        self.widths = widths
+        self.borders = borders
+        super.init(data: nil, ofType: nil)
+        refresh()
+    }
+
+    required init?(coder: NSCoder) {
+        rows = [[""]]
+        widths = [1]
+        borders = true
+        super.init(coder: coder)
+    }
+
+    func refresh() {
+        let img = TableAttachment.render(rows: rows, widths: widths, borders: borders, width: Self.renderWidth)
+        image = img
+        bounds = CGRect(origin: .zero, size: img.size)
+    }
+
+    static func render(rows: [[String]], widths: [Int], borders: Bool, width: CGFloat) -> UIImage {
+        let cols = max(1, rows.map(\.count).max() ?? 1)
+        let ws = widths.count == cols ? widths.map(CGFloat.init) : Array(repeating: 1, count: cols)
+        let total = max(1, ws.reduce(0, +))
+        let colW = ws.map { $0 / total * width }
+        let font = UIFont.systemFont(ofSize: 11)
+        let bold = UIFont.boldSystemFont(ofSize: 11)
+        let heights = rows.enumerated().map { r, row -> CGFloat in
+            let h = row.enumerated().map { c, cell -> CGFloat in
+                let f = borders && r == 0 ? bold : font
+                return ceil((cell as NSString).boundingRect(with: CGSize(width: max(10, colW[min(c, cols - 1)] - 8), height: .greatestFiniteMagnitude),
+                                                            options: [.usesLineFragmentOrigin], attributes: [.font: f], context: nil).height)
+            }.max() ?? 14
+            return max(22, h + 8)
+        }
+        let size = CGSize(width: width, height: max(22, heights.reduce(0, +)))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            UIColor.white.setFill()
+            UIRectFill(CGRect(origin: .zero, size: size))
+            var y: CGFloat = 0
+            for (r, row) in rows.enumerated() {
+                var x: CGFloat = 0
+                if borders && r == 0 { UIColor(white: 0.93, alpha: 1).setFill(); UIRectFill(CGRect(x: 0, y: y, width: width, height: heights[r])) }
+                for c in 0..<cols {
+                    let w = colW[c]
+                    let text = c < row.count ? row[c] : ""
+                    let style = NSMutableParagraphStyle()
+                    style.alignment = borders ? .left : .center
+                    (text as NSString).draw(with: CGRect(x: x + 4, y: y + 4, width: w - 8, height: heights[r] - 8), options: [.usesLineFragmentOrigin],
+                                            attributes: [.font: borders && r == 0 ? bold : font, .foregroundColor: UIColor.black, .paragraphStyle: style], context: nil)
+                    if borders {
+                        UIColor(white: 0.55, alpha: 1).setStroke()
+                        UIBezierPath(rect: CGRect(x: x + 0.25, y: y + 0.25, width: w - 0.5, height: heights[r] - 0.5)).stroke()
+                    }
+                    x += w
+                }
+                y += heights[r]
+            }
+            if !borders {
+                UIColor(white: 0.8, alpha: 1).setStroke()
+                let p = UIBezierPath(rect: CGRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5))
+                p.setLineDash([3, 3], count: 2, phase: 0)
+                p.stroke()
+            }
+        }
+    }
+}
+
+extension TableAttachment: Identifiable {}
+
+struct TableEditorSheet: View {
+    @State var rows: [[String]]
+    @State var borders: Bool
+    let onDone: ([[String]], Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows.indices, id: \.self) { r in
+                        HStack(spacing: 0) {
+                            ForEach(rows[r].indices, id: \.self) { c in
+                                TextField("", text: Binding(get: { rows[r][c] }, set: { rows[r][c] = $0 }), axis: .vertical)
+                                    .font(.system(size: 14, weight: r == 0 && borders ? .semibold : .regular))
+                                    .padding(6)
+                                    .frame(width: 140, alignment: .leading)
+                                    .frame(minHeight: 40)
+                                    .border(Color.gray.opacity(0.4), width: 0.5)
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Edit Tabel")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Selesai") { onDone(rows, borders); dismiss() } }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Menu {
+                        Button("Tambah baris") { rows.append(Array(repeating: "", count: rows.first?.count ?? 1)) }
+                        Button("Hapus baris terakhir", role: .destructive) { if rows.count > 1 { rows.removeLast() } }
+                    } label: { Label("Baris", systemImage: "rectangle.split.1x2") }
+                    Menu {
+                        Button("Tambah kolom") { for r in rows.indices { rows[r].append("") } }
+                        Button("Hapus kolom terakhir", role: .destructive) { if (rows.first?.count ?? 0) > 1 { for r in rows.indices { rows[r].removeLast() } } }
+                    } label: { Label("Kolom", systemImage: "rectangle.split.2x1") }
+                    Toggle("Garis", isOn: $borders).toggleStyle(.button)
+                }
+            }
+        }
+    }
+}
+
+/// PDF berhalaman dari teks berformat (termasuk gambar & tabel), memakai tata letak TextKit.
+enum AttributedPDF {
+    static func render(_ text: NSAttributedString, paper: CGRect = CGRect(x: 0, y: 0, width: 595.28, height: 841.89), inset: CGFloat = 56) -> Data {
+        let storage = NSTextStorage(attributedString: text)
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let size = CGSize(width: paper.width - 2 * inset, height: paper.height - 2 * inset)
+        var containers: [NSTextContainer] = []
+        while containers.count < 2000 {
+            let c = NSTextContainer(size: size)
+            c.lineFragmentPadding = 0
+            layout.addTextContainer(c)
+            containers.append(c)
+            layout.ensureLayout(for: c)
+            let range = layout.glyphRange(for: c)
+            if NSMaxRange(range) >= layout.numberOfGlyphs || range.length == 0 { break }
+        }
+        return UIGraphicsPDFRenderer(bounds: paper).pdfData { ctx in
+            for c in containers {
+                ctx.beginPage()
+                let range = layout.glyphRange(for: c)
+                let origin = CGPoint(x: inset, y: inset)
+                layout.drawBackground(forGlyphRange: range, at: origin)
+                layout.drawGlyphs(forGlyphRange: range, at: origin)
+            }
+        }
+    }
+
+    /// Salinan dengan teks hitam (warna sistem/dinamis bisa putih saat mode gelap).
+    static func black(_ text: NSAttributedString) -> NSAttributedString {
+        let m = NSMutableAttributedString(attributedString: text)
+        m.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: m.length))
+        return m
     }
 }
 
@@ -782,10 +983,13 @@ struct DocTemplatePicker: View {
 
 // MARK: - Editor Word (rich text: tebal, miring, garis bawah, ukuran, perataan; simpan .docx / .rtf / .pdf)
 
-@MainActor final class RichTextController: ObservableObject {
+@MainActor final class RichTextController: NSObject, ObservableObject, UITextViewDelegate {
     let textView = UITextView()
+    @Published var editingTable: TableAttachment?
 
-    init() {
+    override init() {
+        super.init()
+        textView.delegate = self
         textView.font = UIFont.systemFont(ofSize: 12)
         textView.allowsEditingTextAttributes = true
         textView.backgroundColor = .systemBackground
@@ -795,6 +999,14 @@ struct DocTemplatePicker: View {
     }
 
     private var range: NSRange { textView.selectedRange }
+
+    /// Ketuk tabel → buka editor tabel.
+    func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
+        if case .textAttachment(let attachment) = textItem.content, let table = attachment as? TableAttachment {
+            return UIAction { [weak self] _ in self?.editingTable = table }
+        }
+        return defaultAction
+    }
 
     private func applyFont(_ transform: (UIFont) -> UIFont) {
         let r = range
@@ -844,11 +1056,52 @@ struct DocTemplatePicker: View {
         textView.typingAttributes[.paragraphStyle] = style
     }
 
+    /// Sisipkan tabel baru (3 kolom × 3 baris) sebagai paragraf sendiri di posisi kursor.
+    func insertTable() {
+        let table = TableAttachment(rows: [["Kolom 1", "Kolom 2", "Kolom 3"], ["", "", ""], ["", "", ""]], widths: [1, 1, 1], borders: true)
+        let block = NSMutableAttributedString(string: "\n", attributes: [.font: UIFont.systemFont(ofSize: 12)])
+        block.append(NSAttributedString(attachment: table))
+        block.append(NSAttributedString(string: "\n", attributes: [.font: UIFont.systemFont(ofSize: 12), .foregroundColor: UIColor.label]))
+        let r = textView.selectedRange
+        textView.textStorage.replaceCharacters(in: r, with: block)
+        textView.selectedRange = NSRange(location: r.location + block.length, length: 0)
+    }
+
+    /// Edit tabel terdekat dari kursor (cadangan bila ketukan langsung pada tabel tidak tersedia).
+    @discardableResult
+    func editTableAtCursor() -> Bool {
+        let storage = textView.textStorage
+        guard storage.length > 0 else { return false }
+        let para = (storage.string as NSString).paragraphRange(for: textView.selectedRange)
+        let search = NSRange(location: max(0, para.location - 1), length: min(storage.length - max(0, para.location - 1), para.length + 2))
+        var found: TableAttachment?
+        storage.enumerateAttribute(.attachment, in: search, options: []) { value, _, stop in
+            if let t = value as? TableAttachment { found = t; stop.pointee = true }
+        }
+        editingTable = found
+        return found != nil
+    }
+
+    /// Terapkan hasil edit tabel dan minta tata letak ulang.
+    func update(_ table: TableAttachment, rows: [[String]], borders: Bool) {
+        table.rows = rows
+        table.borders = borders
+        let cols = rows.map(\.count).max() ?? 1
+        if table.widths.count != cols { table.widths = Array(repeating: 1, count: cols) }
+        table.refresh()
+        let storage = textView.textStorage
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, stop in
+            if (value as? TableAttachment) === table {
+                storage.edited(.editedAttributes, range: range, changeInLength: 0)
+                stop.pointee = true
+            }
+        }
+        textView.setNeedsLayout()
+    }
+
     /// Salinan untuk disimpan: warna label sistem diganti hitam agar tetap terbaca di Word.
     var exportText: NSAttributedString {
-        let m = NSMutableAttributedString(attributedString: textView.attributedText ?? NSAttributedString())
-        m.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: m.length))
-        return m
+        AttributedPDF.black(textView.attributedText ?? NSAttributedString())
     }
 }
 
@@ -890,12 +1143,20 @@ struct DocEditorView: View {
             }
         }
         .task { load() }
+        .sheet(item: $editor.editingTable) { table in
+            TableEditorSheet(rows: table.rows, borders: table.borders) { rows, borders in editor.update(table, rows: rows, borders: borders) }
+        }
     }
 
     @ViewBuilder private var formatButtons: some View {
         Button { editor.toggle(.traitBold) } label: { Image(systemName: "bold") }
         Button { editor.toggle(.traitItalic) } label: { Image(systemName: "italic") }
         Button { editor.toggleUnderline() } label: { Image(systemName: "underline") }
+        Menu {
+            Button { editor.insertTable() } label: { Label("Sisipkan tabel", systemImage: "plus") }
+            Button { if !editor.editTableAtCursor() { failure = "Letakkan kursor tepat di bawah atau di atas tabel." } } label: { Label("Edit tabel di kursor", systemImage: "pencil") }
+        } label: { Image(systemName: "tablecells") }
+            .accessibilityLabel("Tabel")
         Button { editor.resize(-1) } label: { Image(systemName: "textformat.size.smaller") }
         Button { editor.resize(1) } label: { Image(systemName: "textformat.size.larger") }
         Menu {
@@ -918,7 +1179,7 @@ struct DocEditorView: View {
                 m.addAttribute(.foregroundColor, value: UIColor.label, range: NSRange(location: 0, length: m.length))
                 editor.textView.attributedText = m
                 if (try? Zip.read(data)["word/document.xml"].map { String(decoding: $0, as: UTF8.self).contains("<w:tbl") }) == true {
-                    notice = "Tabel ditampilkan sebagai baris bertab. Menyimpan ulang akan mengubah tabel menjadi teks."
+                    notice = "Ketuk tabel untuk mengedit isinya."
                 }
             case "rtf":
                 editor.textView.attributedText = try NSAttributedString(url: source, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
@@ -937,18 +1198,7 @@ struct DocEditorView: View {
             guard let data = try? text.data(from: NSRange(location: 0, length: text.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) else { failure = OfficeError.cannotWrite.localizedDescription; return }
             onSave([GeneratedDocument(name: name + ".rtf", data: data)])
         case "pdf":
-            let formatter = UISimpleTextPrintFormatter(attributedText: text)
-            let renderer = UIPrintPageRenderer()
-            renderer.addPrintFormatter(formatter, startingAtPageAt: 0)
-            let paper = CGRect(x: 0, y: 0, width: 595.28, height: 841.89)
-            renderer.setValue(NSValue(cgRect: paper), forKey: "paperRect")
-            renderer.setValue(NSValue(cgRect: paper.insetBy(dx: 56, dy: 56)), forKey: "printableRect")
-            let data = NSMutableData()
-            UIGraphicsBeginPDFContextToData(data, paper, nil)
-            renderer.prepare(forDrawingPages: NSRange(location: 0, length: renderer.numberOfPages))
-            for i in 0..<renderer.numberOfPages { UIGraphicsBeginPDFPage(); renderer.drawPage(at: i, in: UIGraphicsGetPDFContextBounds()) }
-            UIGraphicsEndPDFContext()
-            onSave([GeneratedDocument(name: name + ".pdf", data: data as Data)])
+            onSave([GeneratedDocument(name: name + ".pdf", data: AttributedPDF.render(text))])
         default:
             onSave([GeneratedDocument(name: name + ".docx", data: Docx.write(text))])
         }
