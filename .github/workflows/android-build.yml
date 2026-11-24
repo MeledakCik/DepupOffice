@@ -158,11 +158,13 @@ jobs:
     runs-on: macos-15-intel   # image Intel terakhir GitHub, didukung hingga Agustus 2027
     timeout-minutes: 90
     permissions:
-      contents: read
+      contents: write   # hanya untuk mendorong screenshot uji UI ke branch ci-screenshots
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Uji, build & IPA
+        env:
+          GITHUB_TOKEN: ${{ github.event_name == 'push' && secrets.GITHUB_TOKEN || '' }}
         run: ci/ios-build.sh
       - name: Log uji
         if: failure()
