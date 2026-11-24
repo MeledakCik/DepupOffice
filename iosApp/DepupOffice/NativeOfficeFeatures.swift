@@ -34,6 +34,7 @@ enum NativeOfficeEngine {
         case "pdfImages": return try pdfToImages(urls[0])
         case "pdfToWord": return [try pdfToWord(urls[0])]
         case "protect": return [try protectPDF(urls[0], password: options["password"] ?? "")]
+        case "secureDoc": return [try secureDocument(urls[0], accessCode: options["accessCode"] ?? "", editPassword: options["editPassword"] ?? "")]
         default: throw OfficeError.unsupported
         }
     }
@@ -228,6 +229,24 @@ enum NativeOfficeEngine {
         return GeneratedDocument(name: "\(url.deletingPathExtension().lastPathComponent)_terlindungi.pdf", data: data)
     }
 
+    /// Dokumen Terlindungi v3 (format sama dengan Android): bisa dibuka di Android & iPhone dengan kode akses.
+    private static func secureDocument(_ url: URL, accessCode: String, editPassword: String) throws -> GeneratedDocument {
+        if let problem = SecurePackage.validateNewCode(accessCode) { throw ProtectedDocError.invalidCode(problem) }
+        let edit = editPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard edit.count >= 6, Set(edit).count > 1, edit != "123456" else {
+            throw ProtectedDocError.invalidCode("Password edit guru minimal 6 karakter dan tidak mudah ditebak.")
+        }
+        guard SecurePackage.normalizeCode(edit) != SecurePackage.normalizeCode(accessCode) else {
+            throw ProtectedDocError.invalidCode("Password edit guru harus berbeda dari kode akses murid.")
+        }
+        let original = try Data(contentsOf: url)
+        if ProtectedDocReader.payload(original) != nil {
+            throw ProtectedDocError.invalidCode("Berkas ini sudah merupakan Dokumen Terlindungi.")
+        }
+        let data = try ProtectedDocWriter.make(original: original, accessCode: accessCode, editPassword: edit)
+        return GeneratedDocument(name: "\(url.deletingPathExtension().lastPathComponent)_terlindungi.pdf", data: data)
+    }
+
     private static func extractText(_ url: URL) throws -> GeneratedDocument {
         guard let document = PDFDocument(url: url) else { throw OfficeError.invalidPDF(url.lastPathComponent) }
         return GeneratedDocument(name: "\(url.deletingPathExtension().lastPathComponent).txt",
@@ -331,6 +350,7 @@ private struct OfficeTool: Identifiable {
         .init(id: "compress", title: "Kompres PDF", detail: "Buat salinan lebih kecil dengan meraster halaman", symbol: "arrow.down.right.and.arrow.up.left", group: "Kelola PDF"),
         .init(id: "pdfImages", title: "PDF ke JPG", detail: "Ekspor setiap halaman sebagai gambar", symbol: "doc.on.doc", group: "Kelola PDF"),
         .init(id: "protect", title: "Kunci PDF", detail: "Enkripsi PDF dengan kata sandi pembuka", symbol: "lock.doc", group: "Keamanan"),
+        .init(id: "secureDoc", title: "Buat Dokumen Terlindungi", detail: "Sampul DepUp + AES-256-GCM, dibuka dengan kode akses di Android & iPhone", symbol: "lock.shield.fill", group: "Keamanan"),
         .init(id: "imagePDF", title: "Foto ke PDF", detail: "Gabungkan satu atau beberapa foto ke PDF", symbol: "photo.badge.plus", group: "Konversi", multiple: true, imagesOnly: true),
         .init(id: "ocr", title: "OCR dokumen", detail: "Kenali teks pada hasil scan dan ekspor ke TXT", symbol: "text.viewfinder", group: "Konversi"),
         .init(id: "extractText", title: "Ekstrak teks PDF", detail: "Simpan teks PDF ke berkas TXT", symbol: "doc.text.magnifyingglass", group: "Konversi"),
@@ -557,6 +577,8 @@ private struct ToolSetupSheet: View {
     @State private var watermark = "DEPU P OFFICE"
     @State private var query = ""
     @State private var password = ""
+    @State private var accessCode = SecurePackage.generateAccessCode()
+    @State private var editPassword = ""
 
     var body: some View {
         NavigationStack {
@@ -587,6 +609,24 @@ private struct ToolSetupSheet: View {
                     Section("Kata sandi PDF") {
                         SecureField("Minimal 4 karakter", text: $password)
                     }
+                } else if tool.id == "secureDoc" {
+                    Section {
+                        HStack {
+                            TextField("Kode akses", text: $accessCode)
+                                .font(.body.monospaced())
+                                .textInputAutocapitalization(.characters)
+                                .autocorrectionDisabled()
+                            Button { accessCode = SecurePackage.generateAccessCode() } label: { Image(systemName: "arrow.clockwise") }
+                                .accessibilityLabel("Buat kode baru")
+                            Button { copySensitive(SecurePackage.groupedCode(accessCode)) } label: { Image(systemName: "doc.on.doc") }
+                                .accessibilityLabel("Salin kode")
+                        }
+                    } header: { Text("Kode akses murid") } footer: {
+                        Text("Bagikan kode ini terpisah dari berkasnya. Kode tidak tersimpan di dokumen dan tidak bisa dipulihkan bila hilang.")
+                    }
+                    Section("Password edit guru") {
+                        SecureField("Untuk mengekspor PDF asli (min. 6 karakter)", text: $editPassword)
+                    }
                 }
                 Section {
                     Button {
@@ -597,6 +637,11 @@ private struct ToolSetupSheet: View {
                         if tool.id == "photoWatermark" { values["text"] = watermark }
                         if tool.id == "search" { values["query"] = query }
                         if tool.id == "protect" { values["password"] = password }
+                        if tool.id == "secureDoc" {
+                            values["accessCode"] = accessCode
+                            values["editPassword"] = editPassword
+                            copySensitive(SecurePackage.groupedCode(accessCode))
+                        }
                         onContinue(values)
                         dismiss()
                     } label: {
@@ -611,6 +656,12 @@ private struct ToolSetupSheet: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Tutup") { dismiss() } } }
         }
     }
+}
+
+/// Salin ke papan klip hanya di perangkat ini (tanpa Universal Clipboard) dan kedaluwarsa 2 menit.
+private func copySensitive(_ value: String) {
+    UIPasteboard.general.setItems([[UTType.plainText.identifier: value]],
+                                  options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
 }
 
 private struct ShareFile: Identifiable {

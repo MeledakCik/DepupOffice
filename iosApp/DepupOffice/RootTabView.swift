@@ -70,6 +70,7 @@ struct RootTabView: View {
         .quickLookPreview($documents.previewURL)
         .fullScreenCover(item: $documents.protectedFile) { file in
             SecureDocumentView(url: file.url)
+                .environmentObject(documents)
         }
         .alert("DepUp Office", isPresented: statusAlertIsPresented) {
             Button("OK") { documents.statusMessage = nil }

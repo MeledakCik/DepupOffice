@@ -127,6 +127,10 @@ final class DocumentStore: ObservableObject {
         saveGeneratedFile(Data(text.utf8), name: name, extension: "csv")
     }
 
+    func savePDF(_ data: Data, name: String) {
+        saveGeneratedFile(data, name: name, extension: "pdf")
+    }
+
     func saveGeneratedData(_ data: Data, name: String) {
         saveGeneratedFile(data, name: name, extension: "png")
     }
@@ -204,6 +208,10 @@ final class DocumentStore: ObservableObject {
                 self.statusMessage = results.count == 1
                     ? "Selesai: \(results[0].name) tersimpan di DepUp Office."
                     : "Selesai: \(results.count) berkas tersimpan di DepUp Office."
+                if tool == "secureDoc", let code = options["accessCode"] {
+                    self.statusMessage = (self.statusMessage ?? "") +
+                        "\n\nKode akses: \(SecurePackage.groupedCode(code))\nKode sudah disalin. Bagikan ke pembaca lewat jalur terpisah; kode tidak bisa dipulihkan."
+                }
             } catch {
                 self?.statusMessage = error.localizedDescription
             }
