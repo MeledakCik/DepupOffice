@@ -189,7 +189,7 @@ enum ParityEngine {
             var stream: CGPDFStreamRef?
             guard CGPDFDictionaryGetStream(xobjects, key, &stream), let stream,
                   let sdict = CGPDFStreamGetDictionary(stream) else { continue }
-            let identity = Int(bitPattern: UnsafeRawPointer(stream))
+            let identity = unsafeBitCast(stream, to: Int.self)   // alamat objek; berlaku untuk SDK lama (pointer) & baru (kelas)
             guard !seen.contains(identity) else { continue }
             seen.insert(identity)
             var subtype: UnsafePointer<CChar>?
