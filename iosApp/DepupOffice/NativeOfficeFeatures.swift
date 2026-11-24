@@ -369,6 +369,16 @@ private struct OfficeTool: Identifiable {
         .init(id: "businessCard", title: "Pindai kartu nama", detail: "Nama, HP & email jadi kontak (.vcf)", symbol: "person.text.rectangle", group: "Gambar", imagesOnly: true),
         .init(id: "tableToExcel", title: "Pindai tabel ke Excel", detail: "Foto tabel/kuitansi jadi berkas .xlsx", symbol: "tablecells.badge.ellipsis", group: "Konversi", imagesOnly: true),
         .init(id: "receiptToExcel", title: "Scan struk", detail: "Daftar belanja & total ke Excel", symbol: "receipt", group: "Konversi", multiple: true, imagesOnly: true),
+        .init(id: "invoice", title: "Nota / Invoice", detail: "Nomor otomatis, hitung total, stempel toko (PDF + Excel)", symbol: "doc.plaintext", group: "Buat"),
+        .init(id: "catalog", title: "Katalog produk", detail: "Foto, nama, harga & deskripsi jadi katalog PDF", symbol: "square.grid.2x2", group: "Buat"),
+        .init(id: "schedule", title: "Perencana jadwal", detail: "Agenda harian/mingguan ke Excel & PDF", symbol: "calendar", group: "Buat"),
+        .init(id: "notes", title: "Catatan", detail: "Teks & daftar centang, tersimpan di perangkat", symbol: "note.text", group: "Buat"),
+        .init(id: "chart", title: "Grafik & chart Excel", detail: "Batang, lingkaran & garis dari .xlsx / .csv", symbol: "chart.bar.xaxis", group: "Konversi"),
+        .init(id: "officeToPdf", title: "Word/Excel ke PDF", detail: "Ubah .docx, .xlsx, .pptx menjadi PDF", symbol: "doc.richtext", group: "Konversi"),
+        .init(id: "summary", title: "Ringkas dokumen", detail: "Poin penting dari PDF, Word atau teks", symbol: "text.append", group: "Dokumen"),
+        .init(id: "voice", title: "Bacakan suara", detail: "Dokumen dibacakan dengan suara bahasa Indonesia", symbol: "speaker.wave.2", group: "Dokumen"),
+        .init(id: "slideshow", title: "Presentasi PDF", detail: "Tampilkan PDF layar penuh seperti slide", symbol: "play.rectangle", group: "Dokumen"),
+        .init(id: "searchAll", title: "Cari teks dalam file", detail: "Cari kata di semua PDF, Word, Excel & teks", symbol: "doc.text.magnifyingglass", group: "Dokumen"),
         .init(id: "priceTag", title: "Label harga & barcode", detail: "Buat label harga toko & lembar A4", symbol: "barcode", group: "Dokumen"),
         .init(id: "print", title: "Cetak", detail: "Printer AirPrint atau simpan PDF", symbol: "printer", group: "Bagikan & ekspor"),
         .init(id: "organize", title: "Susun & putar halaman", detail: "Urutkan, hapus, putar halaman, dan sisipkan halaman kosong", symbol: "rectangle.stack", group: "Kelola PDF"),
@@ -398,6 +408,7 @@ struct NativeToolsScreen: View {
     @State private var editorCopy: URL?
     @State private var isLiveQRPresented = false
     @State private var isPriceTagPresented = false
+    @State private var directTool: DirectTool?
 
     var body: some View {
         List {
@@ -406,12 +417,13 @@ struct NativeToolsScreen: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            ForEach(["Kelola PDF", "Konversi", "Gambar", "Dokumen", "Keamanan", "Bagikan & ekspor"], id: \.self) { group in
+            ForEach(["Kelola PDF", "Konversi", "Buat", "Gambar", "Dokumen", "Keamanan", "Bagikan & ekspor"], id: \.self) { group in
                 Section(group) {
                     ForEach(OfficeTool.all.filter { $0.group == group }) { tool in
                         Button {
                             if tool.id == "liveQR" { isLiveQRPresented = true }
                             else if tool.id == "priceTag" { isPriceTagPresented = true }
+                            else if let direct = DirectTool(rawValue: tool.id) { directTool = direct }
                             else { selectedTool = tool }
                         } label: {
                             HStack(spacing: 13) {
@@ -461,10 +473,29 @@ struct NativeToolsScreen: View {
                 SignPDFView(url: target.url) { data in
                     documents.savePDF(data, name: target.url.deletingPathExtension().lastPathComponent + "_ttd")
                 }
+            } else if target.kind == "chart" {
+                ChartMakerView(url: target.url) { documents.saveGenerated($0) }
+            } else if target.kind == "summary" {
+                SummaryView(url: target.url) { documents.saveGenerated($0) }
+            } else if target.kind == "voice" {
+                VoiceReaderView(url: target.url)
+            } else if target.kind == "slideshow" {
+                SlideshowView(url: target.url)
+            } else if target.kind == "officeToPdf" {
+                OfficeToPDFView(url: target.url) { documents.saveGenerated($0) }
             } else {
                 PageOrganizerView(url: target.url) { data in
                     documents.savePDF(data, name: target.url.deletingPathExtension().lastPathComponent + "_susun")
                 }
+            }
+        }
+        .sheet(item: $directTool) { tool in
+            switch tool {
+            case .invoice: InvoiceMakerView { documents.saveGenerated($0) }
+            case .catalog: CatalogMakerView { documents.saveGenerated($0) }
+            case .schedule: SchedulePlannerView { documents.saveGenerated($0) }
+            case .notes: NotesScreen()
+            case .searchAll: SearchAllView().environmentObject(documents)
             }
         }
         .sheet(isPresented: $isPriceTagPresented) {
@@ -514,6 +545,9 @@ struct NativeToolsScreen: View {
         if tool.id == "merge" { return [.pdf] }
         if tool.id == "share" || tool.id == "print" { return [.item] }
         if tool.id == "exeToPdf" { return [.data] }
+        if tool.id == "chart" { return [.commaSeparatedText, .plainText] + [UTType(filenameExtension: "xlsx")].compactMap { $0 } }
+        if tool.id == "summary" || tool.id == "voice" { return DocText.readableTypes }
+        if tool.id == "officeToPdf" { return ["docx", "xlsx", "pptx", "doc", "xls", "ppt"].compactMap { UTType(filenameExtension: $0) } + [.rtf] }
         return [.pdf]
     }
 
@@ -526,7 +560,7 @@ struct NativeToolsScreen: View {
     private func handlePicked(_ urls: [URL]) {
         guard let tool = importTool else { return }
         defer { importTool = nil }
-        if tool.id == "organize" || tool.id == "sign" {
+        if ["organize", "sign", "chart", "summary", "voice", "slideshow", "officeToPdf"].contains(tool.id) {
             guard let url = urls.first else { return }
             do {
                 let copy = try documents.makeShareCopy(from: url)
@@ -1050,6 +1084,11 @@ private struct NativeVaultScreen: View {
 }
 
 // MARK: - Fitur setara Android: susun halaman, tanda tangan PDF, pindai QR dari kamera
+
+enum DirectTool: String, Identifiable {
+    case invoice, catalog, schedule, notes, searchAll
+    var id: String { rawValue }
+}
 
 struct EditorTarget: Identifiable {
     let id = UUID()
