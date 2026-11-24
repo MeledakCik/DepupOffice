@@ -18,7 +18,17 @@ Porting sedang berjalan; build iOS belum menyamai seluruh fitur Android. Fondasi
 - Susun & putar halaman PDF (urutkan, hapus, putar per halaman, sisipkan halaman kosong), tanda tangan PDF (anotasi tinta vektor), dan pindai QR/barcode langsung dari kamera.
 - **Dokumen Terlindungi setara Android**: membuat dan membuka format v3 (kode akses, PBKDF2-SHA256 600.000 iterasi → HKDF → AES-256-GCM + HMAC-SHA256), membuka format v1 (DepUp 4.1.0) dengan honeypot, kode akses diingat di Keychain, ekspor PDF asli dengan password guru, penampil aman (anti tangkapan/rekam layar, tanpa salin/Look Up), watermark ID dokumen per menit, PT_DENY_ATTACH, serta deteksi debugger/injeksi/jailbreak/aplikasi ditandatangani ulang. Format v2 lama ("khusus perangkat Android") memang tidak bisa dibuka di perangkat lain.
 
-Fitur yang masih perlu dipindahkan sebelum parity penuh: editor DOCX/XLSX dengan format dan rumus, template dokumen/sheet, chart spreadsheet, anotasi PDF bebas (stabilo, teks), ekstraksi objek gambar dari PDF, OCR tertanam ke PDF, alat foto khusus (pembersih bayangan, pasfoto, kartu nama, tanda tangan transparan), invoice/katalog/perencana, pemindaian tabel/struk ke Excel, catatan + widget, dan pembaca suara. Quick Look dapat menampilkan dokumen Office, tetapi belum menggantikan editor Android.
+Sejak 4.2.0 seluruh menu Android tersedia di iOS: alat PDF (termasuk coret-coret, susun halaman, OCR tertanam, kompres presisi, EXE ke PDF), alat foto (pembersih bayangan, pasfoto, kartu nama, TTD transparan), Excel (editor berumus, tabel/struk ke Excel, grafik), Word (editor dengan tabel, template, Word/Excel ke PDF), pembuat nota/katalog/jadwal/label harga, ringkasan, pembaca suara, presentasi, pencarian di semua berkas, catatan + widget layar utama, dan pustaka tanda tangan.
+
+### Widget & App Group
+
+Widget "Catatan DepUp" (`iosApp/NotesWidget`, target `NotesWidgetExtension`) membaca catatan dari App Group `group.cloud.depup.office.ios`. Saat aplikasi ditandatangani dengan akun Apple Developer, aktifkan capability **App Groups** untuk target `DepupOffice` dan `NotesWidgetExtension` dengan grup yang sama (Xcode → Signing & Capabilities; penandatanganan otomatis mendaftarkannya). Tanpa App Group, aplikasi tetap berjalan, tetapi widget tidak bisa melihat catatan.
+
+### Uji otomatis
+
+- iOS: `DepupOfficeTests` (24 uji, dijalankan CI di Simulator lewat `ci/ios-build.sh`).
+- Android: `./gradlew testDebugUnitTest`, termasuk `CrossPlatformTest` (membuka `app/src/test/resources/ios_protected_v3.pdf` buatan penulis iOS) dan `ExeToPdfTest`.
+- CI iOS berjalan di `macos-latest` (arm64). Bila runner itu penuh dan job gagal dimulai, job cadangan `macos-15-intel` berjalan otomatis. Runner bisa dipaksa lewat variabel repositori `IOS_RUNNER`.
 
 ## Format Dokumen Terlindungi
 
