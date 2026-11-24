@@ -19,18 +19,32 @@ for rt,devs in d.items():
 print(best[1] if best else "")')
 echo "Simulator: $UDID"
 if [ -z "$UDID" ]; then echo "::error::Tidak ada simulator iPhone"; exit 1; fi
-set -o pipefail
-xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Debug \
+# Baris error dijadikan anotasi GitHub (terbaca tanpa login) agar kegagalan mudah ditelusuri.
+annotate() {
+  grep -E "error:|XCTAssert|failed \(" "$1" | grep -v "^Testing failed:" | sort -u | head -40 | while IFS= read -r line; do
+    echo "::error::${line//$'\n'/ }"
+  done
+}
+if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Debug \
   -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/ios-test \
-  CODE_SIGNING_ALLOWED=NO test 2>&1 | tee build/ios-test.log | grep -E "Test Case|error:|failed|passed|\*\* TEST" | tail -80
+  CODE_SIGNING_ALLOWED=NO test > build/ios-test.log 2>&1; then
+  annotate build/ios-test.log
+  tail -60 build/ios-test.log
+  exit 65
+fi
+grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" build/ios-test.log | tail -60
 
 # 2) Build rilis Simulator & perangkat (tanpa tanda tangan) + IPA
-xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Release \
+if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Release \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath build/ios-sim CODE_SIGNING_ALLOWED=NO build | tail -20
-xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Release \
+  -derivedDataPath build/ios-sim CODE_SIGNING_ALLOWED=NO build > build/ios-sim.log 2>&1; then
+  annotate build/ios-sim.log; tail -40 build/ios-sim.log; exit 65
+fi
+if ! xcodebuild -project iosApp/DepupOffice.xcodeproj -scheme DepupOffice -configuration Release \
   -sdk iphoneos -destination 'generic/platform=iOS' \
-  -derivedDataPath build/ios-dev CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tail -20
+  -derivedDataPath build/ios-dev CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build > build/ios-dev.log 2>&1; then
+  annotate build/ios-dev.log; tail -40 build/ios-dev.log; exit 65
+fi
 APP=build/ios-dev/Build/Products/Release-iphoneos/DepupOffice.app
 test -d "$APP/PlugIns/NotesWidgetExtension.appex" || { echo "::error::Widget tidak tertanam di aplikasi"; exit 1; }
 v=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);.*/\1/p' iosApp/DepupOffice.xcodeproj/project.pbxproj | head -1)
