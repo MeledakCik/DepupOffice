@@ -7,6 +7,7 @@ import UIKit
 //   -UITestSeed            isi folder DepUp Office dengan berkas contoh (PDF, Word, Excel, foto, Dokumen Terlindungi)
 //   -UITestScreen <nama>   langsung buka layar tertentu (lihat UITestRoute)
 //   -UITestDark            paksa mode gelap
+//   -UITestFresh           buat ulang Dokumen Terlindungi (tanpa kode yang diingat)
 
 enum UITestSupport {
     static let accessCode = "ABCD-EFGH-JKMN"
@@ -15,6 +16,8 @@ enum UITestSupport {
     static var dark: Bool { arguments.contains("-UITestDark") }
     /// Tanpa pelindung tangkapan layar — hanya agar uji UI bisa membuktikan isi PDF benar-benar tampil.
     static var noShield: Bool { arguments.contains("-UITestNoShield") }
+    /// Buat ulang Dokumen Terlindungi (ID baru → belum ada kode yang diingat di Keychain).
+    static var fresh: Bool { arguments.contains("-UITestFresh") }
 
     static var screen: String? {
         guard let i = arguments.firstIndex(of: "-UITestScreen"), i + 1 < arguments.count else { return nil }
@@ -34,7 +37,7 @@ enum UITestSupport {
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
         // Mulai bersih setiap peluncuran, kecuali Dokumen Terlindungi (ID dokumennya harus tetap agar
         // "kode diingat" bisa diuji antar-peluncuran).
-        for item in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] where item.lastPathComponent != "Rahasia_terlindungi.pdf" {
+        for item in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] where fresh || item.lastPathComponent != "Rahasia_terlindungi.pdf" {
             try? fm.removeItem(at: item)
         }
         try? samplePDF().write(to: url("Contoh Laporan.pdf"))

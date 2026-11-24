@@ -5,9 +5,10 @@ final class DepupOfficeUITests: XCTestCase {
     override func setUp() { continueAfterFailure = true }
 
     @discardableResult
-    func launch(_ screen: String?, dark: Bool = false) -> XCUIApplication {
+    func launch(_ screen: String?, dark: Bool = false, fresh: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-UITestSeed"] + (screen.map { ["-UITestScreen", $0] } ?? []) + (dark ? ["-UITestDark"] : [])
+            + (fresh ? ["-UITestFresh"] : [])
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "aplikasi gagal terbuka: \(screen ?? "-")")
         return app
@@ -66,7 +67,7 @@ final class DepupOfficeUITests: XCTestCase {
     // MARK: alur
 
     func testProtectedDocumentWrongThenRightCode() {
-        var app = launch("protected")
+        var app = launch("protected", fresh: true)
         let field = app.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 15), "kolom kode akses tidak muncul")
         field.tap()

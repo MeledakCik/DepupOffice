@@ -103,6 +103,8 @@ object DocumentSummarizerManager {
         for (raw in text.split("\n")) {
             val line = raw.trim()
             if (line.isEmpty()) { if (current.isNotEmpty()) { out.add(current.toString()); current.clear() }; continue }
+            // Judul pendek (≤ 4 kata, tanpa tanda baca akhir) berdiri sendiri, tidak digabung ke paragraf.
+            if (current.isEmpty() && line.split(Regex("\\s+")).size <= 4 && line.last() !in ".!?:;,)\"”") { out.add(line); continue }
             if (current.isNotEmpty()) current.append(' ')
             current.append(line)
             if (line.last() in ".!?:;)\"”") { out.add(current.toString()); current.clear() }
@@ -112,8 +114,15 @@ object DocumentSummarizerManager {
     }
 
     internal fun extractKeyPoints(text: String): List<String> {
-        val seen = HashSet<String>()
-        val paragraphs = paragraphs(text).filter { it.length > 25 && seen.add(it.lowercase()) }
+        val kept = ArrayList<Set<String>>()
+        val paragraphs = paragraphs(text).filter { p ->
+            if (p.length <= 25) return@filter false
+            val words = p.lowercase().split(Regex("\\W+")).filter { it.isNotEmpty() }.toSet()
+            // Lewati paragraf yang (hampir) sama dengan yang sudah dipilih, mis. isi halaman berulang.
+            val dup = kept.any { k -> words.intersect(k).size.toDouble() / (words.union(k).size).coerceAtLeast(1) >= 0.8 }
+            if (!dup) kept.add(words)
+            !dup
+        }
 
         if (paragraphs.isEmpty()) {
             return listOf(text.take(200))

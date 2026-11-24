@@ -14,4 +14,13 @@ class SummarizerTest {
         assertEquals(1, points.size)
         assertEquals("Kegiatan bulan ini berjalan lancar. Kesimpulan penting: anggaran disetujui dan laporan dikirim tepat waktu.", points[0])
     }
+
+    @Test
+    fun headingStaysSeparateAndRepeatedPageCountsOnce() {
+        val page = "Kegiatan bulan ini berjalan lancar. Kesimpulan penting: anggaran disetujui\n" +
+            "dan laporan dikirim tepat waktu. Catatan: rapat berikutnya hari Senin pukul 09.00."
+        val points = DocumentSummarizerManager.extractKeyPoints("Laporan Kegiatan\n$page\nLampiran\n$page")
+        assertEquals(1, points.size)
+        assertEquals(true, points[0].startsWith("Kegiatan bulan ini"))
+    }
 }

@@ -550,6 +550,9 @@ enum Summarizer {
         for raw in text.components(separatedBy: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { if !current.isEmpty { out.append(current); current = "" }; continue }
+            // Judul pendek (≤ 4 kata, tanpa tanda baca akhir) berdiri sendiri.
+            if current.isEmpty, line.split(whereSeparator: { $0 == " " }).count <= 4,
+               let last = line.last, !".!?:;,)\"”".contains(last) { out.append(line); continue }
             current = current.isEmpty ? line : current + " " + line
             if let last = line.last, ".!?:;)\"”".contains(last) { out.append(current); current = "" }
         }
@@ -558,8 +561,15 @@ enum Summarizer {
     }
 
     static func keyPoints(_ text: String) -> [String] {
-        var seen = Set<String>()
-        let paragraphs = paragraphs(text).filter { $0.count > 25 && seen.insert($0.lowercased()).inserted }
+        var kept: [Set<String>] = []
+        let paragraphs = paragraphs(text).filter { p in
+            guard p.count > 25 else { return false }
+            let words = Set(p.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty })
+            // Lewati paragraf yang (hampir) sama dengan yang sudah dipilih.
+            let dup = kept.contains { k in Double(words.intersection(k).count) / Double(max(words.union(k).count, 1)) >= 0.8 }
+            if !dup { kept.append(words) }
+            return !dup
+        }
         if paragraphs.isEmpty { return [String(text.prefix(200))] }
         let scored = paragraphs.enumerated().map { index, p -> (Int, String, Int) in
             var score = min(p.count, 300)

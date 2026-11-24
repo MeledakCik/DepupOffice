@@ -309,6 +309,14 @@ final class ToolTests: XCTestCase {
         XCTAssertEqual(Summarizer.keyPoints(text), ["Kegiatan bulan ini berjalan lancar. Kesimpulan penting: anggaran disetujui dan laporan dikirim tepat waktu."])
     }
 
+    func testSummarizerHeadingSeparateAndRepeatedPageOnce() {
+        let page = "Kegiatan bulan ini berjalan lancar. Kesimpulan penting: anggaran disetujui\n" +
+            "dan laporan dikirim tepat waktu. Catatan: rapat berikutnya hari Senin pukul 09.00."
+        let points = Summarizer.keyPoints("Laporan Kegiatan\n" + page + "\nLampiran\n" + page)
+        XCTAssertEqual(points.count, 1)
+        XCTAssertTrue(points[0].hasPrefix("Kegiatan bulan ini"))
+    }
+
     func testAiTextStripsHiddenCharacters() {
         let smuggled = "Halo" + String(UnicodeScalar(0xE0049)!) + "\u{200B}dunia\u{202E}"
         XCTAssertEqual(AiText.clean(smuggled), "Halodunia")
