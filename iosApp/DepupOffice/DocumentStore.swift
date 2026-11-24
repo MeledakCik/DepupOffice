@@ -142,6 +142,15 @@ final class DocumentStore: ObservableObject {
         }
     }
 
+    func delete(_ document: LocalDocument) {
+        do {
+            try FileManager.default.removeItem(at: document.url)
+            refresh()
+        } catch {
+            statusMessage = "Berkas tidak bisa dihapus: \(error.localizedDescription)"
+        }
+    }
+
     func saveText(_ text: String, name: String) {
         saveGeneratedFile(Data(text.utf8), name: name, extension: "txt")
     }

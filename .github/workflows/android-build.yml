@@ -128,7 +128,7 @@ jobs:
 
   ios:
     name: iOS — build (unsigned)
-    runs-on: macos-15
+    runs-on: macos-15-intel   # arm64 sering antre karena kapasitas GitHub
     permissions:
       contents: read
     steps:
@@ -228,6 +228,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Depup Office ${{ github.ref_name }}
-          body_path: RELEASE_NOTES_V4_1.md
+          body_path: RELEASE_NOTES_V4_2.md
           generate_release_notes: true
           files: dist/*

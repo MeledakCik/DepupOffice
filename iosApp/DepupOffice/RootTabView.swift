@@ -260,6 +260,18 @@ private struct EmptyDocumentsCard: View {
 private struct DocumentLibraryScreen: View {
     @EnvironmentObject private var documents: DocumentStore
     @State private var isImporterPresented = false
+    @State private var editTarget: EditorTarget?
+    @State private var pendingDelete: LocalDocument?
+
+    /// Jenis editor untuk berkas ini (nil = hanya pratinjau).
+    private func editorKind(_ d: LocalDocument) -> String? {
+        switch d.fileExtension {
+        case "docx", "rtf", "txt": return "docEditor"
+        case "xlsx", "csv": return "sheetEditor"
+        case "pdf": return ProtectedDocReader.isProtected(d.url) ? nil : "annotate"
+        default: return nil
+        }
+    }
 
     var body: some View {
         Group {
@@ -276,6 +288,18 @@ private struct DocumentLibraryScreen: View {
                 List(documents.documents) { document in
                     DocumentRow(document: document) { documents.open(document) }
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .contextMenu {
+                            if let kind = editorKind(document) {
+                                Button { editTarget = EditorTarget(url: document.url, kind: kind) } label: {
+                                    Label(kind == "annotate" ? "Coret-coret" : "Edit", systemImage: "pencil")
+                                }
+                            }
+                            ShareLink(item: document.url) { Label("Bagikan", systemImage: "square.and.arrow.up") }
+                            Button(role: .destructive) { pendingDelete = document } label: { Label("Hapus", systemImage: "trash") }
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) { pendingDelete = document } label: { Label("Hapus", systemImage: "trash") }
+                        }
                 }
                 .listStyle(.insetGrouped)
                 .refreshable { documents.refresh() }
@@ -288,6 +312,20 @@ private struct DocumentLibraryScreen: View {
                     .accessibilityLabel("Impor berkas")
             }
         }
+        .sheet(item: $editTarget) { target in
+            switch target.kind {
+            case "docEditor": DocEditorView(source: target.url) { documents.saveGenerated($0) }
+            case "sheetEditor": SheetEditorView(source: target.url, template: nil) { documents.saveGenerated($0) }
+            default:
+                AnnotatePDFView(url: target.url) { data in
+                    documents.savePDF(data, name: target.url.deletingPathExtension().lastPathComponent + "_coret")
+                }
+            }
+        }
+        .confirmationDialog("Hapus berkas ini secara permanen?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                            titleVisibility: .visible, presenting: pendingDelete) { doc in
+            Button("Hapus \(doc.name)", role: .destructive) { documents.delete(doc) }
+        } message: { _ in Text("Berkas yang dihapus tidak bisa dikembalikan.") }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: [.item],

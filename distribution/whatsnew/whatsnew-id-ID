@@ -1,6 +1,5 @@
-Versi 4.1.0 — Keamanan & stabilitas
-• Dokumen Terlindungi lebih aman: deteksi aplikasi yang dimodifikasi, debugger, dan alat injeksi.
-• Dokumen terkunci tidak bisa dibaca asisten AI di layar.
-• Teks dokumen dibersihkan dari perintah tersembunyi sebelum diringkas.
-• Pembaca PDF: zoom di bawah 100%, cubit-zoom lebih stabil tanpa kedip.
-• Perbaikan keamanan dan performa lainnya.
+Versi 4.2.0 — Dokumen Terlindungi bisa dibagikan
+• Dokumen Terlindungi kini dibuka dengan kode akses dari guru, di HP mana pun yang memakai DepUp Office (Android & iPhone).
+• Kode akses bisa diingat di HP, ekspor PDF asli tetap dengan password guru.
+• Dokumen lama dari versi 4.1.0 tetap bisa dibuka.
+• Pemeriksaan keamanan lebih akurat, tanpa salah deteksi di HP biasa.
