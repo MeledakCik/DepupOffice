@@ -20,9 +20,9 @@ android {
         minSdk = 29
         targetSdk = 36
         ndkVersion = "28.2.13676358"
-        // versionCode = mayor*10000 + minor*100 + patch (4.2.1 -> 40201). 40000 sudah dipakai di alpha.
-        versionCode = 40201
-        versionName = "4.2.1"
+        // versionCode = mayor*10000 + minor*100 + patch (4.4.0 -> 40400). Play sudah memakai hingga 40303 (4.3.1). 40000 sudah dipakai di alpha.
+        versionCode = 40400
+        versionName = "4.4.0"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64") }
         externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
         val localProps = Properties().apply {
