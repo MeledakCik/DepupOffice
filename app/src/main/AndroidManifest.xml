@@ -2,8 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- App 100% offline: pastikan INTERNET tidak ikut ter-merge dari library (mis. ML Kit). -->
-    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <!-- Offline secara bawaan. INTERNET hanya dipakai saat pengguna membagikan LINK berkas ke DepUp dan menyetujui
+         unduhannya (LinkFetch). Pengiriman log/analitik library (ML Kit → datatransport) dimatikan di bawah. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Android 15+: tahu saat layar direkam, agar dokumen terkunci ditutup (izin normal, tanpa dialog) -->
     <uses-permission android:name="android.permission.DETECT_SCREEN_RECORDING" />
@@ -68,6 +69,31 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <!-- Menerima link (teks) atau berkas yang DIBAGIKAN dari aplikasi lain (Drive, browser, LMS, WhatsApp). -->
+        <activity
+            android:name=".ShareReceiverActivity"
+            android:exported="true"
+            android:label="Buka di DepUp Office"
+            android:theme="@style/ShareTheme"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
+            </intent-filter>
+        </activity>
+
+        <!-- Telemetri library Google (ML Kit memakai datatransport/firelog): dimatikan, DepUp tidak mengirim log. -->
+        <service android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery" tools:node="remove" />
+        <service android:name="com.google.android.datatransport.runtime.scheduling.jobscheduling.JobInfoSchedulerService" tools:node="remove" />
+        <receiver android:name="com.google.android.datatransport.runtime.scheduling.jobscheduling.AlarmManagerSchedulerBroadcastReceiver" tools:node="remove" />
 
         <activity android:name=".VaultActivity" android:exported="false" android:configChanges="uiMode" />
 

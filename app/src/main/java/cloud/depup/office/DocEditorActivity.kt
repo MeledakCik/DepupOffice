@@ -2561,6 +2561,8 @@ class DocEditorActivity : AppCompatActivity() {
             "data:$mime;base64," + android.util.Base64.encodeToString(b, android.util.Base64.NO_WRAP)
         }
         val wv = WebView(this)
+        // Semua gambar sudah data:; jangan pernah memuat apa pun dari internet (mis. gambar tertaut di .docx).
+        wv.settings.blockNetworkLoads = true
         printView = wv
         val waiting = busy(if (pdf) "Membuat PDF…" else "Menyiapkan cetak…")
         fun stopWaiting() { try { waiting?.dismiss() } catch (_: Exception) {} }

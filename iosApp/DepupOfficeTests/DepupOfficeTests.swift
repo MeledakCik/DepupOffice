@@ -487,3 +487,40 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(PDFDocument(data: try OfficeRender.pdf(xlsx))?.pageCount, 1)
     }
 }
+
+final class LinkAndUpdateTests: XCTestCase {
+    func testExtractsUrlAndTitle() {
+        let t = "DDL_DML.pdf https://share.google/3lwcufoNQdQ4Jvv01"
+        let u = LinkFetch.extractURL(t)
+        XCTAssertEqual(u, "https://share.google/3lwcufoNQdQ4Jvv01")
+        XCTAssertEqual(LinkFetch.title(of: t, url: u!), "DDL_DML.pdf")
+        XCTAssertEqual(LinkFetch.extractURL("Lihat (https://x.id/a.pdf)."), "https://x.id/a.pdf")
+        XCTAssertNil(LinkFetch.extractURL("http://tidak-aman.id/a.pdf"))
+    }
+
+    func testGoogleRewrites() {
+        XCTAssertEqual(LinkFetch.directURL("https://drive.google.com/file/d/1AbCdEfGhIjK/view?usp=sharing"),
+                       "https://drive.usercontent.google.com/download?id=1AbCdEfGhIjK&export=download&confirm=t")
+        XCTAssertEqual(LinkFetch.directURL("https://docs.google.com/spreadsheets/d/1AbCdEfGhIjK/edit"),
+                       "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjK/export?format=pdf")
+        XCTAssertEqual(LinkFetch.directURL("https://docs.google.com/presentation/d/1AbCdEfGhIjK/edit"),
+                       "https://docs.google.com/presentation/d/1AbCdEfGhIjK/export/pdf")
+        XCTAssertEqual(LinkFetch.directURL("https://lms.unikom.ac.id/a.pdf"), "https://lms.unikom.ac.id/a.pdf")
+    }
+
+    func testSniffAndNames() {
+        XCTAssertEqual(LinkFetch.sniff(Data("%PDF-1.7".utf8), nameHint: "x"), .pdf)
+        XCTAssertNil(LinkFetch.sniff(Data("<html>login</html>".utf8), nameHint: "a.pdf"))
+        XCTAssertEqual(LinkFetch.sniff(Data([0x50, 0x4B, 3, 4]) + Data("..xl/workbook.xml".utf8), nameHint: "x"), .xlsx)
+        XCTAssertEqual(LinkFetch.fileName(disposition: "attachment; filename=\"Materi SQL.pdf\"", url: "https://a.id/download", title: ""), "Materi SQL.pdf")
+        XCTAssertEqual(LinkFetch.fileName(disposition: nil, url: "https://drive.usercontent.google.com/download", title: "DDL_DML.pdf"), "DDL_DML.pdf")
+        XCTAssertFalse(LinkFetch.fileName(disposition: "attachment; filename=\"../../x.pdf\"", url: "https://a.id/x", title: "").contains("/"))
+    }
+
+    func testVersionCompare() {
+        XCTAssertTrue(AppStoreUpdate.isNewer("4.10.0", than: "4.9.2"))
+        XCTAssertTrue(AppStoreUpdate.isNewer("4.4.1", than: "4.4"))
+        XCTAssertFalse(AppStoreUpdate.isNewer("4.4.0", than: "4.4.0"))
+        XCTAssertFalse(AppStoreUpdate.isNewer("4.3.9", than: "4.4.0"))
+    }
+}

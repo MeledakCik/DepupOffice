@@ -46,6 +46,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
     private var onPic: ((Boolean) -> Unit)? = null
     private val scanned = mutableListOf<File>()
 
+    private val forceUpdate = ForceUpdate(this)
     private val pickOne = registerForActivityResult(ActivityResultContracts.OpenDocument()) { u ->
         if (u != null) { keep(u); onOne?.invoke(u) }
     }
@@ -243,6 +244,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
 
     override fun onResume() {
         super.onResume()
+        forceUpdate.check()
         window.decorView.removeCallbacks(draftCheck)
         window.decorView.postDelayed(draftCheck, 900L)   // setelah layar tenang & editor yang ditutup selesai
         if (freshlyBuilt) { freshlyBuilt = false; return }

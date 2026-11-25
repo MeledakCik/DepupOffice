@@ -180,7 +180,8 @@ class ViewerActivity : AppCompatActivity() {
         if (secure) try { outContent.webUri = null; outContent.clipData = null; outContent.intent = null; outContent.structuredData = null } catch (_: Throwable) {}
         else super.onProvideAssistContent(outContent)
     }
-    override fun onResume() { super.onResume(); if (guard.on) guard.onResume() }
+    private val forceUpdate = ForceUpdate(this)
+    override fun onResume() { super.onResume(); forceUpdate.check(); if (guard.on) guard.onResume() }
     override fun onMultiWindowModeChanged(inMulti: Boolean, cfg: android.content.res.Configuration) {
         super.onMultiWindowModeChanged(inMulti, cfg); if (guard.on) guard.onMultiWindow()
     }

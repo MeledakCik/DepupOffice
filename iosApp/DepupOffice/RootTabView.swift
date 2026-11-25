@@ -286,6 +286,7 @@ private struct EmptyDocumentsCard: View {
 private struct DocumentLibraryScreen: View {
     @EnvironmentObject private var documents: DocumentStore
     @State private var isImporterPresented = false
+    @State private var isLinkPresented = false
     @State private var editTarget: EditorTarget?
     @State private var pendingDelete: LocalDocument?
 
@@ -309,6 +310,7 @@ private struct DocumentLibraryScreen: View {
                 } actions: {
                     Button("Impor berkas") { isImporterPresented = true }
                         .buttonStyle(.borderedProminent)
+                    Button("Buka dari link") { isLinkPresented = true }
                 }
             } else {
                 List(documents.documents) { document in
@@ -334,10 +336,14 @@ private struct DocumentLibraryScreen: View {
         .background(Color.depupBackground)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { isImporterPresented = true } label: { Image(systemName: "plus") }
-                    .accessibilityLabel("Impor berkas")
+                Menu {
+                    Button { isImporterPresented = true } label: { Label("Impor berkas", systemImage: "folder") }
+                    Button { isLinkPresented = true } label: { Label("Buka dari link", systemImage: "link") }
+                } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("Tambah berkas")
             }
         }
+        .sheet(isPresented: $isLinkPresented) { LinkImportSheet().environmentObject(documents) }
         .sheet(item: $editTarget) { target in
             switch target.kind {
             case "docEditor": DocEditorView(source: target.url) { documents.saveGenerated($0) }

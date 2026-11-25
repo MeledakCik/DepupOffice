@@ -162,6 +162,8 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.android.gms:play-services-tasks:18.4.1")
+    // Paksaan pembaruan (In-App Updates, mode IMMEDIATE) — berkomunikasi dengan aplikasi Play Store di HP.
+    implementation("com.google.android.play:app-update:2.1.0")
     // Encoder QR asli (ringan, murni Java) + fallback decoder foto.
     implementation("com.google.zxing:core:3.5.4")
     // Memasang Baseline Profile (src/main/baseline-prof.txt) juga untuk APK yang dipasang di luar Play Store:

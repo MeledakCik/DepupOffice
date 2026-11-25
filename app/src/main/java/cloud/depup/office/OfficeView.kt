@@ -238,8 +238,8 @@ object OfficeView {
         wv.settings.apply {
             javaScriptEnabled = true          // hanya skrip tata letak buatan kita sendiri (pemenggalan halaman, tab)
             allowFileAccess = false; allowContentAccess = false
-            // JANGAN set blockNetworkLoads=false: aplikasi tanpa izin INTERNET akan kena SecurityException.
-            // Tidak perlu juga — permintaan https://doc.local/ dilayani shouldInterceptRequest sebelum jaringan disentuh.
+            // Jaringan tidak pernah disentuh: https://doc.local/ dilayani shouldInterceptRequest, alamat lain dijawab 404
+            // (gambar/skrip luar di dokumen tidak dimuat), dan tautan dibuka di aplikasi lain.
             builtInZoomControls = true; displayZoomControls = false; setSupportZoom(true)
             useWideViewPort = kind == "docx"; loadWithOverviewMode = kind == "docx"
             cacheMode = WebSettings.LOAD_NO_CACHE

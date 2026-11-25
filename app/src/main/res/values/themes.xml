@@ -20,6 +20,15 @@
         <item name="android:windowAnimationStyle">@style/ScreenMotion</item>
     </style>
 
+    <!-- Layar penerima link/berkas yang dibagikan: transparan, hanya dialognya yang tampil di atas aplikasi pembagi. -->
+    <style name="ShareTheme" parent="AppTheme">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
     <!-- Perpindahan layar seragam di seluruh aplikasi (otomatis mati bila animasi HP dimatikan). -->
     <style name="ScreenMotion" parent="@android:style/Animation.Activity">
         <item name="android:activityOpenEnterAnimation">@anim/act_open_enter</item>

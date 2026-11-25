@@ -150,6 +150,23 @@ final class DepupOfficeUITests: XCTestCase {
             shot(app, "65_berkas_edit_excel")
         }
     }
+
+    func testOpenFromLinkSheet() {
+        let app = launch("tab:documents")
+        let add = app.buttons["Tambah berkas"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "tombol tambah berkas tidak ada")
+        add.tap()
+        let item = app.buttons["Buka dari link"]
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "menu Buka dari link tidak ada")
+        item.tap()
+        let field = app.textFields["linkField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "lembar Buka dari link tidak terbuka")
+        field.tap()
+        field.typeText("DDL_DML.pdf https://share.google/3lwcufoNQdQ4Jvv01")
+        XCTAssertTrue(app.buttons["Unduh & buka"].isEnabled, "tombol unduh harus aktif setelah link diisi")
+        settle(1)
+        shot(app, "66_buka_dari_link")
+    }
 }
 
 extension DepupOfficeUITests {

@@ -23,6 +23,7 @@
 		B10000000000000000000004 /* DepupOfficeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* DepupOfficeTests.swift */; };
 		B10000000000000000000005 /* DepupOfficeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000008 /* DepupOfficeUITests.swift */; };
 		A10000000000000000000012 /* UITestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* UITestSupport.swift */; };
+		A10000000000000000000013 /* LinkAndUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* LinkAndUpdate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -49,6 +50,7 @@
 		B20000000000000000000009 /* DepupOfficeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DepupOfficeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000013 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
 		B20000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000014 /* LinkAndUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkAndUpdate.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -88,6 +90,7 @@
 				A20000000000000000000003 /* RootTabView.swift */,
 				A20000000000000000000006 /* NativeOfficeFeatures.swift */,
 				A20000000000000000000007 /* SecurityCore.swift */,
+				A20000000000000000000014 /* LinkAndUpdate.swift */,
 				A20000000000000000000013 /* UITestSupport.swift */,
 				A20000000000000000000012 /* NotesShared.swift */,
 				A20000000000000000000011 /* ParityEditors.swift */,
@@ -233,6 +236,7 @@
 			A10000000000000000000003 /* RootTabView.swift in Sources */,
 			A10000000000000000000005 /* NativeOfficeFeatures.swift in Sources */,
 			A10000000000000000000006 /* SecurityCore.swift in Sources */,
+			A10000000000000000000013 /* LinkAndUpdate.swift in Sources */,
 			A10000000000000000000012 /* UITestSupport.swift in Sources */,
 			A10000000000000000000011 /* NotesShared.swift in Sources */,
 			A10000000000000000000010 /* ParityEditors.swift in Sources */,
