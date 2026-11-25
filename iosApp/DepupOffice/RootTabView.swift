@@ -551,6 +551,16 @@ private struct ProfileScreen: View {
             Section("Preferensi") {
                 Label("Tampilan mengikuti pengaturan iPhone", systemImage: "circle.lefthalf.filled")
             }
+            Section("Tentang") {
+                Link(destination: URL(string: "https://depupstudio.com/office/privacy-policy")!) {
+                    Label("Kebijakan Privasi", systemImage: "hand.raised")
+                }
+                Link(destination: URL(string: "https://depupstudio.com/office")!) {
+                    Label("Depup Studio", systemImage: "globe")
+                }
+            } footer: {
+                Text("Offline: berkas tetap di iPhone Anda. Tanpa akun, iklan, atau analitik.")
+            }
         }
         .listStyle(.insetGrouped)
         .background(Color.depupBackground)

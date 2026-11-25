@@ -15,7 +15,7 @@
 ## Privacy and policy declarations
 
 - In-app privacy policy: `app/src/main/assets/privacy.html`.
-- Public policy URL verified accessible on 2026-11-17: <https://raw.githubusercontent.com/MeledakCik/DepupOffice/main/app/src/main/assets/privacy.html>.
+- Public policy URL (set this in Play Console → Kebijakan aplikasi → Kebijakan privasi): <https://depupstudio.com/office/privacy-policy>.
 - Google Play Console still needs a human check of Data safety, content rating, target audience, and Ads declaration. The Publisher API used for this release attempt could not read those declarations.
 - Source has no ads SDK, removes the `INTERNET` permission from the merged manifest, requests camera for scanning, and uses ML Kit for OCR/barcode scanning. Confirm the Console declarations match the behavior and current policy text before rollout.
 
