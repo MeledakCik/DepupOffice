@@ -9,6 +9,9 @@
     <!-- Android 15+: tahu saat layar direkam, agar dokumen terkunci ditutup (izin normal, tanpa dialog) -->
     <uses-permission android:name="android.permission.DETECT_SCREEN_RECORDING" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- CameraActivity dikunci portrait; tanpa ini Play menganggap layar portrait WAJIB
+         dan memblokir tablet/desktop/XR yang hanya landscape. -->
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
     <queries>
         <package android:name="com.whatsapp" />
