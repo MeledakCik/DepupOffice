@@ -218,11 +218,11 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         // ubin logo = ikon aplikasi (biru Depup + logo putih), jadi transisi dari ikon peluncur terasa menyambung
         val logo = ImageView(this).apply { setImageResource(R.drawable.ic_logo_tile); alpha = 0f; scaleX = 0.92f; scaleY = 0.92f }
         center.add(logo, w = dp(88), h = dp(88))
-        // nama dengan gaya logo: huruf kecil, "office" abu (sama dengan logo pada paket logo)
-        val wordmark = android.text.SpannableString("depup office").apply {
+        // nama dengan gaya logo: huruf kapital, "OFFICE" abu (sama dengan logo pada paket logo)
+        val wordmark = android.text.SpannableString("DEPUP OFFICE").apply {
             setSpan(android.text.style.ForegroundColorSpan(if (C.dark) C.MUTED else 0xFFA9A6A0.toInt()), 6, 12, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
-        val name = tv("", 28f, fg, true).apply { text = wordmark; contentDescription = "Depup Office"; gravity = Gravity.CENTER; alpha = 0f }
+        val name = tv("", 28f, fg, true).apply { text = wordmark; contentDescription = "DEPUP OFFICE"; gravity = Gravity.CENTER; alpha = 0f }
         center.add(name, top = 18, w = WRAP)
         val tag = tv("Kantor saku · 100% offline", 15f, fg).apply { gravity = Gravity.CENTER; alpha = 0f }
         center.add(tag, top = 4, w = WRAP)
@@ -2166,7 +2166,7 @@ class MainActivity : AppCompatActivity(), ThemeFade.Host {
         head.add(ImageView(this).apply { setImageResource(R.drawable.ic_logo_tile); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO },
             w = dp(56), h = dp(56))
         val hc = vbox()
-        hc.add(headingTv("Depup Office", 20f))
+        hc.add(headingTv("DEPUP OFFICE", 20f))
         hc.add(iconPill(R.drawable.ic_verified, "100% offline · berkas tidak diunggah", C.SUCCESS, C.SUCCESS_C), top = 4, w = WRAP)
         head.add(hc, w = 0, weight = 1f, side = 12)
         p.add(head, top = 4)

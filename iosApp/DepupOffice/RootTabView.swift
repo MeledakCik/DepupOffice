@@ -27,7 +27,7 @@ struct RootTabView: View {
         TabView(selection: $selectedTab) {
             NavigationStack {
                 HomeScreen(onScan: { selectedTab = .scan }, onDocuments: { selectedTab = .documents })
-                    .navigationTitle("DepUp Office")
+                    .navigationTitle("DEPUP OFFICE")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
@@ -98,7 +98,7 @@ struct RootTabView: View {
             SecureDocumentView(url: file.url)
                 .environmentObject(documents)
         }
-        .alert("DepUp Office", isPresented: statusAlertIsPresented) {
+        .alert("DEPUP OFFICE", isPresented: statusAlertIsPresented) {
             Button("OK") { documents.statusMessage = nil }
         } message: {
             Text(documents.statusMessage ?? "")
@@ -545,7 +545,7 @@ private struct ProfileScreen: View {
     var body: some View {
         List {
             Section {
-                Label("DepUp Office", systemImage: "app.fill")
+                Label("DEPUP OFFICE", systemImage: "app.fill")
                 LabeledContent("Versi", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
             }
             Section("Preferensi") {

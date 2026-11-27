@@ -785,7 +785,7 @@ struct SecureDocumentView: View {
             Button("Ekspor") { exportOriginal() }
             Button("Batal", role: .cancel) { exportPassword = "" }
         } message: { Text("PDF asli tanpa perlindungan akan disimpan di folder DepUp Office.") }
-        .alert("DepUp Office", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
+        .alert("DEPUP OFFICE", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(notice ?? "") }
     }

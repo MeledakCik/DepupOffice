@@ -797,7 +797,7 @@ class GlassPreview(ctx: Context, icons: List<Int>, label: String) : FrameLayout(
             p.color = C.AMBER_FILL; c.drawCircle(w * 0.90f, h * 0.86f, h * 0.34f, p)
             p.color = Color.argb(64, 255, 255, 255); c.drawCircle(w * 0.62f, h * 0.10f, h * 0.24f, p)
             txt.textSize = min(h * 0.30f, w * 0.13f)
-            val t = "Depup Office"
+            val t = "DEPUP OFFICE"
             c.drawText(t, (w - txt.measureText(t)) / 2f, h * 0.5f + txt.textSize * 0.36f, txt)
             // baris "dokumen" tipis di bawah: detail halus untuk menilai kekuatan blur
             p.color = Color.argb(150, 255, 255, 255)
