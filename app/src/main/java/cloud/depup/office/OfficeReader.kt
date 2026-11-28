@@ -126,7 +126,12 @@ object OfficeReader {
      * sharedStrings hanya dibaca sampai indeks tertinggi yang dipakai baris-baris itu. Dulu seluruh lembar (dan semua
      * lembar lain) didekompresi ke memori, dan lembar > 12 MB malah dilewati sama sekali.
      */
-    fun readXlsx(ctx: Context, uri: Uri, maxRows: Int = SHEET_MAX_ROWS): Sheet? = withZip(ctx, uri) { z ->
+    /**
+     * [maxRows]/[maxCols] = batas pratinjau; editor memakai Int.MAX_VALUE (tanpa batas, hanya memori HP).
+     * [dense] = setiap baris sepanjang kolom terlebar (pratinjau); false = tiap baris sepanjang isinya sendiri
+     * (lembar lebar yang jarang terisi tidak dijadikan jutaan sel kosong).
+     */
+    fun readXlsx(ctx: Context, uri: Uri, maxRows: Int = SHEET_MAX_ROWS, maxCols: Int = SHEET_MAX_COLS, dense: Boolean = true): Sheet? = withZip(ctx, uri, rethrowOom = !dense) { z ->
         fun entry(n: String) = z.getEntry(n) ?: z.entries().asSequence().firstOrNull { it.name.replace('\\', '/').trimStart('/').equals(n, true) }
         // workbook → lembar pertama & namanya
         var sheetName = "Sheet1"; var firstRid: String? = null
@@ -172,7 +177,7 @@ object OfficeReader {
                         "v" -> inV = false
                         "t" -> if (inIs) inV = false
                         "is" -> inIs = false
-                        "c" -> if (row in 0 until maxRows && col in 0 until SHEET_MAX_COLS && v.isNotEmpty()) {
+                        "c" -> if (row in 0 until maxRows && col in 0 until maxCols && v.isNotEmpty()) {
                             if (type == "s") { val k = v.toString().trim().toIntOrNull(); if (k != null) { sIdx.getOrPut(row) { HashMap() }[col] = k; if (k > maxS) maxS = k } }
                             else raw.getOrPut(row) { HashMap() }[col] = v.toString()
                             if (row > maxRow) maxRow = row
@@ -203,12 +208,17 @@ object OfficeReader {
         for ((r, m) in sIdx) for ((c, k) in m) shared.getOrNull(k)?.takeIf { it.isNotEmpty() }?.let { raw.getOrPut(r) { HashMap() }[c] = it }
         if (maxRow < 0 || maxCol < 0) return@withZip Sheet(sheetName, emptyList())
         val out = ArrayList<List<String>>(maxRow + 1)
-        for (r in 0..maxRow) { val src = raw[r]; out.add(List(maxCol + 1) { c -> src?.get(c).orEmpty() }) }
+        for (r in 0..maxRow) {
+            val src = raw[r]
+            val len = if (dense) maxCol + 1 else (src?.keys?.maxOrNull()?.plus(1) ?: 0)
+            out.add(List(len) { c -> src?.get(c).orEmpty() })
+        }
         Sheet(sheetName, out, setOf(0))
     }
 
     /** Zip dengan akses acak: berkas lokal langsung; content:// disalin dulu ke cache (cepat, mengalir). */
-    private fun <T> withZip(ctx: Context, uri: Uri, block: (java.util.zip.ZipFile) -> T?): T? {
+    /** [rethrowOom] = memori HP habis diteruskan ke pemanggil (editor memberi tahu pengguna), bukan dianggap "tidak terbaca". */
+    private fun <T> withZip(ctx: Context, uri: Uri, rethrowOom: Boolean = false, block: (java.util.zip.ZipFile) -> T?): T? {
         var tmp: java.io.File? = null
         return try {
             val f = if (uri.scheme == "file" && uri.path != null) java.io.File(uri.path!!) else {
@@ -217,6 +227,7 @@ object OfficeReader {
                 t
             }
             java.util.zip.ZipFile(f).use { block(it) }
+        } catch (e: OutOfMemoryError) { if (rethrowOom) throw e else null
         } catch (_: Throwable) { null } finally { tmp?.delete() }
     }
 
@@ -246,8 +257,12 @@ object OfficeReader {
 
     // ================= CSV =================
 
-    fun readCsv(ctx: Context, uri: Uri): Sheet {
-        val text = try {
+    /** [full] = seluruh berkas, semua baris (editor; hanya dibatasi memori HP). Tanpa itu: ±4 MB & 500 baris pertama. */
+    fun readCsv(ctx: Context, uri: Uri, full: Boolean = false): Sheet {
+        val text = if (full) {
+            // OutOfMemoryError sengaja tidak ditangkap di sini: pemanggil memberi tahu pengguna bahwa memori HP tidak cukup
+            try { ctx.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }.orEmpty() } catch (_: Exception) { "" }
+        } else try {
             // Hanya ±4 MB pertama: pembaca & editor menampilkan maksimal ratusan baris, jadi CSV ratusan MB
             // tidak perlu (dan tidak boleh — bisa kehabisan memori) dimuat seluruhnya.
             ctx.contentResolver.openInputStream(uri)?.use { ins ->
@@ -267,18 +282,18 @@ object OfficeReader {
             text.lineSequence().take(3).any { it.contains('\t') } -> '\t'
             else -> ','
         }
-        val rows = parseCsv(text, sep)
+        val rows = parseCsv(text, sep, if (full) Int.MAX_VALUE else 500)
             .filter { row -> row.any { it.isNotBlank() } }
         return Sheet("Sheet1", rows, setOf(0))
     }
 
-    private fun parseCsv(text: String, sep: Char): List<List<String>> {
+    private fun parseCsv(text: String, sep: Char, maxRows: Int = 500): List<List<String>> {
         val rows = ArrayList<List<String>>()
         val row = ArrayList<String>()
         val cell = StringBuilder()
         var quoted = false
         var i = 0
-        while (i < text.length && rows.size <= 500) {
+        while (i < text.length && rows.size <= maxRows) {
             val c = text[i]
             when {
                 quoted && c == '"' && i + 1 < text.length && text[i + 1] == '"' -> {
@@ -299,7 +314,7 @@ object OfficeReader {
             row.add(cell.toString())
             rows.add(ArrayList(row))
         }
-        if (rows.size > 500) return rows.take(500)
+        if (rows.size > maxRows) return rows.take(maxRows)
         return rows
     }
 

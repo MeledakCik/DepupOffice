@@ -19,9 +19,95 @@ object XlsxWriter {
         val rows: List<List<String>>,
         val boldRows: Set<Int> = setOf(0),
         val columnCount: Int = rows.maxOfOrNull { it.size } ?: 0,
-        /** Rumus sel (r, c) → (rumus tanpa "=", nilai hasil). Ditulis sebagai rumus Excel asli, bukan angka mati. */
-        val formulas: (Int, Int) -> Pair<String, Double?>? = { _, _ -> null }
+        /**
+         * Rumus sel (r, c) → (rumus tanpa "=", nilai hasil: Double / String / Boolean / null). Ditulis sebagai rumus
+         * Excel asli, bukan angka mati.
+         */
+        val formulas: (Int, Int) -> Pair<String, Any?>? = { _, _ -> null },
+        /** Format sel (editor Sheet); null = pakai [boldRows]. */
+        val styleOf: ((Int, Int) -> CellStyle?)? = null,
+        /** Lebar kolom (satuan karakter Excel; 0 = disembunyikan). Tanpa isi = lebar mengikuti isi. */
+        val colWidths: Map<Int, Float>? = null,
+        /** Tinggi baris (pt; 0 = disembunyikan). */
+        val rowHeights: Map<Int, Float> = emptyMap(),
+        val merges: List<CellRange> = emptyList(),
+        /** Simbol mata uang untuk format "Mata uang". */
+        val currency: String = "Rp"
     )
+
+    /** Daftar gaya buku kerja: font, isi, format angka, dan xf dibuat sesuai kebutuhan saat lembar ditulis. */
+    private class Styles {
+        val fonts = ArrayList<String>()
+        val fills = ArrayList<String>()
+        val numFmts = LinkedHashMap<String, Int>()
+        val xfs = ArrayList<String>()
+        private val fontIdx = HashMap<String, Int>()
+        private val fillIdx = HashMap<String, Int>()
+        private val xfIdx = HashMap<String, Int>()
+        private val styleIdx = HashMap<Pair<CellStyle, String>, Int>()
+
+        init {
+            font("<sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/><family val=\"2\"/>")
+            font("<b/><sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/><family val=\"2\"/>")
+            fill("<patternFill patternType=\"none\"/>")
+            fill("<patternFill patternType=\"gray125\"/>")
+            xf("<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>")
+            xf("<xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>")
+        }
+
+        private fun font(x: String) = fontIdx.getOrPut(x) { fonts.add(x); fonts.size - 1 }
+        private fun fill(x: String) = fillIdx.getOrPut(x) { fills.add(x); fills.size - 1 }
+        private fun xf(x: String) = xfIdx.getOrPut(x) { xfs.add(x); xfs.size - 1 }
+        private fun argb(c: Int) = String.format("FF%06X", c and 0xFFFFFF)
+
+        private fun numFmt(f: Int, currency: String): Int = when (f) {
+            CellNumFmt.NUMBER -> 4
+            CellNumFmt.THOUSANDS -> 3
+            CellNumFmt.PERCENT -> 10
+            CellNumFmt.CURRENCY -> custom("\"${currency.replace("\"", "")}\" #,##0")
+            CellNumFmt.DATE -> custom("dd/mm/yyyy")
+            else -> 0
+        }
+
+        private fun custom(code: String) = numFmts.getOrPut(code) { 164 + numFmts.size }
+
+        /** Indeks xf untuk gaya editor. */
+        fun of(st: CellStyle, currency: String): Int = styleIdx.getOrPut(st to currency) {
+            val size = if (st.size > 0f) st.size else 11f
+            val f = buildString {
+                if (st.bold) append("<b/>")
+                if (st.italic) append("<i/>")
+                if (st.strike) append("<strike/>")
+                if (st.underline) append("<u/>")
+                append("<sz val=\"").append(trimNumber(size.toDouble())).append("\"/>")
+                if (st.color != 0) append("<color rgb=\"").append(argb(st.color)).append("\"/>") else append("<color theme=\"1\"/>")
+                append("<name val=\"Calibri\"/><family val=\"2\"/>")
+            }
+            val fontId = font(f)
+            val fillId = if (st.fill != 0) fill("<patternFill patternType=\"solid\"><fgColor rgb=\"${argb(st.fill)}\"/><bgColor indexed=\"64\"/></patternFill>") else 0
+            val nf = numFmt(st.numFmt, currency)
+            val h = when (st.align) { HAlign.LEFT -> "left"; HAlign.CENTER -> "center"; HAlign.RIGHT -> "right"; else -> null }
+            val align = if (h != null || st.wrap) "<alignment" + (if (h != null) " horizontal=\"$h\"" else "") +
+                (if (st.wrap) " wrapText=\"1\"" else "") + " vertical=\"center\"/>" else ""
+            xf(
+                "<xf numFmtId=\"$nf\" fontId=\"$fontId\" fillId=\"$fillId\" borderId=\"0\" xfId=\"0\"" +
+                    (if (nf != 0) " applyNumberFormat=\"1\"" else "") + (if (fontId != 0) " applyFont=\"1\"" else "") +
+                    (if (fillId != 0) " applyFill=\"1\"" else "") + (if (align.isNotEmpty()) " applyAlignment=\"1\">$align</xf>" else "/>")
+            )
+        }
+
+        fun xml(): String = XML +
+            "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+            (if (numFmts.isNotEmpty()) "<numFmts count=\"${numFmts.size}\">" +
+                numFmts.entries.joinToString("") { "<numFmt numFmtId=\"${it.value}\" formatCode=\"${esc(it.key)}\"/>" } + "</numFmts>" else "") +
+            "<fonts count=\"${fonts.size}\">" + fonts.joinToString("") { "<font>$it</font>" } + "</fonts>" +
+            "<fills count=\"${fills.size}\">" + fills.joinToString("") { "<fill>$it</fill>" } + "</fills>" +
+            "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>" +
+            "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
+            "<cellXfs count=\"${xfs.size}\">" + xfs.joinToString("") + "</cellXfs>" +
+            "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>" +
+            "</styleSheet>"
+    }
 
     fun write(
         out: File,
@@ -30,7 +116,7 @@ object XlsxWriter {
         boldRows: Set<Int> = setOf(0),
         columnCount: Int = rows.maxOfOrNull { it.size } ?: 0,
         /** Rumus sel (r, c) → (rumus tanpa "=", nilai hasil). Ditulis sebagai rumus Excel asli, bukan angka mati. */
-        formulas: (Int, Int) -> Pair<String, Double?>? = { _, _ -> null }
+        formulas: (Int, Int) -> Pair<String, Any?>? = { _, _ -> null }
     ) = writeBook(out, listOf(Sheet(sheetName, rows, boldRows, columnCount, formulas)))
 
     /** Buku kerja dengan beberapa lembar (urutan & nama sesuai [sheets]). */
@@ -56,10 +142,18 @@ object XlsxWriter {
             put("_rels/.rels", rootRels())
             put("xl/workbook.xml", workbook(names))
             put("xl/_rels/workbook.xml.rels", workbookRels(sheets.size))
-            put("xl/styles.xml", styles())
+            val st = Styles()
             sheets.forEachIndexed { i, sh ->
-                put("xl/worksheets/sheet${i + 1}.xml", worksheet(sh.rows, sh.boldRows, sh.columnCount.coerceAtLeast(1), sh.formulas))
+                // lembar DITULIS MENGALIR ke zip (bukan satu String raksasa di memori): ukuran lembar hanya dibatasi
+                // ruang simpan, bukan memori HP
+                zip.putNextEntry(ZipEntry("xl/worksheets/sheet${i + 1}.xml"))
+                val w = java.io.BufferedWriter(java.io.OutputStreamWriter(zip, Charsets.UTF_8), 64 * 1024)
+                worksheet(w, sh, sh.columnCount.coerceAtLeast(1), st)
+                w.flush()   // jangan close(): itu menutup zip
+                zip.closeEntry()
             }
+            // gaya ditulis terakhir: baru lengkap setelah semua lembar ditulis
+            put("xl/styles.xml", st.xml())
         }
     }
 
@@ -90,58 +184,60 @@ object XlsxWriter {
         "<Relationship Id=\"rId${n + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>" +
         "</Relationships>"
 
-    private fun styles() = XML +
-        "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
-        "<fonts count=\"2\">" +
-        "<font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/><family val=\"2\"/></font>" +
-        "<font><b/><sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/><family val=\"2\"/></font>" +
-        "</fonts>" +
-        "<fills count=\"2\">" +
-        "<fill><patternFill patternType=\"none\"/></fill>" +
-        "<fill><patternFill patternType=\"gray125\"/></fill>" +
-        "</fills>" +
-        "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>" +
-        "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
-        "<cellXfs count=\"2\">" +
-        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>" +
-        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>" +
-        "</cellXfs>" +
-        "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>" +
-        "</styleSheet>"
-
-    private fun worksheet(rows: List<List<String>>, boldRows: Set<Int>, cols: Int, formulas: (Int, Int) -> Pair<String, Double?>?): String {
-        val sb = StringBuilder()
+    private fun worksheet(sb: Appendable, sh: Sheet, cols: Int, styles: Styles) {
+        val rows = sh.rows; val boldRows = sh.boldRows; val formulas = sh.formulas
         sb.append(XML)
             .append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
         if (rows.isNotEmpty()) {
             sb.append("<dimension ref=\"A1:${columnName(cols - 1)}${rows.size}\"/>")
         }
 
-        // Lebar kolom mengikuti isi terpanjang (maks 40 karakter).
         sb.append("<cols>")
-        for (c in 0 until cols) {
-            val width = rows.maxOfOrNull { row -> (row.getOrNull(c) ?: "").length }
-                ?.coerceIn(10, 40) ?: 14
-            sb.append("<col min=\"${c + 1}\" max=\"${c + 1}\" width=\"$width\" customWidth=\"1\"/>")
+        val widths = sh.colWidths
+        if (widths != null) {
+            // lebar dari editor (kolom yang tidak diubah = lebar bawaan)
+            for (c in 0 until cols) {
+                val w = widths[c] ?: (SheetData.DEFAULT_COL_W / SheetData.DP_PER_CHAR)
+                if (w <= 0f) sb.append("<col min=\"${c + 1}\" max=\"${c + 1}\" width=\"0\" hidden=\"1\" customWidth=\"1\"/>")
+                else sb.append("<col min=\"${c + 1}\" max=\"${c + 1}\" width=\"${trimNumber(Math.round(w * 100) / 100.0)}\" customWidth=\"1\"/>")
+            }
+        } else {
+            // lebar mengikuti isi terpanjang (maks 40 karakter) — satu lintasan atas semua sel
+            val longest = IntArray(cols)
+            for (row in rows) for (c in 0 until minOf(cols, row.size)) { val n = row[c].length; if (n > longest[c]) longest[c] = n }
+            for (c in 0 until cols) {
+                val width = if (rows.isEmpty()) 14 else longest[c].coerceIn(10, 40)
+                sb.append("<col min=\"${c + 1}\" max=\"${c + 1}\" width=\"$width\" customWidth=\"1\"/>")
+            }
         }
         sb.append("</cols><sheetData>")
 
         rows.forEachIndexed { r, row ->
-            sb.append("<row r=\"${r + 1}\">")
+            val ht = sh.rowHeights[r]
+            sb.append("<row r=\"${r + 1}\"")
+            if (ht != null) { if (ht <= 0f) sb.append(" ht=\"0\" hidden=\"1\" customHeight=\"1\"") else sb.append(" ht=\"${trimNumber(Math.round(ht * 100) / 100.0)}\" customHeight=\"1\"") }
+            sb.append(">")
             val bold = r in boldRows
             for (c in 0 until cols) {
                 val ref = "${columnName(c)}${r + 1}"
-                val style = if (bold) " s=\"1\"" else ""
+                val xf = sh.styleOf?.let { f -> f(r, c)?.let { if (it.isDefault) 0 else styles.of(it, sh.currency) } ?: 0 } ?: (if (bold) 1 else 0)
+                val style = if (xf != 0) " s=\"$xf\"" else ""
                 val fx = formulas(r, c)
                 if (fx != null) {
                     // rumus tetap rumus di Excel/Sheets; nilai tersimpan = hasil terakhir (presisi penuh)
-                    sb.append("<c r=\"$ref\"$style><f>").append(esc(excelFormula(fx.first))).append("</f>")
-                    fx.second?.takeIf { !it.isNaN() && !it.isInfinite() }?.let { sb.append("<v>").append(trimNumber(it)).append("</v>") }
+                    val v = fx.second
+                    val t = when (v) { is String -> " t=\"str\""; is Boolean -> " t=\"b\""; else -> "" }
+                    sb.append("<c r=\"$ref\"$style$t><f>").append(esc(excelFormula(fx.first))).append("</f>")
+                    when (v) {
+                        is Double -> if (!v.isNaN() && !v.isInfinite()) sb.append("<v>").append(trimNumber(v)).append("</v>")
+                        is String -> sb.append("<v>").append(esc(v)).append("</v>")
+                        is Boolean -> sb.append("<v>").append(if (v) "1" else "0").append("</v>")
+                    }
                     sb.append("</c>")
                     continue
                 }
                 val raw = row.getOrNull(c).orEmpty().trim()
-                if (raw.isEmpty()) continue
+                if (raw.isEmpty()) { if (xf != 0) sb.append("<c r=\"$ref\"$style/>"); continue }
                 val numeric = parseNumber(raw)
                 if (numeric != null) {
                     sb.append("<c r=\"$ref\"$style><v>${trimNumber(numeric)}</v></c>")
@@ -151,8 +247,13 @@ object XlsxWriter {
             }
             sb.append("</row>")
         }
-        sb.append("</sheetData></worksheet>")
-        return sb.toString()
+        sb.append("</sheetData>")
+        if (sh.merges.isNotEmpty()) {
+            sb.append("<mergeCells count=\"${sh.merges.size}\">")
+            for (m in sh.merges) sb.append("<mergeCell ref=\"${m.ref()}\"/>")
+            sb.append("</mergeCells>")
+        }
+        sb.append("</worksheet>")
     }
 
     /** Angka dari teks bergaya Indonesia/internasional ("Rp 15.000", "1.234,5", "1,234.5"); null bila bukan angka. */

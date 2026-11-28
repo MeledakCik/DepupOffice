@@ -1094,8 +1094,8 @@ class GlassScaffold(
 
     /** Tinggi yang tertutup bilah atas & bawah (px), termasuk kapsul tambahan. */
     private fun barSpace(): IntArray {
-        val th = if (top.childCount > 0) topSpace() else 0
-        var bh = if (bottom.childCount > 0) bottomBar.height + (if (floatBottom) gap * 2 else 0) else 0
+        val th = if (top.childCount > 0) topSpace() else sysTop
+        var bh = if (bottom.childCount > 0) bottomBar.height + (if (floatBottom) gap * 2 + sysBottom else 0) else sysBottom
         if (miniBar.visibility == View.VISIBLE && miniBar.box.childCount > 0)
             bh = bh + (if (floatBottom) -gap + dp(8) else dp(8)) + miniBar.height + dp(4)
         return intArrayOf(th, bh)
@@ -1110,8 +1110,29 @@ class GlassScaffold(
     private val topGap = if (floatTop) ctx.dp(6) else 0
     private val topBelow = if (floatTop) ctx.dp(8) else 0
 
-    /** Tinggi yang tertutup bilah atas (px): kapsul melayang ikut jarak atas & bawahnya. */
-    private fun topSpace(): Int = topBar.height + topGap + topBelow
+    /** Tinggi yang tertutup bilah atas (px): kapsul melayang ikut jarak atas & bawahnya (termasuk bilah status). */
+    private fun topSpace(): Int = topBar.height + topGap + topBelow + (if (floatTop) sysTop else 0)
+
+    /**
+     * Tinggi bilah status & navigasi sistem (px). Layar berkerangka kaca digambar sampai tepi layar: isi lewat di balik
+     * bilah status & navigasi, sedangkan bilah kaca atas/bawah memanjang ke sana (atau kapsulnya digeser menjauhinya).
+     * Diisi [DepupApp] dari inset jendela.
+     */
+    var sysTop = 0
+        private set
+    var sysBottom = 0
+        private set
+
+    fun setSystemInsets(t: Int, b: Int) {
+        if (t == sysTop && b == sysBottom) return
+        sysTop = t; sysBottom = b
+        if (floatTop) (topBar.layoutParams as? LayoutParams)?.let { it.topMargin = topGap + t; topBar.layoutParams = it }
+        else topBar.box.setPadding(topBar.box.paddingLeft, t, topBar.box.paddingRight, topBar.box.paddingBottom)
+        if (floatBottom) (bottomBar.layoutParams as? LayoutParams)?.let { it.bottomMargin = gap * 5 / 6 + b; bottomBar.layoutParams = it }
+        else bottomBar.box.setPadding(bottomBar.box.paddingLeft, bottomBar.box.paddingTop, bottomBar.box.paddingRight, b)
+        requestLayout()
+        post { applyInsets() }
+    }
     private val onLayout = ViewTreeObserver.OnGlobalLayoutListener { applyInsets() }
 
     init {
@@ -1140,6 +1161,8 @@ class GlassScaffold(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         viewTreeObserver.addOnGlobalLayoutListener(onLayout)
+        // layar baru dipasang (setContentView): minta inset dikirim ulang supaya jarak bilah sistem langsung benar
+        rootView?.let { androidx.core.view.ViewCompat.requestApplyInsets(it) }
     }
 
     override fun onDetachedFromWindow() {
@@ -1295,8 +1318,8 @@ class GlassScaffold(
             val hasTop = top.childCount > 0; val hasBottom = bottom.childCount > 0
             topBar.visibility = if (hasTop) View.VISIBLE else View.GONE
             bottomBar.visibility = if (hasBottom) View.VISIBLE else View.GONE
-            val th = if (hasTop) topSpace() else 0
-            var bh = if (hasBottom) bottomBar.height + (if (floatBottom) gap * 2 else 0) else 0
+            val th = if (hasTop) topSpace() else sysTop
+            var bh = if (hasBottom) bottomBar.height + (if (floatBottom) gap * 2 + sysBottom else 0) else sysBottom
             if (miniBar.visibility == View.VISIBLE && miniBar.box.childCount > 0) {
                 // kapsul tambahan duduk 8dp di atas navigasi
                 val mlp = miniBar.layoutParams as LayoutParams

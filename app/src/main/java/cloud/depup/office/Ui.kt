@@ -158,6 +158,8 @@ object C {
     val TEAL_BG get() = SUCCESS_C
     val TEAL_SOFT get() = SUCCESS_C
     val TEAL_DARK get() = SUCCESS_T
+    /** Teks di atas [TEAL]: putih di tema terang, hijau sangat gelap di tema gelap (hijau terang + putih kurang kontras). */
+    val ON_TEAL get() = t(0xFFFFFFFF, 0xFF0A2915)
     val RED get() = ERROR
     val RED_BG get() = ERROR_C
     val RED_LINE get() = ERROR_C
@@ -206,8 +208,9 @@ object Theme {
         C.dark = isDark(a)
         val w = a.window ?: return
         val bar = statusColor ?: C.BG
-        w.statusBarColor = bar
-        w.navigationBarColor = C.BG   // menyatu dengan halaman; navigasi kapsul melayang di atasnya
+        // layar berkerangka kaca: bilah sistem tetap bening (isi & kaca terlihat di baliknya); ikon tetap ikut warna
+        if (Edge.on(a)) { w.statusBarColor = Color.TRANSPARENT; w.navigationBarColor = Color.TRANSPARENT }
+        else { w.statusBarColor = bar; w.navigationBarColor = C.BG }   // menyatu dengan halaman
         val lightBars = Color.luminance(bar) > 0.5f
         var f = w.decorView.systemUiVisibility
         f = if (lightBars) f or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR else f and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()

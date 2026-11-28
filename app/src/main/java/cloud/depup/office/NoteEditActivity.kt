@@ -269,7 +269,7 @@ class NoteEditActivity : AppCompatActivity() {
     private fun paintBars(c: Int) {
         window.setBackgroundDrawable(ColorDrawable(c))
         Theme.apply(this, c)
-        window.navigationBarColor = c
+        if (!Edge.on(this)) window.navigationBarColor = c
     }
 
     private fun plainEdit(hint: String, sp: Float, bold: Boolean = false, edit: EditText = EditText(this)): EditText = edit.apply {

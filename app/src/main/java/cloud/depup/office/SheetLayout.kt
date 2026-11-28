@@ -13,8 +13,27 @@ import kotlin.math.min
  * Satuan: pt pada skala 100%; halaman yang diperkecil digambar dengan kanvas berskala [Page.scale].
  */
 object SheetLayout {
-    class Cell(val text: String, val bold: Boolean = false, val num: Boolean = false, val fill: Int = 0)
-    class Grid(val name: String, val rows: List<List<Cell>>)
+    class Cell(
+        val text: String, val bold: Boolean = false, val num: Boolean = false, val fill: Int = 0,
+        val italic: Boolean = false, val underline: Boolean = false, val strike: Boolean = false,
+        /** Warna teks ARGB; 0 = hitam. */
+        val color: Int = 0,
+        /** [HAlign]; AUTO = angka kanan, teks kiri. */
+        val align: Int = 0
+    )
+
+    /**
+     * [widths] = lebar kolom dari editor (pt; 0 = disembunyikan) — null: lebar mengikuti isi. [hiddenRows] tidak
+     * dicetak. [merges] = sel gabungan (teks sel kiri-atas mengisi seluruh area).
+     */
+    class Grid(
+        val name: String, val rows: List<List<Cell>>,
+        val widths: FloatArray? = null,
+        val hiddenRows: Set<Int> = emptySet(),
+        val merges: List<CellRange> = emptyList()
+    ) {
+        fun mergeAt(r: Int, c: Int): CellRange? { for (m in merges) if (m.contains(r, c)) return m; return null }
+    }
 
     fun interface Measure { fun width(text: String, bold: Boolean): Float }
 
@@ -96,18 +115,23 @@ object SheetLayout {
             // rentang terpakai: baris/kolom kosong di ujung tidak dicetak
             var lastRow = -1; var lastCol = -1; var firstRow = -1
             g.rows.forEachIndexed { r, row ->
+                if (r in g.hiddenRows) return@forEachIndexed
                 row.forEachIndexed { c, cell ->
-                    if (cell.text.isNotBlank()) {
+                    if (cell.text.isNotBlank() || cell.fill != 0) {
                         if (firstRow < 0) firstRow = r
                         lastRow = r; lastCol = max(lastCol, c)
                     }
                 }
             }
+            for (mg in g.merges) if (mg.top <= lastRow) lastCol = max(lastCol, mg.right)
             val nCols = lastCol + 1
+            val widths = g.widths
             val colW = FloatArray(max(nCols, 0)) { c ->
+                if (widths != null) return@FloatArray (widths.getOrNull(c) ?: 48f).let { if (it <= 0f) 0f else it.coerceIn(MIN_W / 2, MAX_W * 3) }
                 var widest = 0f
                 for (r in 0..lastRow) {
                     val cell = g.rows[r].getOrNull(c) ?: continue
+                    if (g.mergeAt(r, c) != null) continue
                     for (p in cell.text.split('\n')) widest = max(widest, m.width(p, cell.bold))
                 }
                 (widest + 2 * PAD_X).coerceIn(MIN_W, MAX_W)
@@ -115,10 +139,25 @@ object SheetLayout {
             val lines = (0..lastRow).map { r ->
                 (0 until nCols).map { c ->
                     val cell = g.rows[r].getOrNull(c)
-                    if (cell == null || cell.text.isBlank()) emptyList() else wrap(cell.text, colW[c] - 2 * PAD_X, cell.bold, m)
+                    val mg = g.mergeAt(r, c)
+                    when {
+                        cell == null || cell.text.isBlank() || colW[c] <= 0f -> emptyList()
+                        mg != null && (mg.top != r || mg.left != c) -> emptyList()
+                        mg != null -> wrap(cell.text, (mg.left..minOf(mg.right, nCols - 1)).sumOf { colW[it].toDouble() }.toFloat() - 2 * PAD_X, cell.bold, m)
+                        else -> wrap(cell.text, colW[c] - 2 * PAD_X, cell.bold, m)
+                    }
                 }
             }
-            val rowH = FloatArray(max(lastRow + 1, 0)) { r -> max(1, lines[r].maxOfOrNull { it.size } ?: 1) * LINE + 2 * PAD_Y }
+            val rowH = FloatArray(max(lastRow + 1, 0)) { r ->
+                if (r in g.hiddenRows) return@FloatArray 0f
+                var n = 1
+                for (c in 0 until nCols) {
+                    val mg = g.mergeAt(r, c)
+                    if (mg != null && mg.bottom > mg.top) continue   // gabungan beberapa baris: tidak menambah tinggi satu baris
+                    n = max(n, lines[r][c].size)
+                }
+                n * LINE + 2 * PAD_Y
+            }
             // baris judul kolom: baris berisi pertama yang semua isinya tebal (dan masih ada baris sesudahnya)
             val header = firstRow.takeIf { it in 0 until lastRow }?.takeIf { r ->
                 val filled = g.rows[r].filter { it.text.isNotBlank() }
@@ -142,6 +181,7 @@ object SheetLayout {
             val bands = ArrayList<List<Int>>()
             var cur = ArrayList<Int>(); var used = 0f
             for (c in 0 until nCols) {
+                if (colW[c] <= 0f) continue   // kolom tersembunyi
                 if (cur.isNotEmpty() && used + colW[c] > width + 0.01f) { bands.add(cur); cur = ArrayList(); used = 0f }
                 cur.add(c); used += colW[c]
             }
@@ -159,6 +199,7 @@ object SheetLayout {
                     first = false; rows = ArrayList(); y = 0f
                 }
                 for (r in firstRow..lastRow) {
+                    if (r in g.hiddenRows) continue
                     val h = rowH[r]
                     val isFirstPage = first && bi == 0
                     // halaman penuh (dan sudah berisi baris selain judul kolom ulangan): lanjut ke halaman baru

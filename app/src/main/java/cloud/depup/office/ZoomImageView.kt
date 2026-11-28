@@ -50,7 +50,7 @@ class ZoomImageView @JvmOverloads constructor(
             }
 
             if (origScale != zoomScale) {
-                imgMatrix.postScale(mScaleFactor, mScaleFactor, detector.focusX, detector.focusY)
+                imgMatrix.postScale(mScaleFactor, mScaleFactor, detector.focusX - paddingLeft, detector.focusY - paddingTop)
                 checkMatrixAndBounds()
                 onZoomChanged?.invoke(zoomScale)
             }
@@ -62,6 +62,9 @@ class ZoomImageView @JvmOverloads constructor(
 
     fun animateScaleTo(targetScale: Float, focusX: Float, focusY: Float) {
         zoomAnimator?.cancel()
+        // matriks bekerja di area isi (di dalam padding): titik fokus dari koordinat view digeser
+        val fx = focusX - paddingLeft
+        val fy = focusY - paddingTop
         val startScale = zoomScale
         val finalScale = targetScale.coerceIn(minScale, maxScale)
         if (Math.abs(startScale - finalScale) < 0.01f) return
@@ -73,7 +76,7 @@ class ZoomImageView @JvmOverloads constructor(
                 val currScale = anim.animatedValue as Float
                 val factor = currScale / zoomScale
                 zoomScale = currScale
-                imgMatrix.postScale(factor, factor, focusX, focusY)
+                imgMatrix.postScale(factor, factor, fx, fy)
                 checkMatrixAndBounds()
                 imageMatrix = imgMatrix
                 onZoomChanged?.invoke(zoomScale)
@@ -90,7 +93,12 @@ class ZoomImageView @JvmOverloads constructor(
         }
     })
 
+    /** Lebar/tinggi area isi: ImageView menggambar matriks di dalam padding, jadi padding tidak ikut dihitung. */
+    private fun innerW() = (width - paddingLeft - paddingRight).toFloat()
+    private fun innerH() = (height - paddingTop - paddingBottom).toFloat()
+
     init {
+        cropToPadding = true   // saat diperbesar, gambar tidak menutupi bingkai padding
         scaleType = ScaleType.MATRIX
         imageMatrix = imgMatrix
     }
@@ -105,6 +113,13 @@ class ZoomImageView @JvmOverloads constructor(
         resetZoom()
     }
 
+    override fun setPadding(left: Int, top: Int, right: Int, bottom: Int) {
+        val changed = left != paddingLeft || top != paddingTop || right != paddingRight || bottom != paddingBottom
+        super.setPadding(left, top, right, bottom)
+        @Suppress("SENSELESS_COMPARISON") // bisa terpanggil dari konstruktor induk sebelum field siap
+        if (changed && imgMatrix != null) resetZoom()
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         resetZoom()
@@ -116,11 +131,11 @@ class ZoomImageView @JvmOverloads constructor(
         val d = drawable ?: return
         val dw = d.intrinsicWidth.toFloat()
         val dh = d.intrinsicHeight.toFloat()
-        val vw = width.toFloat()
-        val vh = height.toFloat()
+        val vw = innerW()
+        val vh = innerH()
 
         if (dw <= 0f || dh <= 0f || vw <= 0f || vh <= 0f) {
-            post { if (width > 0 && height > 0) resetZoom() }
+            post { if (innerW() > 0f && innerH() > 0f) resetZoom() }
             return
         }
 
@@ -199,8 +214,8 @@ class ZoomImageView @JvmOverloads constructor(
         val rect = RectF(0f, 0f, d.intrinsicWidth.toFloat(), d.intrinsicHeight.toFloat())
         imgMatrix.mapRect(rect)
 
-        val viewW = width.toFloat()
-        val viewH = height.toFloat()
+        val viewW = innerW()
+        val viewH = innerH()
         var deltaX = 0f
         var deltaY = 0f
 

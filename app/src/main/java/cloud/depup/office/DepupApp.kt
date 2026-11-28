@@ -8,6 +8,37 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
+/** Layar berkerangka kaca digambar sampai tepi layar: bilah status & navigasi sistem dibuat bening di atas isinya. */
+object Edge {
+    private const val TAG = 0x7f0e_d9e1.toInt()
+
+    /** [GlassScaffold] yang memenuhi layar ini (anak atau cucu wadah isi), atau null. */
+    fun scaffoldOf(content: View): GlassScaffold? {
+        val g = content as? android.view.ViewGroup ?: return null
+        for (i in 0 until g.childCount) {
+            val c = g.getChildAt(i)
+            if (c is GlassScaffold) return c
+            if (c is android.widget.FrameLayout) for (j in 0 until c.childCount) (c.getChildAt(j) as? GlassScaffold)?.let { return it }
+        }
+        return null
+    }
+
+    fun on(a: Activity): Boolean = a.window?.decorView?.getTag(TAG) == true
+
+    @Suppress("DEPRECATION")
+    fun mark(a: Activity, on: Boolean) {
+        val w = a.window ?: return
+        val was = on(a)
+        w.decorView.setTag(TAG, on)
+        if (on) {
+            w.statusBarColor = android.graphics.Color.TRANSPARENT
+            w.navigationBarColor = android.graphics.Color.TRANSPARENT
+            w.isNavigationBarContrastEnforced = false
+            w.isStatusBarContrastEnforced = false
+        } else if (was) Theme.apply(a)
+    }
+}
+
 /** Layar yang menggambar sampai tepi layar (di belakang bilah status & navigasi) dan mengatur jaraknya sendiri. */
 interface FullBleed
 
@@ -40,6 +71,8 @@ class DepupApp : Application() {
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             // Hitung token warna (terang/gelap) SEBELUM layar membangun tampilannya.
             override fun onActivityPreCreated(activity: Activity, savedInstanceState: Bundle?) {
+                // Android 10–14 juga digambar sampai tepi (Android 15+ sudah memaksanya); jarak diatur listener di bawah.
+                activity.window?.let { androidx.core.view.WindowCompat.setDecorFitsSystemWindows(it, false) }
                 Theme.apply(activity)
                 ThemeFade.built(activity, C.dark)
             }
@@ -49,12 +82,20 @@ class DepupApp : Application() {
                 // dan mengatur jaraknya sendiri.
                 if (activity !is FullBleed) {
                     ViewCompat.setOnApplyWindowInsetsListener(content) { v, insets ->
-                        val i = insets.getInsets(
-                            WindowInsetsCompat.Type.systemBars() or
-                                WindowInsetsCompat.Type.displayCutout() or
-                                WindowInsetsCompat.Type.ime()
-                        )
-                        v.setPadding(i.left, i.top, i.right, i.bottom)
+                        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+                        val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+                        val sc = Edge.scaffoldOf(v)
+                        if (sc != null) {
+                            // Layar berkerangka kaca: isi digambar sampai tepi atas & bawah layar (di balik bilah status
+                            // dan navigasi); bilah kaca sendiri yang memberi jarak. Keyboard tetap mendorong isi ke atas.
+                            val imeUp = ime.bottom > bars.bottom
+                            v.setPadding(bars.left, 0, bars.right, if (imeUp) ime.bottom else 0)
+                            sc.setSystemInsets(bars.top, if (imeUp) 0 else bars.bottom)
+                            Edge.mark(activity, true)
+                        } else {
+                            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+                            Edge.mark(activity, false)
+                        }
                         WindowInsetsCompat.CONSUMED
                     }
                     ViewCompat.requestApplyInsets(content)

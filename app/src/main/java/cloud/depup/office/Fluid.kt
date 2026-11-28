@@ -754,6 +754,10 @@ open class PillRow(ctx: Context) : LinearLayout(ctx) {
     protected val ind = PillIndicator(this)
     var textOn = C.ON_PRIMARY
     var textOff = C.MUTED
+    /** Warna pil penanda (bawaan: warna utama). */
+    var pillColor: Int
+        get() = ind.paint.color
+        set(v) { ind.paint.color = v; invalidate() }
     /** Jarak minimum pil dari tepi kiri/kanan baris (px) — mis. di dalam jalur kapsul. */
     var pillEdge: Float
         get() = ind.edge
