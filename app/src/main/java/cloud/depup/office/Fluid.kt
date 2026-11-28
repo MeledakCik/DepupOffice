@@ -743,7 +743,9 @@ class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
         shadowPaint.color = C.BG
         shadowPaint.setShadowLayer(22f * d, 0f, 3f * d,
             Color.argb(((if (C.dark) 70 else 30) * lf).roundToInt(), 0, 0, 0))
-        c.drawRoundRect(r, rad, rad, shadowPaint)
+        // bentuk pembawa bayangan sedikit lebih kecil dari lensa: seluruhnya terpotong, tak ada tepi warna latar tersisa
+        val sh = RectF(r).apply { inset(1.5f * d, 1.5f * d) }
+        c.drawRoundRect(sh, sh.height() / 2f, sh.height() / 2f, shadowPaint)
         c.restore()
         if (!drawLens(c, r, lf)) {
             // tanpa shader: kaca bening tiruan (semburat tipis) + kilau & tepi dari [PillIndicator.drawEdges]
@@ -812,8 +814,9 @@ private class TabLensFx {
     private val lens = RenderNode("tabLens")
     private val u = FloatArray(LiquidGlass.U)
     private val mask = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
+        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
     }
+    private val outside = android.graphics.Path()
 
     fun draw(canvas: Canvas, host: View, r: RectF, lift: Float, record: (Canvas) -> Unit) {
         val w = host.width
@@ -861,7 +864,11 @@ private class TabLensFx {
         // potong ke bentuk KAPSUL (bertepi halus), bukan kotak: bagian lensa di luar bilah tidak boleh tampak bersudut
         val sl = canvas.saveLayer(r.left - 1f, r.top - 1f, r.right + 1f, r.bottom + 1f, null)
         canvas.drawRenderNode(lens)
-        canvas.drawRoundRect(r, hh / 2f, hh / 2f, mask)
+        // hapus SEMUA di luar kapsul (isian terbalik): DST_IN hanya mengenai piksel yang tergambar, sudut kotak tersisa
+        outside.rewind()
+        outside.addRoundRect(r, hh / 2f, hh / 2f, android.graphics.Path.Direction.CW)
+        outside.fillType = android.graphics.Path.FillType.INVERSE_WINDING
+        canvas.drawPath(outside, mask)
         canvas.restoreToCount(sl)
     }
 }
