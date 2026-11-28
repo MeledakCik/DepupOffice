@@ -140,8 +140,8 @@ class PillIndicator(private val host: View) {
         val lf = if (lifted) lift else 0f
         if (lf > 0f) {
             if (pop) {
-                // seperti desain: tinggi 166 → 244 (×1,47 pil; ×1,37 lintasan), lebar hampir tetap
-                now.inset(-h * 0.05f * lf, -h * 0.42f * lf)
+                // membesar ke atas-bawah (±1,44× tinggi pil, sedikit keluar dari kapsul navigasi), lebar hampir tetap
+                now.inset(-h * 0.05f * lf, -h * 0.22f * lf)
             } else { val g = h * 0.11f * lf; now.inset(-g, -g) }   // lensa terangkat sedikit lebih besar
         }
         if (pulse != 0f) {
@@ -811,6 +811,9 @@ private class TabLensFx {
     private val content = RenderNode("tabLensContent")
     private val lens = RenderNode("tabLens")
     private val u = FloatArray(LiquidGlass.U)
+    private val mask = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
+    }
 
     fun draw(canvas: Canvas, host: View, r: RectF, lift: Float, record: (Canvas) -> Unit) {
         val w = host.width
@@ -855,10 +858,11 @@ private class TabLensFx {
         lens.setAlpha(lift)   // kapsul solid di bawahnya memudar bersamaan → peralihan solid ↔ kaca mulus
         val lc = lens.beginRecording(nw, nh)
         try { lc.translate(-ox, -oy); lc.drawRenderNode(content) } finally { lens.endRecording() }
-        canvas.save()
-        canvas.clipRect(r)
+        // potong ke bentuk KAPSUL (bertepi halus), bukan kotak: bagian lensa di luar bilah tidak boleh tampak bersudut
+        val sl = canvas.saveLayer(r.left - 1f, r.top - 1f, r.right + 1f, r.bottom + 1f, null)
         canvas.drawRenderNode(lens)
-        canvas.restore()
+        canvas.drawRoundRect(r, hh / 2f, hh / 2f, mask)
+        canvas.restoreToCount(sl)
     }
 }
 
