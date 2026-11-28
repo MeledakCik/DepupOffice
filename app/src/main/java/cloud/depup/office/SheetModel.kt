@@ -208,13 +208,17 @@ class UndoStack(private val limit: Int = 200) {
     val canUndo get() = done.isNotEmpty()
     val canRedo get() = undone.isNotEmpty()
 
+    /** Dipanggil setiap kali isi tumpukan berubah (untuk meredupkan/menyalakan tombol). */
+    var onChange: (() -> Unit)? = null
+
     fun push(e: Edit) {
         done.addLast(e); undone.clear()
         while (done.size > limit) done.removeFirst()
+        onChange?.invoke()
     }
-    fun undo(): Edit? = done.removeLastOrNull()?.also { it.undo(); undone.addLast(it) }
-    fun redo(): Edit? = undone.removeLastOrNull()?.also { it.redo(); done.addLast(it) }
-    fun clear() { done.clear(); undone.clear() }
+    fun undo(): Edit? = done.removeLastOrNull()?.also { it.undo(); undone.addLast(it); onChange?.invoke() }
+    fun redo(): Edit? = undone.removeLastOrNull()?.also { it.redo(); done.addLast(it); onChange?.invoke() }
+    fun clear() { done.clear(); undone.clear(); onChange?.invoke() }
 }
 
 /**

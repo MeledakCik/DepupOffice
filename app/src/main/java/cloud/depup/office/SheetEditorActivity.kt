@@ -491,6 +491,10 @@ class SheetEditorActivity : AppCompatActivity() {
         sheetTitleEt = field("Nama Spreadsheet Excel", multi = false).apply {
             setText(initialTitle)
             textSize = 16f
+            isSingleLine = true
+            maxLines = 1
+            isHorizontalFadingEdgeEnabled = true   // judul panjang memudar lembut di ujung (EditText tak bisa elipsis)
+            setFadingEdgeLength(dp(24))
             typeface = Fonts.head(this@SheetEditorActivity)
             setTextColor(C.TEXT)
             background = null
@@ -499,13 +503,18 @@ class SheetEditorActivity : AppCompatActivity() {
         }
         bar.add(sheetTitleEt, w = 0, weight = 1f, side = 4)
         val caps = navCapsule()
-        caps.add(capsuleBtn(R.drawable.ic_sheet, "Templat") { showTemplatePicker() }, w = dp(40), h = dp(40))
-        caps.add(capsuleBtn(R.drawable.ic_tune, "Pengaturan spreadsheet") { showExcelSettingsSheet() }, w = dp(40), h = dp(40))
+        // Urungkan/Ulangi selalu terjangkau dari tab mana pun (seperti editor Word), di kapsul kaca bilah atas
+        undoBtn = capsuleBtn(R.drawable.ic_undo, "Urungkan") { doUndo() }
+        redoBtn = capsuleBtn(R.drawable.ic_redo, "Ulangi") { doRedo() }
+        caps.add(undoBtn, w = dp(38), h = dp(40))
+        caps.add(redoBtn, w = dp(38), h = dp(40))
         caps.add(capsuleBtn(R.drawable.ic_more, "Opsi lain") { v ->
             val pm = android.widget.PopupMenu(this@SheetEditorActivity, v)
-            pm.menu.add(0, 1, 0, "Bacakan Isi Tabel (Voice Reader)")
-            pm.menu.add(0, 2, 1, "Cetak Spreadsheet")
-            pm.menu.add(0, 3, 2, "Pergi ke Sel…")
+            pm.menu.add(0, 4, 0, withIcon("Templat", R.drawable.ic_sheet, C.TEXT, 18, end = false))
+            pm.menu.add(0, 5, 1, withIcon("Pengaturan Spreadsheet", R.drawable.ic_tune, C.TEXT, 18, end = false))
+            pm.menu.add(0, 1, 2, "Bacakan Isi Tabel (Voice Reader)")
+            pm.menu.add(0, 2, 3, "Cetak Spreadsheet")
+            pm.menu.add(0, 3, 4, "Pergi ke Sel…")
             pm.setOnMenuItemClickListener { m ->
                 val title = sheetTitleEt.text.toString().ifBlank { "Spreadsheet Excel" }
                 when (m.itemId) {
@@ -520,14 +529,29 @@ class SheetEditorActivity : AppCompatActivity() {
                         }
                     }
                     3 -> showGoTo()
+                    4 -> showTemplatePicker()
+                    5 -> showExcelSettingsSheet()
                 }
                 true
             }
             pm.show()
-        }, w = dp(40), h = dp(40))
+        }, w = dp(38), h = dp(40))
         bar.addView(caps, LinearLayout.LayoutParams(WRAP, dp(42)))
+        undo.onChange = { paintUndo() }
+        paintUndo()
         bar.addView(navPrimary("Ekspor") { showExportChooser() }, LinearLayout.LayoutParams(WRAP, dp(42)).apply { marginStart = dp(8) })
         return bar
+    }
+
+    private lateinit var undoBtn: View
+    private lateinit var redoBtn: View
+
+    /** Urungkan/Ulangi meredup bila tidak ada langkah. */
+    private fun paintUndo() {
+        if (!::undoBtn.isInitialized) return
+        fun fade(v: View, a: Float) { if (v.alpha != a) { if (Motion.on()) v.animate().alpha(a).setDuration(Motion.FAST).start() else v.alpha = a } }
+        fade(undoBtn, if (undo.canUndo) 1f else 0.35f)
+        fade(redoBtn, if (undo.canRedo) 1f else 0.35f)
     }
 
     /** Bilah rumus: nama sel/rentang, fx, isian. Enter = turun satu baris (seperti Excel). */
@@ -542,7 +566,7 @@ class SheetEditorActivity : AppCompatActivity() {
         val cap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(C.SURFACE2, 100)
+            background = shape(C.SURFACE, 100, C.LINE, 1)
             setPadding(dp(5), dp(4), dp(5), dp(4))
         }
         bar.add(cap, w = 0, weight = 1f)
@@ -570,7 +594,7 @@ class SheetEditorActivity : AppCompatActivity() {
             // fokus: kapsul pembungkusnya yang diberi cincin warna (bukan kotak kedua di dalam kapsul)
             onFocusChangeListener = View.OnFocusChangeListener { _, has ->
                 background = null
-                (parent as? View)?.background = if (has) shape(C.SURFACE2, 100, C.TEAL, 2) else shape(C.SURFACE2, 100)
+                (parent as? View)?.background = if (has) shape(C.SURFACE, 100, C.TEAL, 2) else shape(C.SURFACE, 100, C.LINE, 1)
             }
             isSingleLine = true
             maxLines = 1
@@ -720,11 +744,17 @@ class SheetEditorActivity : AppCompatActivity() {
      */
     private fun tool(label: String, icon: Int = 0, desc: String = label, key: String? = null, onClick: () -> Unit): TextView {
         val inGroup = ribbonTab == 0 && label.length <= 1
-        val t = tv("", 13f, C.TEXT, true).apply {
-            text = if (icon != 0) withIcon(if (label.isEmpty()) "" else " $label", icon, C.TEXT, 18, end = false) else label
+        val t = tv(label, 13f, C.TEXT, true).apply {
+            // ikon sebagai drawable samping (bukan ImageSpan di dalam teks): selalu tepat di tengah tegak bersama
+            // teksnya, apa pun metrik fonnya
+            if (icon != 0) androidx.core.content.ContextCompat.getDrawable(this@SheetEditorActivity, icon)?.mutate()?.let { d ->
+                d.setBounds(0, 0, dp(18), dp(18))
+                setCompoundDrawablesRelative(d, null, null, null)
+                compoundDrawablePadding = if (label.isEmpty()) 0 else dp(6)
+                compoundDrawableTintList = android.content.res.ColorStateList.valueOf(C.TEXT)
+            }
             gravity = Gravity.CENTER
             background = toolBg(false, inGroup)
-            includeFontPadding = false
             isClickable = true
             contentDescription = desc
             tooltipText = desc
@@ -781,9 +811,6 @@ class SheetEditorActivity : AppCompatActivity() {
         toolsRow.removeAllViews(); toggles.clear(); grouped.clear(); fillSwatch = null; colorSwatch = null; toolGroup = null
         when (ribbonTab) {
             0 -> {
-                tool("", R.drawable.ic_undo, "Urungkan") { doUndo() }
-                tool("", R.drawable.ic_redo, "Ulangi") { doRedo() }
-                sep()
                 tool("", R.drawable.ic_paste, "Tempel") { paste() }
                 tool("", R.drawable.ic_copy, "Salin") { copy(false) }
                 tool("", R.drawable.ic_cut, "Potong") { copy(true) }
@@ -873,6 +900,7 @@ class SheetEditorActivity : AppCompatActivity() {
         fun mark(k: String, on: Boolean) {
             val t = toggles[k] ?: return
             t.setTextColor(if (on) C.TEAL else C.TEXT)
+            t.compoundDrawableTintList = android.content.res.ColorStateList.valueOf(if (on) C.TEAL else C.TEXT)
             t.background = toolBg(on, t in grouped)
             t.isSelected = on
         }
