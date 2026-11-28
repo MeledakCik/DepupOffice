@@ -29,6 +29,7 @@ import android.widget.TextView
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -77,6 +78,12 @@ class PillIndicator(private val host: View) {
     var glass = 0x14000000
     /** 0..1: seberapa terangkat lensa saat ini (0 = diam di tempat). */
     val lift: Float get() = if (lens) l.coerceIn(0f, 1f) else 0f
+    /**
+     * Mode "meletup" (bilah tab bawah, desain Figma "Switch"): tiap pindah tab lensa terangkat penuh, membesar
+     * terutama ke ATAS-BAWAH (±1,85× tinggi pil — keluar dari kapsul navigasi) lalu mengendap kembali menjadi pil
+     * solid. Bentuknya tidak dibatasi tinggi [host]; pemanggil menggambar lensa di lapisan yang tidak terpotong.
+     */
+    var pop = false
 
     private val dp = host.resources.displayMetrics.density
     private val to = RectF()
@@ -114,8 +121,8 @@ class PillIndicator(private val host: View) {
     /** 0..1: kecepatan mendatar relatif (untuk regangan & dispersi). */
     private fun speed(): Float = min(abs(vx) / (1600f * dp), 1f)
 
-    /** Bentuk pil saat ini (koordinat [host]); null bila tujuannya belum terukur. */
-    fun rect(): RectF? {
+    /** Bentuk pil saat ini (koordinat [host]); null bila tujuannya belum terukur. [lifted] false = tanpa pembesaran lensa. */
+    fun rect(lifted: Boolean = true): RectF? {
         val v = target ?: return null
         if (v.width <= 0 || v.height <= 0) return null
         bounds(v, to)
@@ -123,15 +130,20 @@ class PillIndicator(private val host: View) {
         val h = to.height()
         if (!x.isNaN()) {
             now.left = x - w / 2f; now.right = x + w / 2f
-            // regangan cair: memanjang searah gerak & memipih sebanding kecepatan
-            val s = speed()
+            // regangan cair: memanjang searah gerak & memipih sebanding kecepatan (mode meletup: lensa tetap bulat)
+            val s = speed() * (if (pop) 1f - 0.8f * lift else 1f)
             val ext = s * h * 0.5f
             now.left -= ext / 2f; now.right += ext / 2f
             val sq = s * h * 0.12f
             now.top += sq / 2f; now.bottom -= sq / 2f
         }
-        val lf = lift
-        if (lf > 0f) { val g = h * 0.11f * lf; now.inset(-g, -g) }   // lensa terangkat sedikit lebih besar
+        val lf = if (lifted) lift else 0f
+        if (lf > 0f) {
+            if (pop) {
+                // seperti desain: tinggi 166 → 244 (×1,47 pil; ×1,37 lintasan), lebar hampir tetap
+                now.inset(-h * 0.05f * lf, -h * 0.42f * lf)
+            } else { val g = h * 0.11f * lf; now.inset(-g, -g) }   // lensa terangkat sedikit lebih besar
+        }
         if (pulse != 0f) {
             // denyut: membesar merata sedikit (bentuk tetap pil yang sama)
             val dx = h * 0.06f * pulse
@@ -140,8 +152,8 @@ class PillIndicator(private val host: View) {
         if (host.width > 0) {
             if (now.left < edge) now.left = edge
             if (now.right > host.width - edge) now.right = host.width - edge
-            if (now.top < 0f) now.top = 0f
-            if (now.bottom > host.height) now.bottom = host.height.toFloat()
+            if (!pop && now.top < 0f) now.top = 0f
+            if (!pop && now.bottom > host.height) now.bottom = host.height.toFloat()
         }
         return now
     }
@@ -150,9 +162,18 @@ class PillIndicator(private val host: View) {
 
     /** Isi pil: kapsul solid, memudar ke kaca bening ([glass]) sebanding seberapa terangkat. */
     fun drawFill(c: Canvas) {
+        val lf = lift
+        if (pop && lf >= 0.01f) {
+            // kapsul solid tetap seukuran pil & memudar; kaca yang membesar digambar pemanggil di lapisan atas
+            val r = rect(lifted = false) ?: return
+            val rad = r.height() / 2f
+            fill.color = paint.color
+            fill.alpha = (Color.alpha(paint.color) * (1f - lf)).roundToInt().coerceIn(0, 255)
+            c.drawRoundRect(r, rad, rad, fill)
+            return
+        }
         val r = rect() ?: return
         val rad = r.height() / 2f
-        val lf = lift
         if (lf < 0.01f) { c.drawRoundRect(r, rad, rad, paint); return }
         fill.color = mixColor(paint.color, glass, lf)
         c.drawRoundRect(r, rad, rad, fill)
@@ -192,6 +213,8 @@ class PillIndicator(private val host: View) {
             bounds(old, tmp)
             x = tmp.centerX(); w = tmp.width(); vx = 0f; vw = 0f
         }
+        // mode meletup: lensa langsung terdorong naik, juga untuk lompatan ke tab sebelah yang pendek
+        if (pop && old !== v) vl = max(vl, 9f)
         kick()
     }
 
@@ -234,7 +257,8 @@ class PillIndicator(private val host: View) {
         val kx = if (dragging) K_DRAG else K
         val cx = 2f * Z * sqrt(kx)
         val cw = 2f * Z * sqrt(K)
-        val cl = 2f * ZL * sqrt(KL)
+        val kl = if (pop) KL_POP else KL
+        val cl = 2f * (if (pop) ZL_POP else ZL) * sqrt(kl)
         // sub-langkah kecil (≤ 4 ms): stabil di layar 60–144 Hz maupun saat frame terlambat
         val n = ceil(dt / 0.004f).toInt().coerceAtLeast(1)
         val h = dt / n
@@ -242,8 +266,8 @@ class PillIndicator(private val host: View) {
             vx += (kx * (gx - x) - cx * vx) * h; x += vx * h
             vw += (K * (gw - w) - cw * vw) * h; w += vw * h
             // lensa terangkat selama diseret / masih jauh dari tujuan, turun lembut saat mendekat
-            val lt = if (dragging) 1f else min(abs(gx - x) / (28f * dp), 1f)
-            vl += (KL * (lt - l) - cl * vl) * h; l += vl * h
+            val lt = if (dragging) 1f else min(abs(gx - x) / ((if (pop) 6f else 28f) * dp), 1f)
+            vl += (kl * (lt - l) - cl * vl) * h; l += vl * h
         }
         val lGoal = if (dragging) 1f else 0f
         val still = abs(gx - x) < 0.4f && abs(vx) < 4f * dp && abs(gw - w) < 0.4f && abs(vw) < 4f * dp &&
@@ -286,6 +310,9 @@ class PillIndicator(private val host: View) {
         /** Pegas "terangkat"-nya lensa: lebih lunak & hampir tanpa pantulan. */
         const val KL = 380f
         const val ZL = 0.9f
+        /** Mode meletup: naik cepat lalu mengendap dengan pantulan kecil (lensa "sempat membesar"). */
+        const val KL_POP = 620f
+        const val ZL_POP = 0.62f
     }
 }
 
@@ -477,8 +504,10 @@ class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
         ind.paint.color = C.PRIMARY
         ind.edge = context.dp(3).toFloat()
         ind.lens = true
+        ind.pop = true
         ind.glass = if (C.dark) 0x26FFFFFF else 0x14000000
-        ind.onFrame = { tint() }
+        // lensa di lapisan atas ikut digambar ulang pada frame yang sama dengan pil
+        ind.onFrame = { tint(); lensLayer.invalidateSelf() }
     }
 
     fun gap() = addView(View(context), LayoutParams(0, 1, 1f))
@@ -667,9 +696,91 @@ class TabBar(ctx: Context) : LinearLayout(ctx), GlassScaffold.Minimizable {
         drawKids(rc)
     }
 
+    /**
+     * Lensa kaca digambar di lapisan atas jendela (overlay akar), bukan di kanvas bilah: saat terangkat ia membesar
+     * keluar dari kapsul navigasi (yang memotong isinya ke bentuk kapsul), seperti desain Figma "Switch".
+     */
+    private val lensLayer = object : android.graphics.drawable.Drawable() {
+        override fun draw(c: Canvas) = drawLensOnTop(c)
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+    }
+    private var layerRoot: View? = null
+    private val toGlobal = android.graphics.Matrix()
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val clipPath = android.graphics.Path()
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        val root = rootView
+        if (root !== this) { root.overlay.add(lensLayer); layerRoot = root }
+    }
+
+    override fun onDetachedFromWindow() {
+        layerRoot?.overlay?.remove(lensLayer)
+        layerRoot = null
+        super.onDetachedFromWindow()
+    }
+
+    private fun drawLensOnTop(c: Canvas) {
+        if (!isAttachedToWindow || !isShown) return
+        val lf = ind.lift
+        if (lf < 0.01f) { if (realGlass) { realGlass = false; post { tint() } }; return }
+        val r = ind.rect() ?: return
+        toGlobal.reset()
+        transformMatrixToGlobal(toGlobal)
+        c.save()
+        c.concat(toGlobal)
+        // bayangan lembut di sekeliling lensa (Figma: 0 4 95 hitam 10%) — hanya di luar bentuk lensa
+        val rad = r.height() / 2f
+        clipPath.rewind()
+        clipPath.addRoundRect(r, rad, rad, android.graphics.Path.Direction.CW)
+        c.save()
+        c.clipOutPath(clipPath)
+        val d = resources.displayMetrics.density
+        shadowPaint.color = C.BG
+        shadowPaint.setShadowLayer(22f * d, 0f, 3f * d,
+            Color.argb(((if (C.dark) 70 else 30) * lf).roundToInt(), 0, 0, 0))
+        c.drawRoundRect(r, rad, rad, shadowPaint)
+        c.restore()
+        if (!drawLens(c, r, lf)) {
+            // tanpa shader: kaca bening tiruan (semburat tipis) + kilau & tepi dari [PillIndicator.drawEdges]
+            shadowPaint.clearShadowLayer()
+            shadowPaint.color = ind.glass
+            shadowPaint.alpha = (Color.alpha(ind.glass) * lf).roundToInt().coerceIn(0, 255)
+            c.drawRoundRect(r, rad, rad, shadowPaint)
+        }
+        ind.drawEdges(c, realGlass)
+        c.restore()
+    }
+
+    /** Lensa shader (Android 13+). true = tergambar. */
+    private fun drawLens(canvas: Canvas, r: RectF, lf: Float): Boolean {
+        var real = false
+        if (Build.VERSION.SDK_INT >= 33 && LiquidGlass.active() && canvas.isHardwareAccelerated) {
+            val fx = lensFx ?: try { TabLensFx().also { lensFx = it } } catch (_: Throwable) { LiquidGlass.fail(); null }
+            if (fx != null) {
+                real = try {
+                    fx.draw(canvas, this, RectF(r), lf) { rc -> recordBehindLens(rc) }
+                    true
+                } catch (_: Throwable) { LiquidGlass.fail(); lensFx = null; false }
+            }
+        }
+        if (real != realGlass) { realGlass = real; post { tint() } }
+        return real
+    }
+
     override fun dispatchDraw(canvas: Canvas) {
         ind.drawFill(canvas)
         super.dispatchDraw(canvas)
+        val root = layerRoot
+        if (root != null) {
+            lensLayer.setBounds(0, 0, root.width, root.height)
+            lensLayer.invalidateSelf()
+            return
+        }
         val lf = ind.lift
         val r = if (lf > 0.01f) ind.rect()?.let { RectF(it) } else null
         var real = false
@@ -709,12 +820,17 @@ private class TabLensFx {
         val rc = content.beginRecording(w, h)
         try { record(rc) } finally { content.endRecording() }
 
+        // node lensa mencakup bilah + bagian lensa yang keluar dari bilah (mode meletup): semua posisi shader
+        // dihitung relatif ke sudut kiri-atas node ini (ox, oy)
+        val ox = min(0f, floor(r.left)); val oy = min(0f, floor(r.top))
+        val nw = (max(w.toFloat(), ceil(r.right)) - ox).toInt()
+        val nh = (max(h.toFloat(), ceil(r.bottom)) - oy).toInt()
         val d = host.resources.displayMetrics.density
         val hh = r.height()
         val bezel = min(16f * d, hh * 0.42f)
         // semburat sangat tipis: kilau putih & bayangan dalam tetap terbaca di atas bilah yang polos
         val base = if (C.dark) 0xFF4A4A46.toInt() else C.SURFACE2
-        u[0] = r.left; u[1] = r.top; u[2] = r.width(); u[3] = hh
+        u[0] = r.left - ox; u[1] = r.top - oy; u[2] = r.width(); u[3] = hh
         u[4] = hh / 2f
         u[5] = 0f
         u[6] = bezel
@@ -728,16 +844,17 @@ private class TabLensFx {
         u[16] = 0f; u[17] = 0f; u[18] = 0f; u[19] = 1f
         u[20] = if (C.dark) 0.9f else 1.1f
         u[21] = d
-        u[22] = max(r.left, 0f) + 1.5f; u[23] = max(r.top, 0f) + 1.5f
-        u[24] = min(r.right, w.toFloat()) - 1.5f; u[25] = min(r.bottom, h.toFloat()) - 1.5f
+        // contoh piksel dibatasi ke bilah: bagian lensa di luar bilah memantulkan tepi bilah (kaca tetap utuh)
+        u[22] = max(r.left, 0f) + 1.5f - ox; u[23] = max(r.top, 0f) + 1.5f - oy
+        u[24] = min(r.right, w.toFloat()) - 1.5f - ox; u[25] = min(r.bottom, h.toFloat()) - 1.5f - oy
         // tanpa pita kontras adaptif: ikon di bawah lensa harus tetap tajam & berwarna, bukan dipudarkan ke pita
         u[26] = -1f; u[27] = 2f
         u[28] = 0.15f * lift                                // pembesaran ±1,18× saat terangkat penuh
         if (fx.update(u, 0f)) lens.setRenderEffect(fx.effect)
-        lens.setPosition(0, 0, w, h)
+        lens.setPosition(ox.toInt(), oy.toInt(), ox.toInt() + nw, oy.toInt() + nh)
         lens.setAlpha(lift)   // kapsul solid di bawahnya memudar bersamaan → peralihan solid ↔ kaca mulus
-        val lc = lens.beginRecording(w, h)
-        try { lc.drawRenderNode(content) } finally { lens.endRecording() }
+        val lc = lens.beginRecording(nw, nh)
+        try { lc.translate(-ox, -oy); lc.drawRenderNode(content) } finally { lens.endRecording() }
         canvas.save()
         canvas.clipRect(r)
         canvas.drawRenderNode(lens)
