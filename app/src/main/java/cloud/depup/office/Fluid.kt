@@ -131,13 +131,14 @@ class PillIndicator(private val host: View) {
         if (!x.isNaN()) {
             now.left = x - w / 2f; now.right = x + w / 2f
             // regangan cair: memanjang searah gerak & memipih sebanding kecepatan (mode meletup: lensa tetap bulat)
-            val s = speed() * (if (pop) 1f - 0.8f * lift else 1f)
+            val s = speed() * (if (pop) 1f - 0.35f * lift else 1f)   // meletup: tetap meregang seperti gel
             val ext = s * h * 0.5f
             now.left -= ext / 2f; now.right += ext / 2f
             val sq = s * h * 0.12f
             now.top += sq / 2f; now.bottom -= sq / 2f
         }
-        val lf = if (lifted) lift else 0f
+        // meletup: pembesaran boleh sedikit melewati 1 (pantulan pegas angkat terlihat sebagai "denyut" gel)
+        val lf = if (!lifted || !lens) 0f else if (pop) l.coerceIn(0f, 1.25f) else lift
         if (lf > 0f) {
             if (pop) {
                 // membesar ke atas-bawah (±1,44× tinggi pil, sedikit keluar dari kapsul navigasi), lebar hampir tetap
@@ -254,9 +255,10 @@ class PillIndicator(private val host: View) {
         val dragging = !dragX.isNaN()
         val gx = if (dragging) dragX else to.centerX()
         val gw = to.width()
-        val kx = if (dragging) K_DRAG else K
-        val cx = 2f * Z * sqrt(kx)
-        val cw = 2f * Z * sqrt(K)
+        val kx = if (dragging) K_DRAG else if (pop) K_POP else K
+        val z = if (pop) Z_POP else Z
+        val cx = 2f * z * sqrt(kx)
+        val cw = 2f * z * sqrt(K)
         val kl = if (pop) KL_POP else KL
         val cl = 2f * (if (pop) ZL_POP else ZL) * sqrt(kl)
         // sub-langkah kecil (≤ 4 ms): stabil di layar 60–144 Hz maupun saat frame terlambat
@@ -311,8 +313,11 @@ class PillIndicator(private val host: View) {
         const val KL = 380f
         const val ZL = 0.9f
         /** Mode meletup: naik cepat lalu mengendap dengan pantulan kecil (lensa "sempat membesar"). */
-        const val KL_POP = 620f
-        const val ZL_POP = 0.62f
+        const val KL_POP = 520f
+        const val ZL_POP = 0.42f
+        /** Mode meletup: luncuran lebih lentur — melewati tab tujuan ±12% lalu memantul kembali. */
+        const val K_POP = 420f
+        const val Z_POP = 0.55f
     }
 }
 
